@@ -1,0 +1,5 @@
+# 1. 실행 중인 서버 중단 (Ctrl + C)
+# 2. 컨테이너 완전히 내리기
+docker-compose down
+# 3. 환경 변수를 새로 읽어서 다시 실행
+docker-compose up --build

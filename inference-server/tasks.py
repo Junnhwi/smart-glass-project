@@ -1,11 +1,21 @@
 import os
+import io
+import torch
 from celery import Celery
 import boto3
 from PIL import Image
-import io
+from transformers import BlipProcessor, BlipForConditionalGeneration
 
-# Celery 초기화 
+# Celery 초기화
 app = Celery('inference_tasks', broker=os.getenv('CELERY_BROKER_URL'))
+
+# [AI 모델 로드] 서버 시작 시 한 번만 로드하여 GPU에 올립니다
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"현재 사용 장치: {device}")
+
+# 모델을 로드합니다
+processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
 
 # S3 클라이언트 설정
 s3_client = boto3.client(
@@ -16,27 +26,26 @@ s3_client = boto3.client(
 
 @app.task(name="process_vision_inference")
 def process_vision_inference(image_key, user_id):
-    """
-    1. S3에서 이미지 다운로드
-    2. VLM 모델 추론 (캡셔닝)
-    3. 결과 저장 (RDB/Vector DB)
-    """
     bucket_name = os.getenv('AWS_S3_BUCKET_NAME')
     
     try:
-        # [Step 1] S3에서 이미지 가져오기
+        # [Step 1] S3에서 이미지 다운로드
         response = s3_client.get_object(Bucket=bucket_name, Key=image_key)
         image_data = response['Body'].read()
-        image = Image.open(io.BytesIO(image_data))
+        raw_image = Image.open(io.BytesIO(image_data)).convert('RGB')
         
-        print(f"User {user_id}: 이미지 {image_key} 다운로드 완료 ({image.size})")
-
-        # [Step 2] VLM 추론 (현재는 플레이스홀더, 이후 팀원이 채울 부분)
-        # caption = vlm_model.generate_caption(image) 
-        caption = "검은색 지갑이 소파 위에 리모컨 옆에 있습니다." 
+        # [Step 2] 실제 BLIP 모델 추론 [cite: 13, 14]
+        # 이미지를 모델 형식에 맞게 변환하여 GPU로 전송합니다
+        inputs = processor(raw_image, return_tensors="pt").to(device)
         
-        # [Step 3] 결과 저장 (RDB 및 Vector DB 연동 예정)
-        print(f"추론 결과: {caption}")
+        # 캡션 생성
+        out = model.generate(**inputs)
+        caption = processor.decode(out[0], skip_special_tokens=True)
+        
+        print(f"--- [추론 성공] ---")
+        print(f"User: {user_id} / File: {image_key}")
+        print(f"Result: {caption}")
+        print(f"-------------------")
         
         return {"status": "success", "caption": caption}
 
