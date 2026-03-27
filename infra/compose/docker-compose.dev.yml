@@ -1,0 +1,5 @@
+services:
+  api-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api-server.Dockerfile
