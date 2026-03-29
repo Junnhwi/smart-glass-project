@@ -1,0 +1,70 @@
+{
+  "generated_at_utc": "20260329T144302Z",
+  "dataset_dir": "apps/inference-server/sample_data",
+  "device": "cuda",
+  "dtype": "float16",
+  "models": [
+    "blip-base",
+    "git-base",
+    "vit-gpt2"
+  ],
+  "quantizations": [
+    "none"
+  ],
+  "results": [
+    {
+      "model_key": "blip-base",
+      "model_id": "Salesforce/blip-image-captioning-base",
+      "quantization": "none",
+      "device": "cuda",
+      "dtype": "float16",
+      "images_total": 95,
+      "images_success": 95,
+      "images_error": 0,
+      "load_time_sec": 12.124,
+      "latency_avg_sec": 0.1443,
+      "latency_p50_sec": 0.1391,
+      "latency_p95_sec": 0.2241,
+      "peak_memory_avg_mb": 524.67,
+      "peak_memory_max_mb": 525.39,
+      "lexical_f1_avg": "",
+      "run_elapsed_sec": 25.1879
+    },
+    {
+      "model_key": "git-base",
+      "model_id": "microsoft/git-base-coco",
+      "quantization": "none",
+      "device": "cuda",
+      "dtype": "float16",
+      "images_total": 95,
+      "images_success": 95,
+      "images_error": 0,
+      "load_time_sec": 22.1253,
+      "latency_avg_sec": 0.1252,
+      "latency_p50_sec": 0.1055,
+      "latency_p95_sec": 0.2368,
+      "peak_memory_avg_mb": 827.96,
+      "peak_memory_max_mb": 827.96,
+      "lexical_f1_avg": "",
+      "run_elapsed_sec": 15.537
+    },
+    {
+      "model_key": "vit-gpt2",
+      "model_id": "nlpconnect/vit-gpt2-image-captioning",
+      "quantization": "none",
+      "device": "cuda",
+      "dtype": "float16",
+      "images_total": 95,
+      "images_success": 95,
+      "images_error": 0,
+      "load_time_sec": 21.6425,
+      "latency_avg_sec": 0.1946,
+      "latency_p50_sec": 0.1813,
+      "latency_p95_sec": 0.2936,
+      "peak_memory_avg_mb": 1300.42,
+      "peak_memory_max_mb": 1301.06,
+      "lexical_f1_avg": "",
+      "run_elapsed_sec": 22.2078
+    }
+  ]
+}

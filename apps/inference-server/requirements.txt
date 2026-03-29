@@ -7,3 +7,4 @@ pillow
 # AI 모델 관련 추가
 transformers>=4.48.0
 accelerate
+bitsandbytes>=0.45.0

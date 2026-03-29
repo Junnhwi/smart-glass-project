@@ -1,0 +1,4 @@
+model_key,model_id,quantization,device,dtype,images_total,images_success,images_error,load_time_sec,latency_avg_sec,latency_p50_sec,latency_p95_sec,peak_memory_avg_mb,peak_memory_max_mb,lexical_f1_avg,run_elapsed_sec
+blip-base,Salesforce/blip-image-captioning-base,none,cuda,float16,95,95,0,12.124,0.1443,0.1391,0.2241,524.67,525.39,,25.1879
+git-base,microsoft/git-base-coco,none,cuda,float16,95,95,0,22.1253,0.1252,0.1055,0.2368,827.96,827.96,,15.537
+vit-gpt2,nlpconnect/vit-gpt2-image-captioning,none,cuda,float16,95,95,0,21.6425,0.1946,0.1813,0.2936,1300.42,1301.06,,22.2078

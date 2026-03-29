@@ -3,7 +3,7 @@ import io
 from celery import Celery
 from PIL import Image
 
-from src.models.blip import get_blip_components
+from src.models.captioning import generate_caption
 from src.storage.s3 import get_s3_client
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
@@ -20,26 +20,41 @@ def _require_env(name: str) -> str:
 @app.task(name="process_vision_inference")
 def process_vision_inference(image_key, user_id):
     bucket_name = _require_env("AWS_S3_BUCKET_NAME")
+    model_key = os.getenv("VISION_CAPTION_MODEL", "blip-base").strip() or "blip-base"
+    quantization = (
+        os.getenv("VISION_CAPTION_QUANTIZATION", "none").strip() or "none"
+    )
+    dtype_name = os.getenv("VISION_CAPTION_DTYPE", "float16").strip() or "float16"
 
     try:
-        device, model, processor = get_blip_components()
-        print(f"현재 사용 장치: {device}")
-
         s3_client = get_s3_client()
         response = s3_client.get_object(Bucket=bucket_name, Key=image_key)
         image_data = response["Body"].read()
         raw_image = Image.open(io.BytesIO(image_data)).convert("RGB")
-        inputs = processor(raw_image, return_tensors="pt").to(device)
-
-        out = model.generate(**inputs)
-        caption = processor.decode(out[0], skip_special_tokens=True)
+        result = generate_caption(
+            image=raw_image,
+            model_key=model_key,
+            quantization=quantization,
+            dtype_name=dtype_name,
+        )
+        caption = result["caption"]
 
         print(f"--- [추론 성공] ---")
         print(f"User: {user_id} / File: {image_key}")
+        print(
+            f"Model: {model_key} / Quantization: {quantization} / Latency: {result['elapsed_sec']:.2f}s"
+        )
         print(f"Result: {caption}")
         print(f"-------------------")
 
-        return {"status": "success", "caption": caption}
+        return {
+            "status": "success",
+            "caption": caption,
+            "model_key": model_key,
+            "quantization": quantization,
+            "latency_sec": result["elapsed_sec"],
+            "peak_memory_mb": result["peak_memory_mb"],
+        }
     except Exception as e:
         print(f"추론 실패: {str(e)}")
         return {"status": "error", "message": str(e)}
