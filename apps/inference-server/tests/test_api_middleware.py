@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -15,12 +16,67 @@ class MiddlewareTestCase(unittest.TestCase):
     async def _raise_error() -> None:
         raise RuntimeError("Synthetic error for middleware verification")
 
-    def test_health_returns_request_id(self) -> None:
-        response = self.client.get("/health")
+    def test_liveness_returns_request_id(self) -> None:
+        response = self.client.get("/health/live")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("x-request-id", response.headers)
         self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response.json()["check_type"], "liveness")
+        self.assertEqual(response.json()["service"], "inference-server")
+
+    def test_readiness_returns_request_id(self) -> None:
+        with patch("src.api.health._check_queue", return_value=("ok", {"status": "ok"})):
+            with patch(
+                "src.api.health._check_storage_config",
+                return_value=("ok", {"status": "ok"}),
+            ):
+                with patch(
+                    "src.api.health._check_model_config",
+                    return_value=("ok", {"status": "ok"}),
+                ):
+                    response = self.client.get("/health/ready")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("x-request-id", response.headers)
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response.json()["check_type"], "readiness")
+        self.assertEqual(response.json()["service"], "inference-server")
+
+    def test_readiness_returns_503_when_dependency_is_unhealthy(self) -> None:
+        with patch(
+            "src.api.health._check_queue",
+            return_value=("error", {"status": "error", "message": "redis down"}),
+        ):
+            with patch(
+                "src.api.health._check_storage_config",
+                return_value=("ok", {"status": "ok"}),
+            ):
+                with patch(
+                    "src.api.health._check_model_config",
+                    return_value=("ok", {"status": "ok"}),
+                ):
+                    response = self.client.get("/health/ready")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "degraded")
+        self.assertEqual(response.json()["check_type"], "readiness")
+        self.assertEqual(response.json()["checks"]["queue"]["status"], "error")
+
+    def test_health_alias_points_to_readiness(self) -> None:
+        with patch("src.api.health._check_queue", return_value=("ok", {"status": "ok"})):
+            with patch(
+                "src.api.health._check_storage_config",
+                return_value=("ok", {"status": "ok"}),
+            ):
+                with patch(
+                    "src.api.health._check_model_config",
+                    return_value=("ok", {"status": "ok"}),
+                ):
+                    response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["check_type"], "readiness")
 
     def test_http_exception_is_wrapped(self) -> None:
         response = self.client.get(
