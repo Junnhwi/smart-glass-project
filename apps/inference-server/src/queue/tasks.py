@@ -3,11 +3,14 @@ import io
 from celery import Celery
 from PIL import Image
 
+from src.core.logging import configure_logging, get_logger
 from src.models.captioning import generate_caption
 from src.storage.s3 import get_s3_client
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 app = Celery("inference_tasks", broker=broker_url)
+configure_logging()
+logger = get_logger(__name__)
 
 
 def _require_env(name: str) -> str:
@@ -39,13 +42,18 @@ def process_vision_inference(image_key, user_id):
         )
         caption = result["caption"]
 
-        print(f"--- [추론 성공] ---")
-        print(f"User: {user_id} / File: {image_key}")
-        print(
-            f"Model: {model_key} / Quantization: {quantization} / Latency: {result['elapsed_sec']:.2f}s"
+        logger.info(
+            "Inference task completed",
+            extra={
+                "task_name": "process_vision_inference",
+                "image_key": image_key,
+                "user_id": user_id,
+                "model_key": model_key,
+                "quantization": quantization,
+                "latency_sec": round(result["elapsed_sec"], 4),
+                "peak_memory_mb": result["peak_memory_mb"],
+            },
         )
-        print(f"Result: {caption}")
-        print(f"-------------------")
 
         return {
             "status": "success",
@@ -56,5 +64,15 @@ def process_vision_inference(image_key, user_id):
             "peak_memory_mb": result["peak_memory_mb"],
         }
     except Exception as e:
-        print(f"추론 실패: {str(e)}")
+        logger.exception(
+            "Inference task failed",
+            extra={
+                "task_name": "process_vision_inference",
+                "image_key": image_key,
+                "user_id": user_id,
+                "model_key": model_key,
+                "quantization": quantization,
+                "error_code": "inference_task_error",
+            },
+        )
         return {"status": "error", "message": str(e)}
