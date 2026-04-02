@@ -18,13 +18,21 @@ class TfidfTextEmbedder:
         if not texts:
             return None
 
+        if not any(tokenize_text(text) for text in texts):
+            return None
+
         vectorizer = TfidfVectorizer(
             tokenizer=tokenize_text,
             token_pattern=None,
             lowercase=False,
             ngram_range=(1, 2),
         )
-        matrix = vectorizer.fit_transform(texts)
+        try:
+            matrix = vectorizer.fit_transform(texts)
+        except ValueError as exc:
+            if "empty vocabulary" in str(exc).lower():
+                return None
+            raise
         return TfidfIndex(vectorizer=vectorizer, matrix=matrix)
 
     def score_query(self, index: TfidfIndex | None, query_text: str) -> list[float]:

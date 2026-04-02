@@ -39,6 +39,8 @@ class HybridMemoryRetriever:
 
         index = self.embedder.build_index(search_texts)
         lexical_scores = self.embedder.score_query(index, query_text)
+        if not lexical_scores:
+            lexical_scores = [0.0] * len(documents)
 
         hits: list[SearchHit] = []
         for document, lexical_score in zip(documents, lexical_scores, strict=True):

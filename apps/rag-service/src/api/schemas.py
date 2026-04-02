@@ -1,8 +1,8 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, validator
 
 
 class MemoryLocationPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     name: str | None = None
     address: str | None = None
@@ -11,7 +11,7 @@ class MemoryLocationPayload(BaseModel):
 
 
 class MemoryRecordPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     memory_id: str = Field(min_length=1)
     user_id: str = Field(min_length=1)
@@ -27,9 +27,16 @@ class MemoryRecordPayload(BaseModel):
     position_hint: str | None = None
     location: MemoryLocationPayload = Field(default_factory=MemoryLocationPayload)
 
+    @validator("memory_id", "user_id")
+    def validate_non_blank_identifiers(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
 
 class IndexMemoriesRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     memories: list[MemoryRecordPayload] = Field(default_factory=list)
 
@@ -40,11 +47,18 @@ class IndexMemoriesResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     user_id: str = Field(min_length=1)
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
+
+    @validator("user_id", "query")
+    def validate_non_blank_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
 
 
 class ChatRequest(SearchRequest):

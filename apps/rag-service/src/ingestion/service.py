@@ -8,6 +8,9 @@ class MemoryIngestionService:
         return [self.normalize(payload) for payload in payloads]
 
     def normalize(self, payload: MemoryRecordPayload) -> MemoryDocument:
+        memory_id = self._require_identifier(payload.memory_id, field_name="memory_id")
+        user_id = self._require_identifier(payload.user_id, field_name="user_id")
+
         location = MemoryLocation(
             name=normalize_whitespace(payload.location.name) or None,
             address=normalize_whitespace(payload.location.address) or None,
@@ -22,8 +25,8 @@ class MemoryIngestionService:
         )
 
         return MemoryDocument(
-            memory_id=normalize_whitespace(payload.memory_id),
-            user_id=normalize_whitespace(payload.user_id),
+            memory_id=memory_id,
+            user_id=user_id,
             image_key=normalize_whitespace(payload.image_key) or None,
             image_url=normalize_whitespace(payload.image_url) or None,
             captured_at=normalize_whitespace(payload.captured_at) or None,
@@ -36,3 +39,10 @@ class MemoryIngestionService:
             position_hint=position_hint,
             location=location,
         )
+
+    @staticmethod
+    def _require_identifier(value: str, *, field_name: str) -> str:
+        normalized = normalize_whitespace(value)
+        if not normalized:
+            raise ValueError(f"{field_name} must not be blank")
+        return normalized

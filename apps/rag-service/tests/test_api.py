@@ -163,6 +163,62 @@ class RagServiceApiTestCase(unittest.TestCase):
         self.assertEqual(payload["total_hits"], 0)
         self.assertEqual(payload["hits"], [])
 
+    def test_blank_identifiers_are_rejected(self) -> None:
+        response = self.client.post(
+            "/memories/index",
+            json={
+                "memories": [
+                    {
+                        "memory_id": "   ",
+                        "user_id": "user-3",
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_empty_searchable_text_does_not_crash(self) -> None:
+        index_response = self.client.post(
+            "/memories/index",
+            json={
+                "memories": [
+                    {
+                        "memory_id": "mem-empty-01",
+                        "user_id": "user-empty",
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(index_response.status_code, 200)
+
+        search_response = self.client.post(
+            "/search",
+            json={
+                "user_id": "user-empty",
+                "query": WALLET_QUERY,
+                "top_k": 3,
+            },
+        )
+
+        self.assertEqual(search_response.status_code, 200)
+        self.assertEqual(search_response.json()["total_hits"], 0)
+        self.assertEqual(search_response.json()["hits"], [])
+
+        chat_response = self.client.post(
+            "/chat",
+            json={
+                "user_id": "user-empty",
+                "query": WALLET_QUERY,
+                "top_k": 3,
+            },
+        )
+
+        self.assertEqual(chat_response.status_code, 200)
+        self.assertEqual(chat_response.json()["total_hits"], 0)
+        self.assertEqual(chat_response.json()["hits"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
