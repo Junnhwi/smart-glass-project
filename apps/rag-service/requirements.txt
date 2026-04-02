@@ -1,2 +1,6 @@
-fastapi
-uvicorn
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+scikit-learn>=1.5,<2.0
+numpy>=1.26,<3.0
+openai>=1.30,<2.0
