@@ -18,6 +18,9 @@ except ImportError:  # pragma: no cover - import failure is handled via fallback
 class GeneratedAnswer:
     text: str
     mode: str
+    cited_memory_ids: list[str] = None
+    confidence: float | None = None
+    reason: str | None = None
 
 
 def _describe_location(hit: SearchHit) -> str:
@@ -53,6 +56,9 @@ class TemplateAnswerGenerator:
                     "물건 이름이나 장소 단서를 조금 더 넣어서 다시 물어보면 더 잘 찾을 수 있습니다."
                 ),
                 mode="template",
+                cited_memory_ids=[],
+                confidence=None,
+                reason="검색 결과가 없어서 템플릿 응답을 사용했습니다.",
             )
 
         top_hit = hits[0]
@@ -66,7 +72,13 @@ class TemplateAnswerGenerator:
             alternative_ids = ", ".join(hit.memory.memory_id for hit in hits[1:3])
             answer_parts.append(f"비슷한 후보로는 {alternative_ids}도 함께 확인해 보세요.")
 
-        return GeneratedAnswer(text=" ".join(answer_parts), mode="template")
+        return GeneratedAnswer(
+            text=" ".join(answer_parts),
+            mode="template",
+            cited_memory_ids=[hit.memory.memory_id for hit in hits[:3]],
+            confidence=0.5,
+            reason="검색 결과를 기반으로 템플릿 응답 생성",
+        )
 
 
 class OpenAICompatibleAnswerGenerator:
@@ -131,7 +143,13 @@ class OpenAICompatibleAnswerGenerator:
             )
             content = response.choices[0].message.content
             if isinstance(content, str) and content.strip():
-                return GeneratedAnswer(text=content.strip(), mode="llm")
+                return GeneratedAnswer(
+                    text=content.strip(),
+                    mode="llm",
+                    cited_memory_ids=[hit.memory.memory_id for hit in hits[:3]],
+                    confidence=0.8,
+                    reason="LLM을 사용하여 근거 기반 응답 생성",
+                )
         except Exception:
             logger.exception("LLM answer generation failed")
 

@@ -121,6 +121,9 @@ class RagServiceApiTestCase(unittest.TestCase):
         self.assertEqual(payload["hits"][0]["memory_id"], "mem-wallet-02")
         self.assertIn("mem-wallet-02", payload["answer"])
         self.assertIn(LIVING_ROOM, payload["answer"])
+        self.assertEqual(payload["cited_memory_ids"], ["mem-wallet-02"])
+        self.assertEqual(payload["confidence"], 0.5)
+        self.assertIn("검색 결과를 기반", payload["reason"])
 
     def test_unknown_item_returns_no_hits(self) -> None:
         self.client.post(
@@ -218,6 +221,8 @@ class RagServiceApiTestCase(unittest.TestCase):
         self.assertEqual(chat_response.status_code, 200)
         self.assertEqual(chat_response.json()["total_hits"], 0)
         self.assertEqual(chat_response.json()["hits"], [])
+        self.assertEqual(chat_response.json()["answer_mode"], "template")
+        self.assertEqual(chat_response.json().get("cited_memory_ids"), [])
 
 
 if __name__ == "__main__":

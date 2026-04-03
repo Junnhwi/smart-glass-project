@@ -93,3 +93,6 @@ class ChatResponse(BaseModel):
     query: str
     total_hits: int
     hits: list[SearchHitPayload]
+    cited_memory_ids: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    reason: str | None = None
