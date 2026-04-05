@@ -3,7 +3,7 @@ import re
 from typing import Any, Dict
 from uuid import uuid4
 
-from src.models.captioning import get_caption_model_spec
+from src.models.registry import resolve_inference_model
 
 
 SPATIAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -123,7 +123,7 @@ def build_provider_metadata(
     generation_result: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     generation_result = generation_result or {}
-    spec = get_caption_model_spec(model_key)
+    spec = resolve_inference_model(model_key)
     provider_metadata: Dict[str, Any] = {
         "modelKey": spec.key,
         "modelId": spec.model_id,
@@ -157,8 +157,18 @@ def build_vlm_success_result(
     captured_at: str | None = None,
     task_type: str = "caption",
     content_type: str | None = None,
+    inference_metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     caption = _normalize_whitespace(generation_result.get("caption")) or None
+    metadata = inference_metadata or {
+        "caption": caption,
+        "sceneSummary": None,
+        "detectedObjects": [],
+        "tags": [],
+        "ocrText": None,
+        "positionHint": extract_position_hint(caption),
+        "location": None,
+    }
     return {
         "status": "success",
         "requestId": request_id,
@@ -171,15 +181,7 @@ def build_vlm_success_result(
             "imageUrl": _normalize_whitespace(image_url) or None,
             "contentType": _normalize_whitespace(content_type) or None,
         },
-        "metadata": {
-            "caption": caption,
-            "sceneSummary": None,
-            "detectedObjects": [],
-            "tags": [],
-            "ocrText": None,
-            "positionHint": extract_position_hint(caption),
-            "location": None,
-        },
+        "metadata": metadata,
         "providerMetadata": build_provider_metadata(
             model_key=model_key,
             quantization=quantization,

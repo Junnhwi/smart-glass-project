@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple
 
 import redis
 
-from src.models.captioning import get_caption_model_spec
+from src.models.registry import resolve_inference_model
 
 
 def build_liveness_payload() -> Tuple[int, Dict[str, Any]]:
@@ -71,8 +71,9 @@ def _check_model_config() -> Tuple[str, Dict[str, Any]]:
 
     errors = []
     try:
-        spec = get_caption_model_spec(model_key)
+        spec = resolve_inference_model(model_key)
         detail["model_id"] = spec.model_id
+        detail["mode"] = spec.mode
     except Exception as exc:
         errors.append(str(exc))
 

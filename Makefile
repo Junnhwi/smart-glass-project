@@ -1,4 +1,4 @@
-.PHONY: dev test lint bootstrap
+.PHONY: dev test lint bootstrap smoke-inference-qwen benchmark-qwen-models
 
 bootstrap:
 	bash scripts/bootstrap.sh
@@ -11,3 +11,9 @@ test:
 
 lint:
 	bash scripts/lint.sh
+
+smoke-inference-qwen:
+	bash scripts/smoke-inference-qwen.sh
+
+benchmark-qwen-models:
+	bash scripts/benchmark-qwen-models.sh
