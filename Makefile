@@ -1,4 +1,4 @@
-.PHONY: dev test lint bootstrap smoke-inference-qwen benchmark-qwen-models
+.PHONY: dev test lint bootstrap smoke-inference-qwen benchmark-qwen-models run-qwen-local-image
 
 bootstrap:
 	bash scripts/bootstrap.sh
@@ -17,3 +17,6 @@ smoke-inference-qwen:
 
 benchmark-qwen-models:
 	bash scripts/benchmark-qwen-models.sh
+
+run-qwen-local-image:
+	bash scripts/run-qwen-local-image.sh "$(IMAGE)"

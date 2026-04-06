@@ -52,6 +52,7 @@
 
 - 1장 smoke test: `scripts/smoke-inference-qwen.sh`
 - 2장 이상 batch 비교: `scripts/benchmark-qwen-models.sh`
+- 원하는 로컬 이미지 1장 테스트: `scripts/run-qwen-local-image.sh`
 
 ## 동료가 바로 재현하는 방법
 
@@ -108,6 +109,30 @@ LIMIT=2 bash scripts/benchmark-qwen-models.sh
 결과 파일:
 
 - `output/qwen-benchmark-report.json`
+
+### 3. 원하는 로컬 사진 테스트
+
+원하는 사진으로 바로 테스트하려면:
+
+```bash
+MODEL_KEY=qwen2.5-vl-7b bash scripts/run-qwen-local-image.sh /absolute/or/relative/path/to/image.jpg
+```
+
+또는:
+
+```bash
+make run-qwen-local-image IMAGE=/absolute/or/relative/path/to/image.jpg
+```
+
+기본 모델은 `qwen2.5-vl-7b`이며, 필요하면 `MODEL_KEY=qwen2.5-vl-3b`로 바꿔서 실행할 수 있다.
+
+반복 테스트 시에는 worker를 계속 켜둔 상태에서 `docker compose exec`로 실행하므로, 기본값은 재빌드를 생략한다.
+
+코드 변경 직후에만 강제로 다시 빌드하려면:
+
+```bash
+SKIP_BUILD=0 MODEL_KEY=qwen2.5-vl-7b bash scripts/run-qwen-local-image.sh /absolute/or/relative/path/to/image.jpg
+```
 
 ## 현재 검증 결과
 
