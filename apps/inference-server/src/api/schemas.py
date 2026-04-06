@@ -1,0 +1,37 @@
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+
+class VisionInferenceEnqueueRequest(BaseModel):
+    image_key: str = Field(..., alias="imageKey")
+    user_id: str = Field(..., alias="userId")
+    memory_id: str | None = Field(default=None, alias="memoryId")
+    captured_at: str | None = Field(default=None, alias="capturedAt")
+    image_url: str | None = Field(default=None, alias="imageUrl")
+    request_id: str | None = Field(default=None, alias="requestId")
+    task_type: str = Field(default="metadata", alias="taskType")
+
+    model_config = {"populate_by_name": True}
+
+
+class VisionInferenceEnqueueResponse(BaseModel):
+    task_id: str = Field(..., alias="taskId")
+    state: str
+    request_id: str = Field(..., alias="requestId")
+
+    model_config = {"populate_by_name": True}
+
+
+class VisionInferenceTaskStatusResponse(BaseModel):
+    task_id: str = Field(..., alias="taskId")
+    state: str
+    ready: bool
+    successful: bool
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    task_status: Literal["pending", "running", "completed", "failed"] = Field(
+        ..., alias="taskStatus"
+    )
+
+    model_config = {"populate_by_name": True}

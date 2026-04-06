@@ -16,7 +16,25 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - AWS_REGION=ap-northeast-2
+      - VISION_CAPTION_MODEL=${VISION_CAPTION_MODEL:-qwen2.5-vl-7b}
+      - VISION_CAPTION_QUANTIZATION=${VISION_CAPTION_QUANTIZATION:-4bit}
+      - VISION_CAPTION_DTYPE=${VISION_CAPTION_DTYPE:-float16}
+      - INFERENCE_WORKER_PRELOAD_ON_STARTUP=1
+      - INFERENCE_PRELOAD_FAIL_FAST=1
+      - INFERENCE_PRELOAD_STATUS_PATH=/tmp/inference-worker-preload.json
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/scripts/worker_healthcheck.py"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     deploy:
       resources:
         reservations:
@@ -38,7 +56,11 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - AWS_REGION=ap-northeast-2
+      - VISION_CAPTION_MODEL=${VISION_CAPTION_MODEL:-qwen2.5-vl-7b}
+      - VISION_CAPTION_QUANTIZATION=${VISION_CAPTION_QUANTIZATION:-4bit}
+      - VISION_CAPTION_DTYPE=${VISION_CAPTION_DTYPE:-float16}
     ports:
       - "8000:8000"
     healthcheck:
