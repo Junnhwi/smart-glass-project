@@ -4,6 +4,33 @@ services:
     ports:
       - "6379:6379"
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=30m
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["ollama", "pull", "qwen2.5:3b"]
+    restart: "no"
+
   inference-worker:
     build:
       context: ../..
@@ -56,6 +83,14 @@ services:
       dockerfile: infra/docker/rag-service.Dockerfile
     env_file:
       - ../../.env
+    environment:
+      - LLM_PROVIDER=ollama
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_MODEL=qwen2.5:3b
+      - LLM_API_KEY=ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
     ports:
       - "8001:8000"
     healthcheck:
@@ -70,3 +105,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+volumes:
+  ollama-data:

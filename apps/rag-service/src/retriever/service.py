@@ -1,9 +1,9 @@
 from collections import defaultdict
 
 from src.api.schemas import MemoryRecordPayload
+from src.llm.answering import GeneratedAnswer, OpenAICompatibleAnswerGenerator
 from src.embedder.tfidf import TfidfTextEmbedder
 from src.ingestion.service import MemoryIngestionService
-from src.retriever.answering import GeneratedAnswer, OpenAICompatibleAnswerGenerator
 from src.retriever.hybrid import HybridMemoryRetriever, SearchHit
 from src.utils.config import Settings
 from src.vectorstore.store import FileBackedMemoryStore

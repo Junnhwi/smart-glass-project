@@ -36,3 +36,10 @@ sudo systemctl restart docker
 
 Bash
 git config --global core.autocrlf input
+```
+
+## LLM / Chat
+
+- Local chat responses now use an Ollama-backed OpenAI-compatible endpoint in the local compose stack.
+- `docker compose -f infra/compose/docker-compose.local.yml up --build` starts Ollama, pulls `qwen2.5:3b`, and points `rag-service` at `http://ollama:11434/v1`.
+- Team members do not need to install the model manually when they use the compose setup.
