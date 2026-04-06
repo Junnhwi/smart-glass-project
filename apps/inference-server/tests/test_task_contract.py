@@ -139,6 +139,41 @@ class TaskContractTestCase(unittest.TestCase):
                         "positionHint": "키보드 옆",
                         "location": None,
                     },
+                    "pipeline_output": {
+                        "capture_id": "capture-1",
+                        "timestamp": "2026-04-06T14:00:00",
+                        "image_path": None,
+                        "sharpness_score": 123.45,
+                        "inference_time": 1.17,
+                        "scene_summary": "작업용 책상 장면",
+                        "location_context": "사무실",
+                        "objects": [
+                            {
+                                "object_id": 1,
+                                "name": "지갑",
+                                "confidence": 0.8,
+                                "position": {
+                                    "depth_hint": "near",
+                                    "surface": "책상 위",
+                                },
+                                "visual_features": {
+                                    "color": "검정",
+                                    "material": "가죽",
+                                    "brand": None,
+                                    "shape": "직사각형",
+                                },
+                                "nearby_objects": ["키보드"],
+                                "raw_description_ko": "키보드 옆 지갑",
+                            }
+                        ],
+                        "pipeline_meta": {
+                            "vlm_model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                            "object_count": 1,
+                            "vram_allocated_gb": 5.2,
+                            "vram_peak_gb": 5.4,
+                            "vram_total_gb": 8.0,
+                        },
+                    },
                     "elapsed_sec": 1.17,
                     "peak_memory_mb": 2048.0,
                     "load_time_sec": 8.5,
@@ -164,6 +199,8 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["metadata"]["sceneSummary"], "작업용 책상 장면")
         self.assertEqual(result["metadata"]["detectedObjects"], ["지갑", "키보드"])
         self.assertEqual(result["metadata"]["positionHint"], "키보드 옆")
+        self.assertEqual(result["pipelineOutput"]["capture_id"], "capture-1")
+        self.assertEqual(result["pipelineOutput"]["objects"][0]["name"], "지갑")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-7b")
         self.assertEqual(result["providerMetadata"]["modelFamily"], "qwen2_5_vl")
         self.assertEqual(result["runtime"]["peakMemoryMb"], 2048.0)
@@ -191,6 +228,23 @@ class TaskContractTestCase(unittest.TestCase):
                             "positionHint": "책상 위",
                             "location": None,
                         },
+                        "pipeline_output": {
+                            "capture_id": "capture-fallback",
+                            "timestamp": "2026-04-06T14:00:00",
+                            "image_path": None,
+                            "sharpness_score": 111.0,
+                            "inference_time": 2.34,
+                            "scene_summary": "전자기기 책상 장면",
+                            "location_context": "작업 공간",
+                            "objects": [],
+                            "pipeline_meta": {
+                                "vlm_model": "Qwen/Qwen2.5-VL-3B-Instruct",
+                                "object_count": 0,
+                                "vram_allocated_gb": 3.0,
+                                "vram_peak_gb": 3.2,
+                                "vram_total_gb": 8.0,
+                            },
+                        },
                         "elapsed_sec": 2.34,
                         "peak_memory_mb": 1536.0,
                         "load_time_sec": 12.0,
@@ -213,6 +267,7 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-3b")
         self.assertEqual(result["metadata"]["detectedObjects"], ["맥북", "아이폰"])
+        self.assertEqual(result["pipelineOutput"]["capture_id"], "capture-fallback")
         self.assertEqual(mocked_generate.call_count, 2)
         self.assertEqual(mocked_generate.call_args_list[0].kwargs["model_key"], "qwen2.5-vl-7b")
         self.assertEqual(mocked_generate.call_args_list[1].kwargs["model_key"], "qwen2.5-vl-3b")

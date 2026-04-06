@@ -2,6 +2,7 @@ import math
 import json
 import os
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,10 +16,7 @@ from src.contracts.qwen_parser import (
     collect_nearby_candidate_names,
     deduplicate_object_names,
     extract_json_payload,
-    merge_detected_object_candidates,
-    normalize_qwen_metadata,
     normalize_structured_objects,
-    object_names_from_structured_payload,
 )
 
 
@@ -27,47 +25,75 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant. Always respond in Korean. "
     "Return valid JSON only without markdown code fences."
 )
-DEFAULT_USER_PROMPT = """이미지를 보고 아래 JSON 형식으로만 응답하세요.
+SYSTEM_PROMPT_LIST = DEFAULT_SYSTEM_PROMPT
+USER_PROMPT_LIST = """이미지에서 보이는 물체를 빠짐없이 모두 나열하세요.
 
-{
-  "caption": "한 문장 요약",
-  "sceneSummary": "장면 요약",
-  "objects": [
-    {"name": "물체명", "surface": "위치 단서", "nearby": ["주변 물체"]}
-  ],
-  "tags": ["검색용 태그"],
-  "ocrText": null,
-  "positionHint": "대표 위치 단서",
-  "location": {
-    "name": null,
-    "address": null,
-    "latitude": null,
-    "longitude": null
-  }
-}
-"""
-OBJECT_REVIEW_PROMPT_TEMPLATE = """다음은 이미지에서 감지된 물체 후보 목록입니다.
+규칙:
+- 작거나 부분만 보여도 포함
+- 브랜드 제품은 브랜드명 포함 (예: AirPods, 맥북, 아이패드, Apple Pencil)
+- 태블릿/스마트패드/아이패드도 반드시 포함
+- 같은 종류가 여러 개면 모두 포함 (예: AirPods 케이스가 2개면 "AirPods 케이스 1", "AirPods 케이스 2")
+- 가구/벽/바닥 제외
+- JSON 배열만 출력
+
+["물체1", "물체2", ...]"""
+SYSTEM_PROMPT_DETAIL = DEFAULT_SYSTEM_PROMPT
+USER_PROMPT_DETAIL = """이미지에서 "{object_name}" 하나에 대해서만 아래 JSON 형식으로 출력하세요.
+설명 없이 JSON만 출력하세요.
+
+{{
+  "name": "{object_name}",
+  "confidence": 0.0,
+  "position": {{
+    "depth_hint": "near/mid/far",
+    "surface": "놓인 표면 또는 기준 물체. 예: 맥북 위, 아이폰 왼쪽 테이블, 테이블 위 왼쪽"
+  }},
+  "visual_features": {{
+    "color": "색상",
+    "material": "재질",
+    "brand": null,
+    "shape": "형태"
+  }},
+  "nearby_objects": ["주변 물체1", "주변 물체2"],
+  "raw_description_ko": "한 문장 묘사"
+}}
+
+규칙:
+- JSON만 출력
+- confidence는 0.0~1.0 숫자
+- brand는 문자열 또는 null
+- nearby_objects는 문자열 배열
+- surface는 절대 비워두지 말 것
+- 반드시 한국어로"""
+DEDUP_PROMPT_TEMPLATE = """다음은 이미지에서 감지된 물체 목록입니다:
 
 {object_list}
 
 규칙:
-- 진짜 같은 물체를 가리키는 항목만 하나로 합칠 것
-- 가장 구체적인 이름을 우선할 것
-- 서로 다른 위치의 별도 물체라고 확신할 수 없으면 유지할 것
-- 반드시 입력 목록에 있던 이름만 사용할 것
+- 진짜 같은 물체를 가리키는 항목만 하나로 합칠 것 (예: "맥북"과 "노트북"이 동일한 물체면 하나만)
+- 표기만 다른 동일 물체도 합칠 것 (예: "AirPods 케이스"와 "AirPods 캡"이 같은 물체면 하나만)
+- 가장 구체적인 이름 사용 (예: "노트북"보다 "맥북" 선택)
+- 같은 종류라도 이미지에서 위치가 다른 별개 물체면 반드시 둘 다 유지
+- 확실하지 않으면 제거하지 말고 유지할 것
+- 출력 이름은 반드시 위 입력 목록에 있는 이름 그대로 사용할 것 (새 이름 만들지 말 것)
 - JSON 배열만 출력
 
-["물체1", "물체2", "..."]"""
+["물체1", "물체2", ...]"""
 MISSING_OBJECT_PROMPT_TEMPLATE = """현재 이미지에서 인식된 물체 목록입니다.
 
 {object_list}
 
 이미지를 다시 확인해서, 위 목록에 없는 중요한 물체가 있으면 추가한 전체 목록을 JSON 배열로 출력하세요.
-- 책상 위 전자기기, 케이스, 태블릿, 스타일러스 펜, 이어폰, 지갑, 열쇠 같은 물체를 특히 확인하세요.
-- 빠진 것이 확실하지 않으면 기존 목록을 그대로 유지하세요.
-- 반드시 JSON 배열만 출력하세요.
+- 특히 태블릿, 아이패드, 스타일러스 펜, Apple Pencil 같은 물체가 있는지 확인하세요.
+- 빠진 것이 없으면 그대로 출력하세요.
 
-["물체1", "물체2", "..."]"""
+["물체1", "물체2", ...]"""
+SCENE_SUMMARY_PROMPT = """이미지의 전체 장면을 한 문장으로 요약하고 공간 유형을 JSON으로 출력하세요.
+
+{
+  "scene_summary": "10단어 이내 요약",
+  "location_context": "공간 유형 (예: 거실, 카페, 사무실)"
+}"""
 
 
 @dataclass(frozen=True)
@@ -179,9 +205,35 @@ def _downscale_image_if_needed(image: Image.Image, max_image_pixels: int) -> Ima
     return image.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
 
 
-def _should_enable_object_review() -> bool:
-    raw_value = os.getenv("VISION_QWEN_ENABLE_OBJECT_REVIEW", "").strip().lower()
-    return raw_value in {"1", "true", "yes", "on"}
+def _calculate_sharpness(image: Image.Image) -> float:
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return 0.0
+
+    grayscale = np.array(image.convert("L"))
+    laplacian = cv2.Laplacian(grayscale, cv2.CV_64F)
+    return round(float(laplacian.var()), 2)
+
+
+def _get_vram_usage() -> Dict[str, float]:
+    if not torch.cuda.is_available():
+        return {}
+    return {
+        "allocated_gb": round(torch.cuda.memory_allocated() / 1024**3, 2),
+        "reserved_gb": round(torch.cuda.memory_reserved() / 1024**3, 2),
+        "max_allocated_gb": round(torch.cuda.max_memory_allocated() / 1024**3, 2),
+        "total_gb": round(
+            torch.cuda.get_device_properties(0).total_memory / 1024**3, 2
+        ),
+    }
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())
 
 
 def _run_generation(
@@ -221,48 +273,60 @@ def _run_generation(
     )[0]
 
 
-def _review_object_candidates_with_vlm(
+def _infer_text(
     *,
     image: Image.Image,
-    candidate_names: List[str],
+    system_prompt: str,
+    user_prompt: str,
     model: Any,
     processor: Any,
     device_name: str,
     process_vision_info: Any,
-) -> List[str]:
-    clean_candidates = deduplicate_object_names(candidate_names)
-    if len(clean_candidates) <= 1:
-        return clean_candidates
-
+    max_new_tokens: int = 256,
+) -> str:
     messages = [
-        {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": [
                 {"type": "image", "image": image},
-                {
-                    "type": "text",
-                    "text": OBJECT_REVIEW_PROMPT_TEMPLATE.format(
-                        object_list=json.dumps(clean_candidates, ensure_ascii=False)
-                    ),
-                },
+                {"type": "text", "text": user_prompt},
             ],
         },
     ]
-    raw_text = _run_generation(
+    return _run_generation(
         model=model,
         processor=processor,
         device_name=device_name,
         messages=messages,
         process_vision_info=process_vision_info,
-        max_new_tokens=256,
+        max_new_tokens=max_new_tokens,
     )
-    reviewed = deduplicate_object_names(
-        extract_json_payload(raw_text, expect_array=True)
-    )
-    if not reviewed or len(reviewed) < max(1, len(clean_candidates) // 2):
-        return clean_candidates
-    return [name for name in reviewed if name in clean_candidates]
+
+
+def _normalize_location_context(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, dict):
+        if not value:
+            return "알 수 없음"
+        nested_value = next(iter(value.values()))
+        if isinstance(nested_value, list):
+            return _normalize_text(nested_value[0]) or "알 수 없음"
+        return _normalize_text(nested_value) or "알 수 없음"
+    if isinstance(value, list):
+        return _normalize_text(value[0]) or "알 수 없음"
+    return "알 수 없음"
+
+
+def _choose_position_hint(objects: List[Dict[str, Any]], location_context: str) -> str | None:
+    for item in objects:
+        surface = _normalize_text(item.get("position", {}).get("surface"))
+        if surface and surface != "unknown":
+            return surface
+    if location_context and location_context != "알 수 없음":
+        return location_context
+    return None
 
 
 def _check_missing_objects_with_vlm(
@@ -303,6 +367,119 @@ def _check_missing_objects_with_vlm(
     )
     updated = deduplicate_object_names(extract_json_payload(raw_text, expect_array=True))
     return [name for name in updated if name not in clean_candidates]
+
+
+def _get_object_list(
+    *,
+    image: Image.Image,
+    model: Any,
+    processor: Any,
+    device_name: str,
+    process_vision_info: Any,
+) -> List[str]:
+    raw_text = _infer_text(
+        image=image,
+        system_prompt=SYSTEM_PROMPT_LIST,
+        user_prompt=USER_PROMPT_LIST,
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
+        max_new_tokens=256,
+    )
+    object_list = deduplicate_object_names(extract_json_payload(raw_text, expect_array=True))
+    return object_list
+
+
+def _get_scene_summary(
+    *,
+    image: Image.Image,
+    model: Any,
+    processor: Any,
+    device_name: str,
+    process_vision_info: Any,
+) -> Dict[str, str]:
+    raw_text = _infer_text(
+        image=image,
+        system_prompt="You are a helpful assistant. Output valid JSON only.",
+        user_prompt=SCENE_SUMMARY_PROMPT,
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
+        max_new_tokens=256,
+    )
+    payload = extract_json_payload(raw_text, expect_array=False)
+    return {
+        "scene_summary": _normalize_text(payload.get("scene_summary")) or "알 수 없음",
+        "location_context": _normalize_location_context(
+            payload.get("location_context", "알 수 없음")
+        ),
+    }
+
+
+def _get_object_detail(
+    *,
+    image: Image.Image,
+    object_name: str,
+    object_id: int,
+    model: Any,
+    processor: Any,
+    device_name: str,
+    process_vision_info: Any,
+) -> Dict[str, Any] | None:
+    raw_text = _infer_text(
+        image=image,
+        system_prompt=SYSTEM_PROMPT_DETAIL,
+        user_prompt=USER_PROMPT_DETAIL.format(object_name=object_name),
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
+        max_new_tokens=256,
+    )
+    payload = extract_json_payload(raw_text, expect_array=False)
+    normalized_objects = normalize_structured_objects({"objects": [payload]})
+    if not normalized_objects:
+        return None
+    detail = normalized_objects[0]
+    detail["object_id"] = object_id
+    if detail.get("name") != object_name and object_name:
+        detail["name"] = object_name
+    return detail
+
+
+def _deduplicate_with_vlm(
+    *,
+    image: Image.Image,
+    object_list: List[str],
+    model: Any,
+    processor: Any,
+    device_name: str,
+    process_vision_info: Any,
+) -> List[str]:
+    clean_list = deduplicate_object_names(object_list)
+    if not clean_list:
+        return []
+
+    raw_text = _infer_text(
+        image=image,
+        system_prompt=SYSTEM_PROMPT_LIST,
+        user_prompt=DEDUP_PROMPT_TEMPLATE.format(
+            object_list=json.dumps(clean_list, ensure_ascii=False)
+        ),
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
+        max_new_tokens=256,
+    )
+    reviewed = deduplicate_object_names(extract_json_payload(raw_text, expect_array=True))
+    input_set = set(clean_list)
+    reviewed = [name for name in reviewed if name in input_set]
+    if not reviewed or len(reviewed) < max(1, len(clean_list) // 2):
+        return clean_list
+    return reviewed
 
 
 @lru_cache(maxsize=4)
@@ -352,8 +529,6 @@ def generate_qwen_vlm_metadata(
     quantization: str = "4bit",
     device: Optional[str] = None,
     dtype_name: str = "float16",
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-    user_prompt: str = DEFAULT_USER_PROMPT,
     max_new_tokens: int = 512,
 ) -> Dict[str, Any]:
     process_vision_info = _require_qwen_dependencies()
@@ -369,64 +544,126 @@ def generate_qwen_vlm_metadata(
         max_image_pixels=_resolve_max_image_pixels(spec),
     )
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": resolved_image},
-                {"type": "text", "text": user_prompt},
-            ],
-        },
-    ]
-
     if torch.cuda.is_available() and device_name.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats()
 
     started_at = time.perf_counter()
-    raw_text = _run_generation(
+    object_list = _get_object_list(
+        image=resolved_image,
         model=model,
         processor=processor,
         device_name=device_name,
-        messages=messages,
         process_vision_info=process_vision_info,
-        max_new_tokens=max_new_tokens,
     )
-    elapsed_sec = time.perf_counter() - started_at
-
-    raw_payload = extract_json_payload(raw_text, expect_array=False)
-    metadata = normalize_qwen_metadata(raw_payload)
-    normalized_objects = normalize_structured_objects(raw_payload)
-    merged_detected_objects = merge_detected_object_candidates(
-        detected_objects=metadata["detectedObjects"]
-        or object_names_from_structured_payload(raw_payload),
-        structured_objects=normalized_objects,
+    scene_info = _get_scene_summary(
+        image=resolved_image,
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
     )
 
-    if _should_enable_object_review():
-        merged_detected_objects = _review_object_candidates_with_vlm(
+    objects: List[Dict[str, Any]] = []
+    for index, object_name in enumerate(object_list, start=1):
+        detail = _get_object_detail(
             image=resolved_image,
-            candidate_names=merged_detected_objects,
+            object_name=object_name,
+            object_id=index,
             model=model,
             processor=processor,
             device_name=device_name,
             process_vision_info=process_vision_info,
         )
-        merged_detected_objects = deduplicate_object_names(
-            merged_detected_objects
-            + collect_nearby_candidate_names(normalized_objects, merged_detected_objects)
-            + _check_missing_objects_with_vlm(
-                image=resolved_image,
-                current_names=merged_detected_objects,
-                model=model,
-                processor=processor,
-                device_name=device_name,
-                process_vision_info=process_vision_info,
-            )
-        )
+        if detail is not None:
+            objects.append(detail)
 
-    metadata["detectedObjects"] = merged_detected_objects
-    metadata["tags"] = build_metadata_tags(metadata, normalized_objects)
+    nearby_candidates = collect_nearby_candidate_names(objects)
+    all_candidates = [item["name"] for item in objects] + nearby_candidates
+    deduped_list = _deduplicate_with_vlm(
+        image=resolved_image,
+        object_list=all_candidates,
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
+    )
+
+    existing_names = {item["name"] for item in objects}
+    for object_name in deduped_list:
+        if object_name in existing_names:
+            continue
+        detail = _get_object_detail(
+            image=resolved_image,
+            object_name=object_name,
+            object_id=len(objects) + 1,
+            model=model,
+            processor=processor,
+            device_name=device_name,
+            process_vision_info=process_vision_info,
+        )
+        if detail is not None:
+            objects.append(detail)
+            existing_names.add(object_name)
+
+    deduped_set = set(deduped_list)
+    objects = [item for item in objects if item["name"] in deduped_set]
+
+    missing_objects = _check_missing_objects_with_vlm(
+        image=resolved_image,
+        current_names=[item["name"] for item in objects],
+        model=model,
+        processor=processor,
+        device_name=device_name,
+        process_vision_info=process_vision_info,
+    )
+    for object_name in missing_objects:
+        detail = _get_object_detail(
+            image=resolved_image,
+            object_name=object_name,
+            object_id=len(objects) + 1,
+            model=model,
+            processor=processor,
+            device_name=device_name,
+            process_vision_info=process_vision_info,
+        )
+        if detail is not None:
+            objects.append(detail)
+
+    for index, item in enumerate(objects, start=1):
+        item["object_id"] = index
+
+    elapsed_sec = time.perf_counter() - started_at
+    scene_summary = scene_info.get("scene_summary") or None
+    location_context = scene_info.get("location_context") or "알 수 없음"
+    sharpness_score = _calculate_sharpness(resolved_image)
+    vram_info = _get_vram_usage()
+    metadata = {
+        "caption": scene_summary,
+        "sceneSummary": scene_summary,
+        "detectedObjects": deduplicate_object_names([item["name"] for item in objects]),
+        "tags": [],
+        "ocrText": None,
+        "positionHint": _choose_position_hint(objects, location_context),
+        "location": None,
+    }
+    metadata["tags"] = build_metadata_tags(metadata, objects)
+    pipeline_output = {
+        "capture_id": f"qwen-{int(started_at * 1000)}",
+        "timestamp": datetime.now().isoformat(),
+        "image_path": None,
+        "sharpness_score": sharpness_score,
+        "inference_time": round(elapsed_sec, 3),
+        "scene_summary": scene_summary,
+        "location_context": location_context,
+        "objects": objects,
+        "pipeline_meta": {
+            "vlm_model": spec.model_id,
+            "object_count": len(objects),
+            "vram_allocated_gb": vram_info.get("allocated_gb"),
+            "vram_peak_gb": vram_info.get("max_allocated_gb"),
+            "vram_total_gb": vram_info.get("total_gb"),
+        },
+    }
 
     peak_memory_mb = 0.0
     if torch.cuda.is_available() and device_name.startswith("cuda"):
@@ -441,7 +678,11 @@ def generate_qwen_vlm_metadata(
         "model_key": spec.key,
         "device": device_name,
         "quantization": quantization,
-        "prompt": user_prompt,
-        "system_prompt": system_prompt,
-        "raw_output_text": raw_text,
+        "prompt": USER_PROMPT_LIST,
+        "system_prompt": SYSTEM_PROMPT_LIST,
+        "raw_output_text": None,
+        "objects": objects,
+        "scene_info": scene_info,
+        "pipeline_output": pipeline_output,
+        "pipeline_mode": "multi_stage",
     }

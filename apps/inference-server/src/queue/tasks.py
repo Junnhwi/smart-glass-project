@@ -119,6 +119,7 @@ def process_vision_inference(
                 model_key = fallback_model_key
                 model_descriptor = resolve_inference_model(model_key)
             metadata = result["metadata"]
+            pipeline_output = result.get("pipeline_output")
         else:
             result = generate_caption(
                 image=raw_image,
@@ -127,6 +128,7 @@ def process_vision_inference(
                 dtype_name=dtype_name,
             )
             metadata = None
+            pipeline_output = None
 
         logger.info(
             "Inference task completed",
@@ -158,6 +160,7 @@ def process_vision_inference(
             task_type=task_type,
             content_type=content_type,
             inference_metadata=metadata,
+            pipeline_output=pipeline_output,
         )
     except Exception as e:
         logger.exception(

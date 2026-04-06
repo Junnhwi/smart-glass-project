@@ -158,6 +158,7 @@ def build_vlm_success_result(
     task_type: str = "caption",
     content_type: str | None = None,
     inference_metadata: Dict[str, Any] | None = None,
+    pipeline_output: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     caption = _normalize_whitespace(generation_result.get("caption")) or None
     metadata = inference_metadata or {
@@ -182,6 +183,7 @@ def build_vlm_success_result(
             "contentType": _normalize_whitespace(content_type) or None,
         },
         "metadata": metadata,
+        "pipelineOutput": pipeline_output,
         "providerMetadata": build_provider_metadata(
             model_key=model_key,
             quantization=quantization,
