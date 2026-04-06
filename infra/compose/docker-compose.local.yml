@@ -39,6 +39,8 @@ services:
       - ../../.env
     depends_on:
       - redis
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - AWS_REGION=ap-northeast-2
@@ -59,6 +61,8 @@ services:
       - ../../.env
     depends_on:
       - redis
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - AWS_REGION=ap-northeast-2
@@ -108,3 +112,4 @@ services:
 
 volumes:
   ollama-data:
+  hf-cache:

@@ -60,6 +60,48 @@ export interface VlmProviderMetadata {
   raw?: Record<string, unknown> | null;
 }
 
+export interface VlmPipelineObjectPosition {
+  depth_hint: string;
+  surface: string;
+}
+
+export interface VlmPipelineObjectVisualFeatures {
+  color: string;
+  material: string;
+  brand?: string | null;
+  shape: string;
+}
+
+export interface VlmPipelineObject {
+  object_id: number;
+  name: string;
+  confidence: number;
+  position: VlmPipelineObjectPosition;
+  visual_features: VlmPipelineObjectVisualFeatures;
+  nearby_objects: string[];
+  raw_description_ko?: string | null;
+}
+
+export interface VlmPipelineMeta {
+  vlm_model?: string | null;
+  object_count?: number | null;
+  vram_allocated_gb?: number | null;
+  vram_peak_gb?: number | null;
+  vram_total_gb?: number | null;
+}
+
+export interface VlmPipelineOutput {
+  capture_id: string;
+  timestamp: string;
+  image_path?: string | null;
+  sharpness_score?: number | null;
+  inference_time?: number | null;
+  scene_summary?: string | null;
+  location_context?: string | null;
+  objects: VlmPipelineObject[];
+  pipeline_meta?: VlmPipelineMeta | null;
+}
+
 export interface VlmInferenceSuccess {
   status: "success";
   requestId: string;
@@ -68,6 +110,7 @@ export interface VlmInferenceSuccess {
   userId: string;
   sourceImage: VlmSourceImageRef;
   metadata: VlmMetadataPayload;
+  pipelineOutput?: VlmPipelineOutput | null;
   providerMetadata: VlmProviderMetadata;
   runtime: VlmRuntimeMetrics;
 }
