@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, validator
 
 
@@ -44,6 +46,12 @@ class IndexMemoriesRequest(BaseModel):
 class IndexMemoriesResponse(BaseModel):
     indexed_count: int
     total_user_memories: dict[str, int]
+
+
+class VlmIndexRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    result: dict[str, Any]
 
 
 class SearchRequest(BaseModel):

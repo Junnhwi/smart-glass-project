@@ -29,6 +29,12 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/inference-server.Dockerfile
+    command:
+      [
+        "sh",
+        "-c",
+        "celery -A src.queue.tasks --result-backend \"$CELERY_RESULT_BACKEND\" worker --loglevel=info -P solo"
+      ]
     env_file:
       - ../../.env
     depends_on:
@@ -37,6 +43,7 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - AWS_REGION=ap-northeast-2
     deploy:
       resources:
@@ -74,6 +81,37 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  api-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api-server.Dockerfile
+    env_file:
+      - ../../.env
+    depends_on:
+      - redis
+      - rag-service
+      - inference-worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - RAG_SERVICE_URL=http://rag-service:8000
+      - API_CAPTURE_WORKER_TIMEOUT_SEC=180
+      - API_CAPTURE_RAG_TIMEOUT_SEC=30
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready').read()"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   rag-service:
     build:
