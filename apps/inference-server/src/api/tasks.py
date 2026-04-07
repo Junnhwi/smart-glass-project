@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from src.api.schemas import (
     VisionInferenceEnqueueRequest,
@@ -29,8 +29,12 @@ def _map_task_status(state: str, ready: bool, successful: bool) -> str:
     status_code=202,
 )
 async def enqueue_vision_inference(
+    request: Request,
     payload: VisionInferenceEnqueueRequest,
 ) -> VisionInferenceEnqueueResponse:
+    resolved_request_id = payload.request_id or getattr(
+        request.state, "request_id", None
+    )
     async_result = process_vision_inference.apply_async(
         kwargs={
             "image_key": payload.image_key,
@@ -38,15 +42,14 @@ async def enqueue_vision_inference(
             "memory_id": payload.memory_id,
             "captured_at": payload.captured_at,
             "image_url": payload.image_url,
-            "request_id": payload.request_id,
+            "request_id": resolved_request_id,
             "task_type": payload.task_type,
         }
     )
-    resolved_request_id = payload.request_id or async_result.id
     return VisionInferenceEnqueueResponse(
         taskId=async_result.id,
         state=async_result.state,
-        requestId=resolved_request_id,
+        requestId=resolved_request_id or async_result.id,
     )
 
 
@@ -70,11 +73,18 @@ async def get_vision_inference_task(task_id: str) -> VisionInferenceTaskStatusRe
         if async_result.failed() and error_message is None:
             error_message = str(async_result.result)
 
+    request_id = None
+    if isinstance(result_payload, dict):
+        raw_request_id = result_payload.get("requestId")
+        if raw_request_id is not None:
+            request_id = str(raw_request_id).strip() or None
+
     return VisionInferenceTaskStatusResponse(
         taskId=task_id,
         state=async_result.state,
         ready=ready,
         successful=successful,
+        requestId=request_id,
         result=result_payload,
         error=error_message,
         taskStatus=_map_task_status(async_result.state, ready, successful),

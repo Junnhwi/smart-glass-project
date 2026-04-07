@@ -191,7 +191,8 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 
 ### inference worker
 
-- `requestId`가 없으면 worker가 UUID 기반으로 생성
+- API 경유 요청에서는 enqueue 단계에서 이미 해석된 `requestId`를 worker가 그대로 받음
+- worker direct call 또는 비-API 경로에서는 `requestId`가 없으면 worker가 UUID 기반으로 생성
 - `positionHint`는 caption에서 단순 규칙 기반으로 추출
 - `detectedObjects`, `tags`는 현재 빈 배열 기본값
 - `sceneSummary`, `ocrText`, `location`은 현재 `None`
