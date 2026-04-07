@@ -1,9 +1,9 @@
 from collections import defaultdict
 
 from src.api.schemas import MemoryRecordPayload
+from src.llm.answering import GeneratedAnswer, OpenAICompatibleAnswerGenerator
 from src.embedder.tfidf import TfidfTextEmbedder
 from src.ingestion.service import MemoryIngestionService
-from src.retriever.answering import OpenAICompatibleAnswerGenerator
 from src.retriever.hybrid import HybridMemoryRetriever, SearchHit
 from src.utils.config import Settings
 from src.vectorstore.store import FileBackedMemoryStore
@@ -51,7 +51,7 @@ class RagQueryService:
     def search(self, user_id: str, query: str, top_k: int) -> list[SearchHit]:
         return self.retriever.search(user_id=user_id, query=query, top_k=top_k)
 
-    def chat(self, user_id: str, query: str, top_k: int) -> tuple[str, str, list[SearchHit]]:
+    def chat(self, user_id: str, query: str, top_k: int) -> tuple[GeneratedAnswer, list[SearchHit]]:
         hits = self.search(user_id=user_id, query=query, top_k=top_k)
         answer = self.answer_generator.generate(query=query, hits=hits)
-        return answer.text, answer.mode, hits
+        return answer, hits

@@ -8,6 +8,29 @@ KOREAN_SPATIAL_PATTERN = re.compile(
     r"([0-9A-Za-z\uAC00-\uD7A3 ]{1,30})\s*(\uC704|\uC544\uB798|\uC606|\uADFC\uCC98|\uC548|\uC55E|\uB4A4)"
 )
 
+KOREAN_PARTICLE_SUFFIXES: tuple[str, ...] = (
+    "\uC5D0\uC11C",
+    "\uC5D0\uAC8C\uC11C",
+    "\uD55C\uD14C\uC11C",
+    "\uC73C\uB85C\uBD80\uD130",
+    "\uC5D0\uAC8C",
+    "\uD55C\uD14C",
+    "\uC73C\uB85C",
+    "\uB85C",
+    "\uC740",
+    "\uB294",
+    "\uC774",
+    "\uAC00",
+    "\uC744",
+    "\uB97C",
+    "\uC5D0",
+    "\uC640",
+    "\uACFC",
+    "\uB3C4",
+    "\uB9CC",
+    "\uC758",
+)
+
 SYNONYM_GROUPS: dict[str, set[str]] = {
     "wallet": {"wallet", "wallets", "\uC9C0\uAC11"},
     "key": {"key", "keys", "\uC5F4\uC1E0", "\uD0A4"},
@@ -34,6 +57,7 @@ SYNONYM_GROUPS: dict[str, set[str]] = {
     "chair": {"chair", "\uC758\uC790"},
     "bed": {"bed", "\uCE68\uB300"},
     "sofa": {"sofa", "couch", "\uC18C\uD30C"},
+    "umbrella": {"umbrella", "umbrellas", "\uC6B0\uC0B0"},
     "drawer": {"drawer", "\uC11C\uB78D"},
     "shelf": {"shelf", "\uC120\uBC18"},
     "floor": {"floor", "\uBC14\uB2E5"},
@@ -61,6 +85,7 @@ KOREAN_LABELS: dict[str, str] = {
     "chair": "\uC758\uC790",
     "bed": "\uCE68\uB300",
     "sofa": "\uC18C\uD30C",
+    "umbrella": "\uC6B0\uC0B0",
     "drawer": "\uC11C\uB78D",
     "shelf": "\uC120\uBC18",
     "floor": "\uBC14\uB2E5",
@@ -162,11 +187,46 @@ SPATIAL_CONNECTOR_SPLIT = re.compile(
     re.I,
 )
 
+NEGATION_CUES: tuple[str, ...] = (
+    "\uB9D0\uACE0",
+    "\uBE60\uC9C0\uACE0",
+    "\uC81C\uC678\uD558\uACE0",
+    "\uC81C\uC678",
+    "\uB300\uC2E0",
+    "instead of",
+    "other than",
+    "except",
+    "without",
+)
+
 
 def normalize_whitespace(value: str | None) -> str:
     if not value:
         return ""
     return " ".join(str(value).split())
+
+
+def normalize_search_query(text: str | None) -> str:
+    cleaned = normalize_whitespace(text)
+    if not cleaned:
+        return ""
+
+    lowered = cleaned.lower()
+    last_cue_start = -1
+    last_cue = ""
+    for cue in NEGATION_CUES:
+        cue_start = lowered.rfind(cue)
+        if cue_start > last_cue_start:
+            last_cue_start = cue_start
+            last_cue = cue
+
+    if last_cue_start >= 0:
+        candidate = normalize_whitespace(cleaned[last_cue_start + len(last_cue) :])
+        candidate = candidate.lstrip(" ,.!?;:\u3000")
+        if candidate:
+            return candidate
+
+    return cleaned
 
 
 def tokenize_text(text: str | None) -> list[str]:
@@ -190,16 +250,31 @@ def dedupe_strings(values: Iterable[str | None]) -> list[str]:
     return result
 
 
+def strip_korean_particle(token: str) -> str:
+    lowered = token.lower()
+    if len(lowered) <= 1:
+        return lowered
+
+    for suffix in sorted(KOREAN_PARTICLE_SUFFIXES, key=len, reverse=True):
+        if lowered.endswith(suffix) and len(lowered) > len(suffix) + 1:
+            return lowered[: -len(suffix)]
+
+    return lowered
+
+
 def canonicalize_token(token: str) -> str:
-    return ALIAS_TO_CANONICAL.get(token.lower(), token.lower())
+    normalized = strip_korean_particle(token)
+    return ALIAS_TO_CANONICAL.get(normalized, normalized)
 
 
 def expand_terms(values: Iterable[str]) -> list[str]:
     expanded: set[str] = set()
     for value in values:
         for token in tokenize_text(value):
-            canonical = canonicalize_token(token)
+            stem = strip_korean_particle(token)
+            canonical = canonicalize_token(stem)
             expanded.add(token)
+            expanded.add(stem)
             expanded.add(canonical)
             expanded.update(SYNONYM_GROUPS.get(canonical, set()))
     return sorted(expanded)

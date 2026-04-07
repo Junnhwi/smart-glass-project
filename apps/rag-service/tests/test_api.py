@@ -12,6 +12,8 @@ ENTRYWAY = "\uD604\uAD00"
 LIVING_ROOM = "\uAC70\uC2E4"
 WALLET_QUERY = "\uB0B4 \uC9C0\uAC11 \uC5B4\uB514\uC5D0 \uC788\uC5C8\uC9C0?"
 UMBRELLA_QUERY = "\uC6B0\uC0B0 \uC5B4\uB514 \uC788\uC5C8\uC5B4?"
+UMBRELLA_PARTICLE_QUERY_1 = "\uC6B0\uC0B0\uC740 \uC5B4\uB514\uC5D0?"
+UMBRELLA_PARTICLE_QUERY_2 = "\uC6B0\uC0B0\uC774 \uC5B4\uB514\uC788\uC9C0?"
 
 
 class RagServiceApiTestCase(unittest.TestCase):
@@ -24,11 +26,13 @@ class RagServiceApiTestCase(unittest.TestCase):
         os.environ.pop("LLM_API_KEY", None)
         os.environ.pop("LLM_MODEL", None)
         os.environ.pop("LLM_BASE_URL", None)
+        os.environ.pop("LLM_PROVIDER", None)
         self.client = TestClient(create_app())
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop("RAG_STORAGE_PATH", None)
+        os.environ.pop("LLM_PROVIDER", None)
 
     def test_health_endpoint_returns_request_id(self) -> None:
         response = self.client.get("/health/live")
@@ -121,6 +125,47 @@ class RagServiceApiTestCase(unittest.TestCase):
         self.assertEqual(payload["hits"][0]["memory_id"], "mem-wallet-02")
         self.assertIn("mem-wallet-02", payload["answer"])
         self.assertIn(LIVING_ROOM, payload["answer"])
+        self.assertEqual(payload["cited_memory_ids"], ["mem-wallet-02"])
+        self.assertEqual(payload["confidence"], 0.5)
+        self.assertIn("검색 결과를 기반", payload["reason"])
+
+    def test_search_uses_text_after_negation_clauses(self) -> None:
+        self.client.post(
+            "/memories/index",
+            json={
+                "memories": [
+                    {
+                        "memory_id": "mem-iphone-01",
+                        "user_id": "user-1",
+                        "caption": "a black iphone is on the table",
+                        "detected_objects": ["iphone", "phone"],
+                        "tags": ["phone"],
+                    },
+                    {
+                        "memory_id": "mem-umbrella-01",
+                        "user_id": "user-1",
+                        "caption": "an umbrella is leaning against the sofa",
+                        "detected_objects": ["umbrella", "sofa"],
+                        "tags": ["umbrella", "living-room"],
+                    },
+                ]
+            },
+        )
+
+        response = self.client.post(
+            "/search",
+            json={
+                "user_id": "user-1",
+                "query": "아이폰 말고 우산 어디 있어?",
+                "top_k": 3,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total_hits"], 1)
+        self.assertEqual(payload["hits"][0]["memory_id"], "mem-umbrella-01")
+        self.assertIn("umbrella", " ".join(payload["hits"][0]["matched_terms"]))
 
     def test_unknown_item_returns_no_hits(self) -> None:
         self.client.post(
@@ -162,6 +207,39 @@ class RagServiceApiTestCase(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["total_hits"], 0)
         self.assertEqual(payload["hits"], [])
+
+    def test_search_handles_korean_particles(self) -> None:
+        self.client.post(
+            "/memories/index",
+            json={
+                "memories": [
+                    {
+                        "memory_id": "mem-umbrella-02",
+                        "user_id": "user-4",
+                        "caption": "an umbrella is leaning against the sofa",
+                        "detected_objects": ["umbrella", "sofa"],
+                        "tags": ["umbrella", "living-room"],
+                        "location": {"name": LIVING_ROOM},
+                    }
+                ]
+            },
+        )
+
+        for query in (UMBRELLA_PARTICLE_QUERY_1, UMBRELLA_PARTICLE_QUERY_2):
+            response = self.client.post(
+                "/search",
+                json={
+                    "user_id": "user-4",
+                    "query": query,
+                    "top_k": 3,
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["total_hits"], 1)
+            self.assertEqual(payload["hits"][0]["memory_id"], "mem-umbrella-02")
+            self.assertIn("umbrella", " ".join(payload["hits"][0]["matched_terms"]))
 
     def test_blank_identifiers_are_rejected(self) -> None:
         response = self.client.post(
@@ -218,6 +296,8 @@ class RagServiceApiTestCase(unittest.TestCase):
         self.assertEqual(chat_response.status_code, 200)
         self.assertEqual(chat_response.json()["total_hits"], 0)
         self.assertEqual(chat_response.json()["hits"], [])
+        self.assertEqual(chat_response.json()["answer_mode"], "template")
+        self.assertEqual(chat_response.json().get("cited_memory_ids"), [])
 
 
 if __name__ == "__main__":

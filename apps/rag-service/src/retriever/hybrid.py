@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from src.embedder.tfidf import TfidfTextEmbedder
 from src.ingestion.models import MemoryDocument
-from src.utils.text import expand_terms, tokenize_text
+from src.utils.text import expand_terms, normalize_search_query, tokenize_text
 from src.vectorstore.store import FileBackedMemoryStore
 
 
@@ -33,8 +33,9 @@ class HybridMemoryRetriever:
         if not documents:
             return []
 
-        query_terms = set(expand_terms(tokenize_text(query)))
-        query_text = " ".join([query, *sorted(query_terms)])
+        normalized_query = normalize_search_query(query)
+        query_terms = set(expand_terms(tokenize_text(normalized_query)))
+        query_text = " ".join([normalized_query, *sorted(query_terms)])
         search_texts = [document.searchable_text() for document in documents]
 
         index = self.embedder.build_index(search_texts)
