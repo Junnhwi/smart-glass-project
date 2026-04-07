@@ -19,6 +19,9 @@ echo "[1/4] Build inference image"
 docker compose -f "$COMPOSE_FILE" build inference-worker inference-api
 
 echo "[2/4] Start redis + inference-api"
+VISION_CAPTION_MODEL="$MODEL_KEY" \
+VISION_CAPTION_QUANTIZATION=4bit \
+VISION_CAPTION_DTYPE=float16 \
 docker compose -f "$COMPOSE_FILE" up -d redis inference-api
 
 echo "[3/4] Readiness probe"

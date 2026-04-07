@@ -1,6 +1,7 @@
 import os
 import io
 from celery import Celery
+from celery.signals import worker_init
 from PIL import Image
 
 from src.contracts.vlm import (
@@ -13,11 +14,19 @@ from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
 from src.models.registry import resolve_inference_model
 from src.storage.s3 import get_s3_client
+from src.worker_preload import maybe_preload_on_startup
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-app = Celery("inference_tasks", broker=broker_url)
+result_backend = os.getenv("CELERY_RESULT_BACKEND", broker_url)
+app = Celery("inference_tasks", broker=broker_url, backend=result_backend)
+app.conf.update(task_track_started=True, result_expires=3600)
 configure_logging()
 logger = get_logger(__name__)
+
+
+@worker_init.connect
+def _preload_worker_model_on_startup(**_: object) -> None:
+    maybe_preload_on_startup()
 
 
 def _require_env(name: str) -> str:
