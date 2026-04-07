@@ -13,7 +13,7 @@ from src.core.logging import configure_logging, get_logger
 from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
 from src.models.registry import resolve_inference_model
-from src.storage.s3 import get_s3_client
+from src.storage.s3 import get_storage_service
 from src.worker_preload import maybe_preload_on_startup
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
@@ -27,13 +27,6 @@ logger = get_logger(__name__)
 @worker_init.connect
 def _preload_worker_model_on_startup(**_: object) -> None:
     maybe_preload_on_startup()
-
-
-def _require_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
 
 
 def _should_retry_with_qwen_fallback(error: Exception) -> bool:
@@ -74,7 +67,6 @@ def process_vision_inference(
     request_id=None,
     task_type="caption",
 ):
-    bucket_name = _require_env("AWS_S3_BUCKET_NAME")
     model_key = os.getenv("VISION_CAPTION_MODEL", "blip-base").strip() or "blip-base"
     quantization = (
         os.getenv("VISION_CAPTION_QUANTIZATION", "none").strip() or "none"
@@ -87,10 +79,9 @@ def process_vision_inference(
     try:
         model_descriptor = resolve_inference_model(model_key)
         model_mode = model_descriptor.mode
-        s3_client = get_s3_client()
-        response = s3_client.get_object(Bucket=bucket_name, Key=image_key)
-        content_type = response.get("ContentType")
-        image_data = response["Body"].read()
+        storage_object = get_storage_service().read_object(image_key)
+        content_type = storage_object.content_type
+        image_data = storage_object.body
         raw_image = Image.open(io.BytesIO(image_data)).convert("RGB")
         if model_descriptor.mode == "vlm":
             try:
