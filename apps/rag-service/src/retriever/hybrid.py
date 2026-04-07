@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from src.embedder.tfidf import TfidfTextEmbedder
 from src.ingestion.models import MemoryDocument
 from src.utils.text import expand_terms, tokenize_text
-from src.vectorstore.store import FileBackedMemoryStore
+from src.vectorstore.store import MemoryStore
 
 
 def _overlap_score(query_terms: set[str], candidate_terms: set[str], weight: float) -> float:
@@ -24,7 +24,7 @@ class SearchHit:
 
 
 class HybridMemoryRetriever:
-    def __init__(self, store: FileBackedMemoryStore, embedder: TfidfTextEmbedder):
+    def __init__(self, store: MemoryStore, embedder: TfidfTextEmbedder):
         self.store = store
         self.embedder = embedder
 

@@ -21,6 +21,8 @@ class RagServiceApiTestCase(unittest.TestCase):
             self.temp_dir.name,
             "memory_store.json",
         )
+        os.environ["RAG_STORAGE_BACKEND"] = "file"
+        os.environ.pop("RAG_DATABASE_URL", None)
         os.environ.pop("LLM_API_KEY", None)
         os.environ.pop("LLM_MODEL", None)
         os.environ.pop("LLM_BASE_URL", None)
@@ -29,6 +31,8 @@ class RagServiceApiTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop("RAG_STORAGE_PATH", None)
+        os.environ.pop("RAG_STORAGE_BACKEND", None)
+        os.environ.pop("RAG_DATABASE_URL", None)
 
     def test_health_endpoint_returns_request_id(self) -> None:
         response = self.client.get("/health/live")

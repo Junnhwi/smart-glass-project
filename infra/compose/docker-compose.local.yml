@@ -4,6 +4,27 @@ services:
     ports:
       - "6379:6379"
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: smart_glass
+      POSTGRES_USER: rag_service
+      POSTGRES_PASSWORD: rag_service
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   inference-worker:
     build:
       context: ../..
@@ -60,8 +81,14 @@ services:
       dockerfile: infra/docker/rag-service.Dockerfile
     env_file:
       - ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8001:8000"
+    environment:
+      - RAG_STORAGE_BACKEND=postgres
+      - RAG_DATABASE_URL=postgresql://rag_service:rag_service@postgres:5432/smart_glass
     healthcheck:
       test:
         [
@@ -77,3 +104,4 @@ services:
 
 volumes:
   hf-cache:
+  postgres-data:
