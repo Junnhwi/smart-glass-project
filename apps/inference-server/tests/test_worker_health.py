@@ -15,7 +15,7 @@ class WorkerHealthTestCase(unittest.TestCase):
                 return_value=("ok", {"status": "ok"}),
             ):
                 with patch(
-                    "src.health.checks.check_storage_config",
+                    "src.health.checks.check_storage",
                     return_value=("ok", {"status": "ok"}),
                 ):
                     with patch(
@@ -43,7 +43,7 @@ class WorkerHealthTestCase(unittest.TestCase):
                 return_value=("ok", {"status": "ok"}),
             ):
                 with patch(
-                    "src.health.checks.check_storage_config",
+                    "src.health.checks.check_storage",
                     return_value=("ok", {"status": "ok"}),
                 ):
                     with patch(
@@ -70,7 +70,7 @@ class WorkerHealthTestCase(unittest.TestCase):
                 return_value=("ok", {"status": "ok"}),
             ):
                 with patch(
-                    "src.health.checks.check_storage_config",
+                    "src.health.checks.check_storage",
                     return_value=("ok", {"status": "ok"}),
                 ):
                     with patch(
