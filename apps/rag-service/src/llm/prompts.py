@@ -4,6 +4,9 @@ from src.retriever.hybrid import SearchHit
 from src.utils.text import format_timestamp
 
 
+MAX_CONTEXT_HITS = 2
+
+
 def _stringify(value: str | None) -> str:
     return value or ""
 
@@ -40,7 +43,7 @@ def build_user_prompt(*, query: str, hits: list[SearchHit]) -> str:
     if hits:
         context_block = "\n\n".join(
             serialize_hit(hit, index)
-            for index, hit in enumerate(hits[:2], start=1)
+            for index, hit in enumerate(hits[:MAX_CONTEXT_HITS], start=1)
         )
     else:
         context_block = "No search hits were found."

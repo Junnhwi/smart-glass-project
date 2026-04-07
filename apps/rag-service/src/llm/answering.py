@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.core.logging import get_logger
-from src.llm.prompts import build_system_prompt, build_user_prompt
+from src.llm.prompts import MAX_CONTEXT_HITS, build_system_prompt, build_user_prompt
 from src.llm.providers import LLMProvider, OpenAICompatibleProvider
 from src.retriever.hybrid import SearchHit
 from src.utils.config import Settings
@@ -67,13 +67,15 @@ class TemplateAnswerGenerator:
         ]
 
         if len(hits) > 1:
-            alternative_ids = ", ".join(hit.memory.memory_id for hit in hits[1:3])
+            alternative_ids = ", ".join(
+                hit.memory.memory_id for hit in hits[1:MAX_CONTEXT_HITS]
+            )
             answer_parts.append(f"\ucd94\uac00 \ud6c4\ubcf4: {alternative_ids}")
 
         return GeneratedAnswer(
             text=" ".join(answer_parts),
             mode="template",
-            cited_memory_ids=[hit.memory.memory_id for hit in hits[:3]],
+            cited_memory_ids=[hit.memory.memory_id for hit in hits[:MAX_CONTEXT_HITS]],
             confidence=0.5,
             reason="\uac80\uc0c9 \uacb0\uacfc\ub97c \uae30\ubc18\uc73c\ub85c \ud15c\ud50c\ub9bf \uc751\ub2f5\uc744 \uc0ac\uc6a9\ud588\uc2b5\ub2c8\ub2e4.",
         )
@@ -123,7 +125,9 @@ class OpenAICompatibleAnswerGenerator:
                 return GeneratedAnswer(
                     text=content.strip(),
                     mode="llm",
-                    cited_memory_ids=[hit.memory.memory_id for hit in hits[:3]],
+                    cited_memory_ids=[
+                        hit.memory.memory_id for hit in hits[:MAX_CONTEXT_HITS]
+                    ],
                     confidence=0.8,
                     reason="\uac80\uc0c9 \uadfc\uac70\ub97c \ubc14\ud0d5\uc73c\ub85c \ub2f5\ubcc0\uc744 \uc0dd\uc131\ud588\uc2b5\ub2c8\ub2e4.",
                 )

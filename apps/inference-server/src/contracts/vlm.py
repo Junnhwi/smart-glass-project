@@ -115,6 +115,15 @@ def _include_provider_raw_metadata() -> bool:
     return raw_value in {"1", "true", "yes", "on"}
 
 
+def _resolve_model_metadata(model_key: str) -> tuple[str | None, str | None, str | None]:
+    normalized_key = _normalize_whitespace(model_key) or None
+    try:
+        spec = resolve_inference_model(model_key)
+        return spec.key, spec.model_id, spec.family
+    except Exception:
+        return normalized_key, normalized_key, None
+
+
 def build_provider_metadata(
     *,
     model_key: str,
@@ -123,11 +132,11 @@ def build_provider_metadata(
     generation_result: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     generation_result = generation_result or {}
-    spec = resolve_inference_model(model_key)
+    resolved_key, resolved_model_id, resolved_family = _resolve_model_metadata(model_key)
     provider_metadata: Dict[str, Any] = {
-        "modelKey": spec.key,
-        "modelId": spec.model_id,
-        "modelFamily": spec.family,
+        "modelKey": resolved_key,
+        "modelId": resolved_model_id,
+        "modelFamily": resolved_family,
         "quantization": quantization,
         "dtype": dtype_name,
         "provider": "huggingface-transformers",
