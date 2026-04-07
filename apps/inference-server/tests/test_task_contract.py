@@ -99,6 +99,16 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["metadata"]["tags"], [])
         self.assertEqual(result["metadata"]["positionHint"], "keyboard 옆")
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
+        self.assertEqual(result["providerMetadata"]["capabilities"]["caption"], True)
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["sceneSummary"], False
+        )
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["detectedObjects"], False
+        )
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["pipelineOutput"], False
+        )
         self.assertEqual(result["providerMetadata"]["raw"], None)
         self.assertEqual(result["runtime"]["latencySec"], 0.42)
         self.assertEqual(result["runtime"]["peakMemoryMb"], 512.5)
@@ -121,6 +131,9 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["sceneSummary"], False
+        )
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"
@@ -206,6 +219,15 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["pipelineOutput"]["objects"][0]["name"], "지갑")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-7b")
         self.assertEqual(result["providerMetadata"]["modelFamily"], "qwen2_5_vl")
+        self.assertEqual(result["providerMetadata"]["capabilities"]["sceneSummary"], True)
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["detectedObjects"], True
+        )
+        self.assertEqual(result["providerMetadata"]["capabilities"]["tags"], True)
+        self.assertEqual(result["providerMetadata"]["capabilities"]["ocrText"], False)
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["pipelineOutput"], True
+        )
         self.assertEqual(result["runtime"]["peakMemoryMb"], 2048.0)
 
     def test_process_vision_inference_retries_with_qwen_fallback_model(self) -> None:
@@ -269,6 +291,7 @@ class TaskContractTestCase(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-3b")
+        self.assertEqual(result["providerMetadata"]["capabilities"]["sceneSummary"], True)
         self.assertEqual(result["metadata"]["detectedObjects"], ["맥북", "아이폰"])
         self.assertEqual(result["pipelineOutput"]["capture_id"], "capture-fallback")
         self.assertEqual(mocked_generate.call_count, 2)
