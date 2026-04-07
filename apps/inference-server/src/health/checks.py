@@ -9,6 +9,7 @@ import redis
 from celery import Celery
 
 from src.models.registry import resolve_inference_model
+from src.models.serving_profile import resolve_runtime_serving_settings
 from src.storage.s3 import StorageAccessError, StorageConfigError, get_storage_service
 from src.worker_preload import get_preload_status_path
 
@@ -107,29 +108,33 @@ def check_storage() -> Tuple[str, Dict[str, Any]]:
 
 
 def check_model_config() -> Tuple[str, Dict[str, Any]]:
-    model_key = os.getenv("VISION_CAPTION_MODEL", "blip-base").strip() or "blip-base"
-    quantization = (
-        os.getenv("VISION_CAPTION_QUANTIZATION", "none").strip() or "none"
-    )
-    dtype_name = os.getenv("VISION_CAPTION_DTYPE", "float16").strip() or "float16"
-
-    detail: Dict[str, Any] = {
-        "model_key": model_key,
-        "quantization": quantization,
-        "dtype": dtype_name,
-    }
+    detail: Dict[str, Any] = {}
 
     errors = []
     try:
-        spec = resolve_inference_model(model_key)
+        settings = resolve_runtime_serving_settings()
+        detail.update(
+            {
+                "model_key": settings.model_key,
+                "quantization": settings.quantization,
+                "dtype": settings.dtype_name,
+                "source": settings.source,
+            }
+        )
+        if settings.profile_path:
+            detail["profile_path"] = settings.profile_path
+
+        spec = resolve_inference_model(settings.model_key)
         detail["model_id"] = spec.model_id
         detail["mode"] = spec.mode
     except Exception as exc:
         errors.append(str(exc))
 
-    if quantization not in {"none", "8bit", "4bit"}:
+    quantization = detail.get("quantization")
+    dtype_name = detail.get("dtype")
+    if quantization is not None and quantization not in {"none", "8bit", "4bit"}:
         errors.append("Unsupported quantization")
-    if dtype_name not in {"float16", "bfloat16", "float32"}:
+    if dtype_name is not None and dtype_name not in {"float16", "bfloat16", "float32"}:
         errors.append("Unsupported dtype")
 
     if errors:

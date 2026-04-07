@@ -1,8 +1,11 @@
 import os
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from src.health.checks import check_storage
+from src.health.checks import check_model_config, check_storage
 from src.storage.s3 import StorageAccessError
 
 
@@ -20,6 +23,10 @@ class StorageHealthCheckTestCase(unittest.TestCase):
             "AWS_S3_BUCKET_NAME",
             "AWS_REGION",
             "INFERENCE_STORAGE_READINESS_MODE",
+            "INFERENCE_SERVING_PROFILE_PATH",
+            "VISION_CAPTION_MODEL",
+            "VISION_CAPTION_QUANTIZATION",
+            "VISION_CAPTION_DTYPE",
         ):
             os.environ.pop(name, None)
 
@@ -84,6 +91,36 @@ class StorageHealthCheckTestCase(unittest.TestCase):
         self.assertEqual(detail["status"], "error")
         self.assertEqual(detail["probe"]["status"], "skipped")
         mocked_service.assert_not_called()
+
+    def test_check_model_config_reports_profile_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            profile_path = Path(tmp_dir) / "serving-profile.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "profile_type": "caption_serving_profile",
+                        "generated_at_utc": "2026-04-08T00:00:00Z",
+                        "default": {
+                            "model_key": "blip-base",
+                            "quantization": "none",
+                            "dtype_name": "float16",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                "os.environ",
+                {"INFERENCE_SERVING_PROFILE_PATH": str(profile_path)},
+                clear=True,
+            ):
+                status, detail = check_model_config()
+
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail["status"], "ok")
+        self.assertEqual(detail["source"], "profile")
+        self.assertEqual(detail["model_key"], "blip-base")
+        self.assertEqual(detail["profile_path"], str(profile_path))
 
 
 if __name__ == "__main__":

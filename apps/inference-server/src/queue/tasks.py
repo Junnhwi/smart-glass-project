@@ -13,6 +13,7 @@ from src.core.logging import configure_logging, get_logger
 from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
 from src.models.registry import resolve_inference_model
+from src.models.serving_profile import resolve_runtime_serving_settings
 from src.storage.s3 import get_storage_service
 from src.worker_preload import maybe_preload_on_startup
 
@@ -67,16 +68,20 @@ def process_vision_inference(
     request_id=None,
     task_type="caption",
 ):
-    model_key = os.getenv("VISION_CAPTION_MODEL", "blip-base").strip() or "blip-base"
-    quantization = (
-        os.getenv("VISION_CAPTION_QUANTIZATION", "none").strip() or "none"
-    )
-    dtype_name = os.getenv("VISION_CAPTION_DTYPE", "float16").strip() or "float16"
+    model_key = "blip-base"
+    quantization = "none"
+    dtype_name = "float16"
+    settings_source = "legacy_default"
     resolved_request_id = build_request_id(request_id)
     content_type = None
     model_mode = "unknown"
 
     try:
+        settings = resolve_runtime_serving_settings()
+        model_key = settings.model_key
+        quantization = settings.quantization
+        dtype_name = settings.dtype_name
+        settings_source = settings.source
         model_descriptor = resolve_inference_model(model_key)
         model_mode = model_descriptor.mode
         storage_object = get_storage_service().read_object(image_key)
@@ -107,6 +112,7 @@ def process_vision_inference(
                         "user_id": user_id,
                         "model_key": model_key,
                         "fallback_model_key": fallback_model_key,
+                        "settings_source": settings_source,
                         "error_code": "vlm_primary_model_failed",
                     },
                 )
@@ -141,6 +147,7 @@ def process_vision_inference(
                 "model_key": model_key,
                 "model_mode": model_mode,
                 "quantization": quantization,
+                "settings_source": settings_source,
                 "latency_sec": round(result["elapsed_sec"], 4),
                 "peak_memory_mb": result["peak_memory_mb"],
             },
@@ -174,6 +181,7 @@ def process_vision_inference(
                 "model_key": model_key,
                 "model_mode": model_mode,
                 "quantization": quantization,
+                "settings_source": settings_source,
                 "error_code": "inference_task_error",
             },
         )
