@@ -28,6 +28,10 @@ class VisionInferenceTaskStatusResponse(BaseModel):
     state: str
     ready: bool
     successful: bool
+    result_status: Literal["success", "error"] | None = Field(
+        default=None,
+        alias="resultStatus",
+    )
     request_id: str | None = Field(default=None, alias="requestId")
     result: dict[str, Any] | None = None
     error: str | None = None

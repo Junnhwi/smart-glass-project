@@ -82,6 +82,8 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["taskStatus"], "completed")
+        self.assertEqual(response.json()["resultStatus"], "success")
+        self.assertTrue(response.json()["successful"])
         self.assertEqual(response.json()["requestId"], "req-1")
         self.assertEqual(response.json()["result"]["status"], "success")
 
@@ -98,7 +100,36 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["taskStatus"], "pending")
+        self.assertIsNone(response.json()["resultStatus"])
         self.assertIsNone(response.json()["requestId"])
+
+    def test_get_task_marks_error_payload_as_failed_even_if_celery_state_is_success(
+        self,
+    ) -> None:
+        fake_async_result = MagicMock()
+        fake_async_result.state = "SUCCESS"
+        fake_async_result.ready.return_value = True
+        fake_async_result.successful.return_value = True
+        fake_async_result.failed.return_value = False
+        fake_async_result.result = {
+            "status": "error",
+            "requestId": "req-err-1",
+            "message": "model load failed",
+            "errorCode": "inference_task_error",
+        }
+
+        with patch(
+            "src.api.tasks.celery_app.AsyncResult",
+            return_value=fake_async_result,
+        ):
+            response = self.client.get("/tasks/task-error")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["taskStatus"], "failed")
+        self.assertEqual(response.json()["resultStatus"], "error")
+        self.assertFalse(response.json()["successful"])
+        self.assertEqual(response.json()["requestId"], "req-err-1")
+        self.assertEqual(response.json()["error"], "model load failed")
 
 
 if __name__ == "__main__":

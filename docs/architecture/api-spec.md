@@ -204,6 +204,7 @@ interface VisionInferenceTaskStatusResponse {
   state: string;
   ready: boolean;
   successful: boolean;
+  resultStatus?: "success" | "error" | null;
   requestId?: string | null;
   result?: VlmInferenceResult | null;
   error?: string | null;
@@ -215,6 +216,9 @@ interface VisionInferenceTaskStatusResponse {
 
 - 작업 완료 후에는 `result.requestId`와 같은 값을 top-level `requestId`에서도 바로 확인할 수 있습니다.
 - 작업 미완료 상태에서는 `requestId`가 아직 없을 수 있습니다.
+- `state`는 raw Celery 상태를 유지하고, `taskStatus`는 제품 관점 정규화 상태를 뜻합니다.
+- `resultStatus`는 결과 payload가 있을 때 실제 inference outcome(`success` / `error`)을 보여줍니다.
+- worker가 에러 payload를 정상 반환한 경우에도 polling 응답은 `taskStatus: "failed"`와 `successful: false`로 정규화됩니다.
 
 ## 현재 코드와의 대응
 
