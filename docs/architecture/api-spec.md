@@ -42,6 +42,13 @@ API 서버, inference worker, RAG 적재 계층 사이에서 비전-언어 모�
 4. `detectedObjects`, `tags`는 검색 친화적인 정규화 결과를 담고, 모델 출력 원문 배열을 그대로 계약화하지 않습니다.
 5. 실패 응답도 동일한 식별자와 이미지 참조를 유지해 재처리와 추적이 가능해야 합니다.
 
+## 요청 추적 규칙
+
+- `POST /tasks/vision`에서 클라이언트가 `requestId`를 보내면 그 값을 그대로 사용합니다.
+- 클라이언트가 `requestId`를 보내지 않으면 API 미들웨어가 생성한 `x-request-id` / `request.state.request_id`를 inference 요청 식별자로 재사용합니다.
+- 이 값은 Celery task kwargs, worker 로그, 최종 `VlmInferenceResult.requestId`로 그대로 전파됩니다.
+- `taskId`는 polling 식별자이고, `requestId`는 end-to-end correlation id입니다.
+
 ## VLM 입력 스키마
 
 ```ts
@@ -146,6 +153,48 @@ interface VlmInferenceError {
   };
 }
 ```
+
+## 비동기 태스크 API
+
+### `POST /tasks/vision`
+
+- 목적: 비전 추론 작업 enqueue
+- 응답: `202 Accepted`
+
+```ts
+interface VisionInferenceEnqueueResponse {
+  taskId: string;
+  state: string;
+  requestId: string;
+}
+```
+
+의도:
+
+- `taskId`: `GET /tasks/{taskId}` polling 식별자
+- `requestId`: HTTP -> Celery -> worker -> result 전체를 묶는 correlation id
+
+### `GET /tasks/{taskId}`
+
+- 목적: 비전 추론 작업 상태 확인
+
+```ts
+interface VisionInferenceTaskStatusResponse {
+  taskId: string;
+  state: string;
+  ready: boolean;
+  successful: boolean;
+  requestId?: string | null;
+  result?: VlmInferenceResult | null;
+  error?: string | null;
+  taskStatus: "pending" | "running" | "completed" | "failed";
+}
+```
+
+의도:
+
+- 작업 완료 후에는 `result.requestId`와 같은 값을 top-level `requestId`에서도 바로 확인할 수 있습니다.
+- 작업 미완료 상태에서는 `requestId`가 아직 없을 수 있습니다.
 
 ## 현재 코드와의 대응
 

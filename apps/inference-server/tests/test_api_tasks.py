@@ -18,7 +18,7 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
         with patch(
             "src.api.tasks.process_vision_inference.apply_async",
             return_value=fake_async_result,
-        ):
+        ) as mocked_apply_async:
             response = self.client.post(
                 "/tasks/vision",
                 json={
@@ -32,6 +32,39 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["taskId"], "task-123")
         self.assertEqual(response.json()["requestId"], "req-1")
+        self.assertEqual(
+            mocked_apply_async.call_args.kwargs["kwargs"]["request_id"],
+            "req-1",
+        )
+
+    def test_enqueue_vision_inference_uses_middleware_request_id_when_payload_omits_it(
+        self,
+    ) -> None:
+        fake_async_result = MagicMock()
+        fake_async_result.id = "task-456"
+        fake_async_result.state = "PENDING"
+
+        with patch(
+            "src.api.tasks.process_vision_inference.apply_async",
+            return_value=fake_async_result,
+        ) as mocked_apply_async:
+            response = self.client.post(
+                "/tasks/vision",
+                json={
+                    "imageKey": "captures/test.png",
+                    "userId": "user-1",
+                    "taskType": "metadata",
+                },
+                headers={"x-request-id": "req-from-header"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["taskId"], "task-456")
+        self.assertEqual(response.json()["requestId"], "req-from-header")
+        self.assertEqual(
+            mocked_apply_async.call_args.kwargs["kwargs"]["request_id"],
+            "req-from-header",
+        )
 
     def test_get_task_returns_completed_payload(self) -> None:
         fake_async_result = MagicMock()
@@ -49,7 +82,23 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["taskStatus"], "completed")
+        self.assertEqual(response.json()["requestId"], "req-1")
         self.assertEqual(response.json()["result"]["status"], "success")
+
+    def test_get_task_omits_top_level_request_id_when_result_is_not_ready(self) -> None:
+        fake_async_result = MagicMock()
+        fake_async_result.state = "PENDING"
+        fake_async_result.ready.return_value = False
+
+        with patch(
+            "src.api.tasks.celery_app.AsyncResult",
+            return_value=fake_async_result,
+        ):
+            response = self.client.get("/tasks/task-789")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["taskStatus"], "pending")
+        self.assertIsNone(response.json()["requestId"])
 
 
 if __name__ == "__main__":
