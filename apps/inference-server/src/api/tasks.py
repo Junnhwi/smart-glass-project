@@ -79,6 +79,8 @@ async def enqueue_vision_inference(
         taskId=async_result.id,
         state=async_result.state,
         requestId=resolved_request_id or async_result.id,
+        taskType=payload.task_type,
+        statusUrl=f"/tasks/{async_result.id}",
     )
 
 

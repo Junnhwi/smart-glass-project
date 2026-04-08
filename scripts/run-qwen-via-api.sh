@@ -78,7 +78,7 @@ docker compose -f "$COMPOSE_FILE" exec -T \
   --image-key "$IMAGE_KEY"
 
 echo "[5/6] Enqueue inference task via API"
-TASK_ID="$(
+ENQUEUE_RESPONSE="$(
 python - <<PY
 import json
 import urllib.request
@@ -98,10 +98,25 @@ req = urllib.request.Request(
 )
 with urllib.request.urlopen(req, timeout=30) as response:
     body = json.loads(response.read().decode("utf-8"))
+print(json.dumps(body))
+PY
+)"
+TASK_ID="$(
+python - <<PY
+import json
+body = json.loads('''$ENQUEUE_RESPONSE''')
 print(body["taskId"])
 PY
 )"
+STATUS_URL="$(
+python - <<PY
+import json
+body = json.loads('''$ENQUEUE_RESPONSE''')
+print(body.get("statusUrl") or f"/tasks/{body['taskId']}")
+PY
+)"
 echo "task_id=$TASK_ID"
+echo "status_url=$STATUS_URL"
 
 echo "[6/6] Poll task result via API"
 python - <<PY
@@ -111,7 +126,8 @@ import time
 import urllib.request
 
 task_id = "$TASK_ID"
-url = f"http://127.0.0.1:8000/tasks/{task_id}"
+status_url = "$STATUS_URL"
+url = f"http://127.0.0.1:8000{status_url}"
 
 for attempt in range(1, 61):
     with urllib.request.urlopen(url, timeout=30) as response:

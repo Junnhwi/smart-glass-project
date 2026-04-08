@@ -32,6 +32,8 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["taskId"], "task-123")
         self.assertEqual(response.json()["requestId"], "req-1")
+        self.assertEqual(response.json()["taskType"], "metadata")
+        self.assertEqual(response.json()["statusUrl"], "/tasks/task-123")
         self.assertEqual(
             mocked_apply_async.call_args.kwargs["kwargs"]["request_id"],
             "req-1",
@@ -61,10 +63,24 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["taskId"], "task-456")
         self.assertEqual(response.json()["requestId"], "req-from-header")
+        self.assertEqual(response.json()["taskType"], "metadata")
+        self.assertEqual(response.json()["statusUrl"], "/tasks/task-456")
         self.assertEqual(
             mocked_apply_async.call_args.kwargs["kwargs"]["request_id"],
             "req-from-header",
         )
+
+    def test_enqueue_vision_inference_rejects_unknown_task_type(self) -> None:
+        response = self.client.post(
+            "/tasks/vision",
+            json={
+                "imageKey": "captures/test.png",
+                "userId": "user-1",
+                "taskType": "thumbnail",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_get_task_returns_completed_payload(self) -> None:
         fake_async_result = MagicMock()
