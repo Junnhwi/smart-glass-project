@@ -51,6 +51,7 @@ export interface VlmRuntimeMetrics {
 }
 
 export interface VlmProviderMetadata {
+  capabilities?: VlmProviderCapabilities | null;
   modelKey?: string | null;
   modelId?: string | null;
   modelFamily?: string | null;
@@ -58,6 +59,17 @@ export interface VlmProviderMetadata {
   dtype?: string | null;
   provider?: string | null;
   raw?: Record<string, unknown> | null;
+}
+
+export interface VlmProviderCapabilities {
+  caption?: boolean;
+  positionHint?: boolean;
+  sceneSummary?: boolean;
+  detectedObjects?: boolean;
+  tags?: boolean;
+  ocrText?: boolean;
+  location?: boolean;
+  pipelineOutput?: boolean;
 }
 
 export interface VlmPipelineObjectPosition {

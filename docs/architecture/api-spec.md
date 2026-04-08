@@ -111,6 +111,16 @@ interface VlmInferenceSuccess {
     } | null;
   };
   providerMetadata: {
+    capabilities?: {
+      caption?: boolean;
+      positionHint?: boolean;
+      sceneSummary?: boolean;
+      detectedObjects?: boolean;
+      tags?: boolean;
+      ocrText?: boolean;
+      location?: boolean;
+      pipelineOutput?: boolean;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -143,6 +153,16 @@ interface VlmInferenceError {
   message: string;
   retryable?: boolean;
   providerMetadata?: {
+    capabilities?: {
+      caption?: boolean;
+      positionHint?: boolean;
+      sceneSummary?: boolean;
+      detectedObjects?: boolean;
+      tags?: boolean;
+      ocrText?: boolean;
+      location?: boolean;
+      pipelineOutput?: boolean;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -205,11 +225,26 @@ interface VisionInferenceTaskStatusResponse {
 
 즉, 지금 필요한 것은 새 필드를 마구 늘리는 것이 아니라, 이미 존재하는 저장/검색 필드를 기준으로 inference 결과를 정렬하는 일입니다.
 
+## Capability 계약
+
+`providerMetadata.capabilities`는 현재 inference 경로가 어떤 의미 필드를 책임질 수 있는지 선언합니다.
+
+- `caption`, `positionHint`: 현재 시스템에서 안정적으로 기대하는 공통 필드
+- `sceneSummary`, `ocrText`, `location`: capability가 있을 때만 downstream이 적극적으로 신뢰해야 하는 필드
+- `pipelineOutput`: 디버그/실험성 구조화 payload 지원 여부
+
+의도:
+
+- 빈 값과 미지원 상태를 구분합니다.
+- downstream이 optional field를 무조건 저장하거나 무조건 버리지 않게 합니다.
+- 모델 변경 시에도 field ownership을 한 곳에서 관리할 수 있게 합니다.
+
 ## 운영 관점 권장사항
 
 - DB나 벡터스토어에는 `metadata`의 안정 필드만 1차 저장합니다.
 - `providerMetadata.raw`는 기본값으로 저장하지 않습니다. 현재 구현은 `VISION_PROVIDER_METADATA_INCLUDE_RAW=true`일 때만 `device`, `prompt` 같은 소형 디버그 필드만 포함합니다.
-- 모델 변경 시에도 `caption`, `detectedObjects`, `tags`, `positionHint` 의미가 유지되도록 post-processing 계층을 둡니다.
+- 모델 변경 시에도 `caption`, `positionHint` 의미가 유지되도록 post-processing 계층을 둡니다.
+- `sceneSummary`, `ocrText`, `location`은 `providerMetadata.capabilities`를 확인한 뒤 저장/검색에 반영합니다.
 - 재처리를 위해 `requestId`, `memoryId`, `imageKey`, `modelKey` 조합은 반드시 로그에 남깁니다.
 
 ## 결론

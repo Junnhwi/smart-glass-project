@@ -140,6 +140,7 @@ def build_provider_metadata(
         "quantization": quantization,
         "dtype": dtype_name,
         "provider": "huggingface-transformers",
+        "capabilities": spec.capabilities.to_contract_payload(),
         "raw": None,
     }
 

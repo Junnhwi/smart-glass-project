@@ -25,8 +25,9 @@
 
 그래서 이번 결정은 아래 원칙을 따릅니다.
 
-- `caption`, `detectedObjects`, `tags`, `positionHint`만 안정 계약으로 본다
-- `sceneSummary`, `ocrText`, `location`은 스키마에는 두되 지금은 적극적으로 채우지 않는다
+- `caption`, `positionHint`는 공통 안정 계약으로 본다
+- `detectedObjects`, `tags`는 structured metadata capability가 있는 경로에서 안정 필드로 본다
+- `sceneSummary`, `ocrText`, `location`은 스키마에는 두되 capability가 있을 때만 적극적으로 소비한다
 - provider 고유 정보는 `providerMetadata`로 격리한다
 - 원시 응답은 기본 저장하지 않는다
 
@@ -74,6 +75,16 @@ interface VlmInferenceSuccess {
     } | null;
   };
   providerMetadata: {
+    capabilities?: {
+      caption?: boolean;
+      positionHint?: boolean;
+      sceneSummary?: boolean;
+      detectedObjects?: boolean;
+      tags?: boolean;
+      ocrText?: boolean;
+      location?: boolean;
+      pipelineOutput?: boolean;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -151,10 +162,12 @@ interface VlmInferenceSuccess {
 
 최종 모델 선정 전까지는 아래만 안정 계약으로 유지합니다.
 
-- `caption`
-- `detectedObjects`
-- `tags`
-- `positionHint`
+- 모든 경로 공통:
+  - `caption`
+  - `positionHint`
+- structured metadata capability가 있는 경로:
+  - `detectedObjects`
+  - `tags`
 
 의도는 명확합니다.
 
@@ -187,6 +200,31 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 
 즉, "디버깅을 위한 opt-in 메타"이지, 기본 계약 필드는 아닙니다.
 
+### `providerMetadata.capabilities` 계약
+
+이번 단계부터는 `providerMetadata.capabilities`를 통해 “이 모델/경로가 어떤 필드를 책임질 수 있는지”를 함께 내려보냅니다.
+
+예시:
+
+- caption 경로
+  - `caption: true`
+  - `positionHint: true`
+  - `sceneSummary: false`
+  - `ocrText: false`
+  - `location: false`
+- Qwen VLM 경로
+  - `caption: true`
+  - `positionHint: true`
+  - `sceneSummary: true`
+  - `detectedObjects: true`
+  - `tags: true`
+  - `pipelineOutput: true`
+
+이 값의 목적은 아래 두 상태를 구분하는 것입니다.
+
+- 미지원이라서 비어 있음
+- 지원하지만 이번 이미지에서 값이 비어 있음
+
 ## 현재 구현 상태
 
 ### inference worker
@@ -217,9 +255,9 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 
 아래는 일부러 비워 둡니다.
 
-- `scene_summary`
-- `ocr_text`
-- `location`
+- `scene_summary` (capability가 있을 때만)
+- `ocr_text` (capability가 있을 때만)
+- `location` (capability가 있을 때만)
 - `note`
 
 ## 검증 결과
@@ -264,8 +302,8 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 다음 단계 후보는 아래 순서가 현실적입니다.
 
 1. API 서버에서 worker 결과를 받아 `vlm_adapter`로 RAG 적재 연결
-2. detector/OCR이 붙는 시점에 `detectedObjects`, `tags`, `ocrText` 채우기
-3. 위치 추론 후처리 강화
+2. detector/OCR이 붙는 시점에 capability 정의와 함께 `detectedObjects`, `tags`, `ocrText` 채우기
+3. 위치 추론 후처리와 capability 분리 방식 강화
 4. 모델 최종 선정 후 `sceneSummary`와 optional metadata 사용 범위 재검토
 
 ## 참고 파일
