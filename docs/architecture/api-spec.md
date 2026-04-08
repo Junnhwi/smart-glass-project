@@ -203,6 +203,8 @@ interface VisionInferenceEnqueueResponse {
   taskId: string;
   state: string;
   requestId: string;
+  taskType: "caption" | "metadata";
+  statusUrl: string;
 }
 ```
 
@@ -210,6 +212,26 @@ interface VisionInferenceEnqueueResponse {
 
 - `taskId`: `GET /tasks/{taskId}` polling 식별자
 - `requestId`: HTTP -> Celery -> worker -> result 전체를 묶는 correlation id
+- `taskType`: enqueue 시점에 확정된 작업 유형
+- `statusUrl`: 상위 서비스가 즉시 polling에 사용할 상대 경로
+
+예시:
+
+```json
+{
+  "taskId": "8bb3d7f7-9db7-4c39-b67c-8f5a9cf9b3a9",
+  "state": "PENDING",
+  "requestId": "req-upload-123",
+  "taskType": "metadata",
+  "statusUrl": "/tasks/8bb3d7f7-9db7-4c39-b67c-8f5a9cf9b3a9"
+}
+```
+
+호출 연동 권장 방식:
+
+1. 상위 서비스는 enqueue 응답에서 `taskId`, `requestId`, `statusUrl`, `taskType`를 함께 저장합니다.
+2. 이후 polling은 `statusUrl` 기준으로 수행합니다.
+3. 작업 완료 후 `GET /tasks/{taskId}`의 `taskStatus`, `resultStatus`, `result`를 기준으로 후속 저장/상태 반영을 진행합니다.
 
 ### `GET /tasks/{taskId}`
 
