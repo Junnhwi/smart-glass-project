@@ -6,26 +6,29 @@ from unittest.mock import patch
 from PIL import Image
 
 from src.queue.tasks import process_vision_inference
+from src.storage.s3 import StorageObject
 
 
-class _FakeBody:
-    def __init__(self, payload: bytes):
-        self._payload = payload
-
-    def read(self) -> bytes:
-        return self._payload
-
-
-class _FakeS3Client:
+class _FakeStorageService:
     def __init__(self, payload: bytes, content_type: str = "image/jpeg"):
         self.payload = payload
         self.content_type = content_type
 
-    def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
-        return {
-            "Body": _FakeBody(self.payload),
-            "ContentType": self.content_type,
-        }
+    def read_object(self, key: str, *, bucket_name: str | None = None) -> StorageObject:
+        return StorageObject(
+            bucket_name=bucket_name or os.getenv("AWS_S3_BUCKET_NAME", "smart-glass-test"),
+            key=key,
+            body=self.payload,
+            content_type=self.content_type,
+        )
+
+
+class _FailingStorageService:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    def read_object(self, key: str, *, bucket_name: str | None = None) -> StorageObject:
+        raise self.error
 
 
 def _build_test_image_bytes() -> bytes:
@@ -56,8 +59,8 @@ class TaskContractTestCase(unittest.TestCase):
 
     def test_process_vision_inference_returns_vlm_success_contract(self) -> None:
         with patch(
-            "src.queue.tasks.get_s3_client",
-            return_value=_FakeS3Client(_build_test_image_bytes()),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
         ):
             with patch(
                 "src.queue.tasks.generate_caption",
@@ -102,8 +105,8 @@ class TaskContractTestCase(unittest.TestCase):
 
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
-            "src.queue.tasks.get_s3_client",
-            side_effect=RuntimeError("s3 unavailable"),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(RuntimeError("s3 unavailable")),
         ):
             result = process_vision_inference(
                 image_key="captures/wallet-01.jpg",
@@ -124,8 +127,8 @@ class TaskContractTestCase(unittest.TestCase):
         os.environ["VISION_CAPTION_QUANTIZATION"] = "4bit"
 
         with patch(
-            "src.queue.tasks.get_s3_client",
-            return_value=_FakeS3Client(_build_test_image_bytes()),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
         ):
             with patch(
                 "src.queue.tasks.generate_qwen_vlm_metadata",
@@ -211,8 +214,8 @@ class TaskContractTestCase(unittest.TestCase):
         os.environ["VISION_QWEN_FALLBACK_MODEL"] = "qwen2.5-vl-3b"
 
         with patch(
-            "src.queue.tasks.get_s3_client",
-            return_value=_FakeS3Client(_build_test_image_bytes()),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
         ):
             with patch(
                 "src.queue.tasks.generate_qwen_vlm_metadata",
