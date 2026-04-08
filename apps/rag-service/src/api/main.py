@@ -113,7 +113,7 @@ def create_app() -> FastAPI:
     async def chat_with_memories(
         request: Request, payload: ChatRequest
     ) -> ChatResponse:
-        answer, answer_mode, hits = request.app.state.rag_service.chat(
+        answer_result, hits = request.app.state.rag_service.chat(
             user_id=payload.user_id,
             query=payload.query,
             top_k=payload.top_k,
@@ -125,16 +125,19 @@ def create_app() -> FastAPI:
                 "request_id": getattr(request.state, "request_id", None),
                 "user_id": payload.user_id,
                 "query": payload.query,
-                "answer_mode": answer_mode,
+                "answer_mode": answer_result.mode,
             },
         )
 
         return ChatResponse(
-            answer=answer,
-            answer_mode=answer_mode,
+            answer=answer_result.text,
+            answer_mode=answer_result.mode,
             query=payload.query,
             total_hits=len(hits),
             hits=[_map_hit(hit) for hit in hits],
+            cited_memory_ids=answer_result.cited_memory_ids or [],
+            confidence=answer_result.confidence,
+            reason=answer_result.reason,
         )
 
     return app

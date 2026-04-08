@@ -43,6 +43,9 @@ else
 fi
 
 echo "[2/5] Start redis + inference-api + inference-worker"
+VISION_CAPTION_MODEL="$MODEL_KEY" \
+VISION_CAPTION_QUANTIZATION=4bit \
+VISION_CAPTION_DTYPE=float16 \
 docker compose -f "$COMPOSE_FILE" up -d redis inference-api inference-worker
 
 echo "[3/5] Readiness probe"

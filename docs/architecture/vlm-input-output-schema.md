@@ -25,8 +25,9 @@
 
 그래서 이번 결정은 아래 원칙을 따릅니다.
 
-- `caption`, `detectedObjects`, `tags`, `positionHint`만 안정 계약으로 본다
-- `sceneSummary`, `ocrText`, `location`은 스키마에는 두되 지금은 적극적으로 채우지 않는다
+- `caption`, `positionHint`는 공통 안정 계약으로 본다
+- `detectedObjects`, `tags`는 structured metadata capability가 있는 경로에서 안정 필드로 본다
+- `sceneSummary`, `ocrText`, `location`은 스키마에는 두되 capability가 있을 때만 적극적으로 소비한다
 - provider 고유 정보는 `providerMetadata`로 격리한다
 - 원시 응답은 기본 저장하지 않는다
 
@@ -54,19 +55,20 @@ interface VlmInferenceSuccess {
   taskType: "caption" | "metadata";
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: {
     imageKey?: string | null;
     imageUrl?: string | null;
     contentType?: string | null;
   };
   metadata: {
-    caption?: string | null;
-    sceneSummary?: string | null;
+    caption: string | null;
+    sceneSummary: string | null;
     detectedObjects: string[];
     tags: string[];
-    ocrText?: string | null;
-    positionHint?: string | null;
-    location?: {
+    ocrText: string | null;
+    positionHint: string | null;
+    location: {
       name?: string | null;
       address?: string | null;
       latitude?: number | null;
@@ -74,6 +76,16 @@ interface VlmInferenceSuccess {
     } | null;
   };
   providerMetadata: {
+    capabilities?: {
+      caption?: boolean;
+      positionHint?: boolean;
+      sceneSummary?: boolean;
+      detectedObjects?: boolean;
+      tags?: boolean;
+      ocrText?: boolean;
+      location?: boolean;
+      pipelineOutput?: boolean;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -108,10 +120,12 @@ interface VlmInferenceSuccess {
 
 변경 후:
 
-- 성공/실패 모두 `requestId`, `userId`, `memoryId`, `sourceImage` 유지
+- 성공/실패 모두 `requestId`, `userId`, `memoryId`, `capturedAt`, `sourceImage` 유지
 - 캡션 결과는 `metadata.caption`으로 이동
 - 모델/런타임 정보는 `providerMetadata`, `runtime`으로 분리
 - 오류도 동일한 컨텍스트를 유지한 채 `errorCode`, `message`, `retryable` 반환
+- timeout 및 storage 실패도 같은 오류 계약 위에서 구분 가능한 코드로 정리
+- metadata는 caption/Qwen 경로와 무관하게 같은 키 집합과 값 형태로 정규화
 
 ### 3. RAG 적재 어댑터 추가
 
@@ -151,10 +165,12 @@ interface VlmInferenceSuccess {
 
 최종 모델 선정 전까지는 아래만 안정 계약으로 유지합니다.
 
-- `caption`
-- `detectedObjects`
-- `tags`
-- `positionHint`
+- 모든 경로 공통:
+  - `caption`
+  - `positionHint`
+- structured metadata capability가 있는 경로:
+  - `detectedObjects`
+  - `tags`
 
 의도는 명확합니다.
 
@@ -162,6 +178,28 @@ interface VlmInferenceSuccess {
 - `detectedObjects`: 이후 detector가 붙어도 계속 유지될 개념
 - `tags`: 검색 친화적인 정규화 필드
 - `positionHint`: "책상 옆", "서랍 안" 같은 공간 단서
+
+### 결과 payload 정규화 규칙
+
+이번 단계에서 result contract는 아래 규칙을 따릅니다.
+
+- 성공 결과의 `metadata`는 항상 같은 핵심 키를 모두 포함합니다.
+  - `caption`
+  - `sceneSummary`
+  - `detectedObjects`
+  - `tags`
+  - `ocrText`
+  - `positionHint`
+  - `location`
+- 문자열 필드는 공백을 정리하고, 의미 없는 빈 문자열은 `null`로 낮춥니다.
+- `detectedObjects`, `tags`는 중복과 빈 값을 제거한 배열로 정규화합니다.
+- `positionHint`가 비어 있으면 `caption` 기반 규칙 추출로 보완합니다.
+- `location`은 `name`, `address`, `latitude`, `longitude`를 정규화한 뒤 모두 비어 있으면 `null`로 반환합니다.
+
+의도:
+
+- 모델 구현체가 일부 키를 빼먹거나 값 형태가 조금 달라도, 시스템 경계에서는 더 안정된 payload를 보장합니다.
+- downstream은 "어떤 키가 있을지"보다 "그 키의 의미가 무엇인지"에 집중할 수 있습니다.
 
 ### `providerMetadata.raw` 저장 정책
 
@@ -187,11 +225,56 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 
 즉, "디버깅을 위한 opt-in 메타"이지, 기본 계약 필드는 아닙니다.
 
+## 기본 실패 / timeout 정책
+
+현재 inference worker는 실패를 아래처럼 최소 구분합니다.
+
+- `source_image_not_found`
+- `storage_config_error`
+- `storage_access_error`
+- `invalid_source_image`
+- `invalid_inference_request`
+- `inference_timeout`
+- `model_runtime_error`
+- `inference_task_error`
+
+의도:
+
+- 상위 서비스가 재시도 가치가 있는 실패와 즉시 사용자/운영자 개입이 필요한 실패를 구분할 수 있게 합니다.
+- `retryable`은 Celery 자동 재시도 설정이 아니라, 제품 계층이 후속 정책을 정할 때 쓰는 힌트입니다.
+- timeout은 worker task 경계에서 기본 soft/hard limit로 다루며, 현재 기본값은 `120초 / 150초`입니다.
+
+### `providerMetadata.capabilities` 계약
+
+이번 단계부터는 `providerMetadata.capabilities`를 통해 “이 모델/경로가 어떤 필드를 책임질 수 있는지”를 함께 내려보냅니다.
+
+예시:
+
+- caption 경로
+  - `caption: true`
+  - `positionHint: true`
+  - `sceneSummary: false`
+  - `ocrText: false`
+  - `location: false`
+- Qwen VLM 경로
+  - `caption: true`
+  - `positionHint: true`
+  - `sceneSummary: true`
+  - `detectedObjects: true`
+  - `tags: true`
+  - `pipelineOutput: true`
+
+이 값의 목적은 아래 두 상태를 구분하는 것입니다.
+
+- 미지원이라서 비어 있음
+- 지원하지만 이번 이미지에서 값이 비어 있음
+
 ## 현재 구현 상태
 
 ### inference worker
 
-- `requestId`가 없으면 worker가 UUID 기반으로 생성
+- API 경유 요청에서는 enqueue 단계에서 이미 해석된 `requestId`를 worker가 그대로 받음
+- worker direct call 또는 비-API 경로에서는 `requestId`가 없으면 worker가 UUID 기반으로 생성
 - `positionHint`는 caption에서 단순 규칙 기반으로 추출
 - `detectedObjects`, `tags`는 현재 빈 배열 기본값
 - `sceneSummary`, `ocrText`, `location`은 현재 `None`
@@ -216,9 +299,9 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 
 아래는 일부러 비워 둡니다.
 
-- `scene_summary`
-- `ocr_text`
-- `location`
+- `scene_summary` (capability가 있을 때만)
+- `ocr_text` (capability가 있을 때만)
+- `location` (capability가 있을 때만)
 - `note`
 
 ## 검증 결과
@@ -263,8 +346,8 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 다음 단계 후보는 아래 순서가 현실적입니다.
 
 1. API 서버에서 worker 결과를 받아 `vlm_adapter`로 RAG 적재 연결
-2. detector/OCR이 붙는 시점에 `detectedObjects`, `tags`, `ocrText` 채우기
-3. 위치 추론 후처리 강화
+2. detector/OCR이 붙는 시점에 capability 정의와 함께 `detectedObjects`, `tags`, `ocrText` 채우기
+3. 위치 추론 후처리와 capability 분리 방식 강화
 4. 모델 최종 선정 후 `sceneSummary`와 optional metadata 사용 범위 재검토
 
 ## 참고 파일

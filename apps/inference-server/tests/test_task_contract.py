@@ -3,29 +3,33 @@ import os
 import unittest
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from PIL import Image
 
 from src.queue.tasks import process_vision_inference
+from src.storage.s3 import StorageAccessError, StorageNotFoundError, StorageObject
 
 
-class _FakeBody:
-    def __init__(self, payload: bytes):
-        self._payload = payload
-
-    def read(self) -> bytes:
-        return self._payload
-
-
-class _FakeS3Client:
+class _FakeStorageService:
     def __init__(self, payload: bytes, content_type: str = "image/jpeg"):
         self.payload = payload
         self.content_type = content_type
 
-    def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
-        return {
-            "Body": _FakeBody(self.payload),
-            "ContentType": self.content_type,
-        }
+    def read_object(self, key: str, *, bucket_name: str | None = None) -> StorageObject:
+        return StorageObject(
+            bucket_name=bucket_name or os.getenv("AWS_S3_BUCKET_NAME", "smart-glass-test"),
+            key=key,
+            body=self.payload,
+            content_type=self.content_type,
+        )
+
+
+class _FailingStorageService:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    def read_object(self, key: str, *, bucket_name: str | None = None) -> StorageObject:
+        raise self.error
 
 
 def _build_test_image_bytes() -> bytes:
@@ -56,8 +60,8 @@ class TaskContractTestCase(unittest.TestCase):
 
     def test_process_vision_inference_returns_vlm_success_contract(self) -> None:
         with patch(
-            "src.queue.tasks.get_s3_client",
-            return_value=_FakeS3Client(_build_test_image_bytes()),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
         ):
             with patch(
                 "src.queue.tasks.generate_caption",
@@ -96,36 +100,89 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["metadata"]["tags"], [])
         self.assertEqual(result["metadata"]["positionHint"], "keyboard 옆")
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
+        self.assertEqual(result["providerMetadata"]["capabilities"]["caption"], True)
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["sceneSummary"], False
+        )
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["detectedObjects"], False
+        )
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["pipelineOutput"], False
+        )
         self.assertEqual(result["providerMetadata"]["raw"], None)
         self.assertEqual(result["runtime"]["latencySec"], 0.42)
         self.assertEqual(result["runtime"]["peakMemoryMb"], 512.5)
 
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
-            "src.queue.tasks.get_s3_client",
-            side_effect=RuntimeError("s3 unavailable"),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(StorageAccessError("s3 unavailable")),
         ):
             result = process_vision_inference(
                 image_key="captures/wallet-01.jpg",
                 user_id="user-1",
                 memory_id="mem-1",
+                captured_at="2026-04-04T10:00:00Z",
                 request_id="req-err-1",
             )
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["requestId"], "req-err-1")
-        self.assertEqual(result["errorCode"], "inference_task_error")
+        self.assertEqual(result["capturedAt"], "2026-04-04T10:00:00Z")
+        self.assertEqual(result["errorCode"], "storage_access_error")
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["sceneSummary"], False
+        )
+
+    def test_process_vision_inference_marks_missing_source_image_as_non_retryable(
+        self,
+    ) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(
+                StorageNotFoundError("captures/missing.jpg not found")
+            ),
+        ):
+            result = process_vision_inference(
+                image_key="captures/missing.jpg",
+                user_id="user-1",
+                request_id="req-missing-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "source_image_not_found")
+        self.assertFalse(result["retryable"])
+
+    def test_process_vision_inference_marks_timeout_as_retryable_timeout_error(self) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
+        ):
+            with patch(
+                "src.queue.tasks.generate_caption",
+                side_effect=SoftTimeLimitExceeded(),
+            ):
+                result = process_vision_inference(
+                    image_key="captures/wallet-01.jpg",
+                    user_id="user-1",
+                    request_id="req-timeout-1",
+                )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "inference_timeout")
+        self.assertTrue(result["retryable"])
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"
         os.environ["VISION_CAPTION_QUANTIZATION"] = "4bit"
 
         with patch(
-            "src.queue.tasks.get_s3_client",
-            return_value=_FakeS3Client(_build_test_image_bytes()),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
         ):
             with patch(
                 "src.queue.tasks.generate_qwen_vlm_metadata",
@@ -203,6 +260,15 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["pipelineOutput"]["objects"][0]["name"], "지갑")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-7b")
         self.assertEqual(result["providerMetadata"]["modelFamily"], "qwen2_5_vl")
+        self.assertEqual(result["providerMetadata"]["capabilities"]["sceneSummary"], True)
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["detectedObjects"], True
+        )
+        self.assertEqual(result["providerMetadata"]["capabilities"]["tags"], True)
+        self.assertEqual(result["providerMetadata"]["capabilities"]["ocrText"], False)
+        self.assertEqual(
+            result["providerMetadata"]["capabilities"]["pipelineOutput"], True
+        )
         self.assertEqual(result["runtime"]["peakMemoryMb"], 2048.0)
 
     def test_process_vision_inference_retries_with_qwen_fallback_model(self) -> None:
@@ -211,8 +277,8 @@ class TaskContractTestCase(unittest.TestCase):
         os.environ["VISION_QWEN_FALLBACK_MODEL"] = "qwen2.5-vl-3b"
 
         with patch(
-            "src.queue.tasks.get_s3_client",
-            return_value=_FakeS3Client(_build_test_image_bytes()),
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
         ):
             with patch(
                 "src.queue.tasks.generate_qwen_vlm_metadata",
@@ -266,6 +332,7 @@ class TaskContractTestCase(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-3b")
+        self.assertEqual(result["providerMetadata"]["capabilities"]["sceneSummary"], True)
         self.assertEqual(result["metadata"]["detectedObjects"], ["맥북", "아이폰"])
         self.assertEqual(result["pipelineOutput"]["capture_id"], "capture-fallback")
         self.assertEqual(mocked_generate.call_count, 2)

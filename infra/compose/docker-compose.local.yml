@@ -25,6 +25,33 @@ services:
       retries: 5
       start_period: 10s
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=30m
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["ollama", "pull", "qwen2.5:3b"]
+    restart: "no"
+
   inference-worker:
     build:
       context: ../..
@@ -43,8 +70,25 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - AWS_REGION=ap-northeast-2
+      - VISION_CAPTION_MODEL=${VISION_CAPTION_MODEL:-qwen2.5-vl-7b}
+      - VISION_CAPTION_QUANTIZATION=${VISION_CAPTION_QUANTIZATION:-4bit}
+      - VISION_CAPTION_DTYPE=${VISION_CAPTION_DTYPE:-float16}
+      - INFERENCE_WORKER_PRELOAD_ON_STARTUP=1
+      - INFERENCE_PRELOAD_FAIL_FAST=1
+      - INFERENCE_PRELOAD_STATUS_PATH=/tmp/inference-worker-preload.json
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "/app/scripts/worker_healthcheck.py"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     deploy:
       resources:
         reservations:
@@ -66,7 +110,11 @@ services:
       - hf-cache:/root/.cache/huggingface
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - AWS_REGION=ap-northeast-2
+      - VISION_CAPTION_MODEL=${VISION_CAPTION_MODEL:-qwen2.5-vl-7b}
+      - VISION_CAPTION_QUANTIZATION=${VISION_CAPTION_QUANTIZATION:-4bit}
+      - VISION_CAPTION_DTYPE=${VISION_CAPTION_DTYPE:-float16}
     ports:
       - "8000:8000"
     healthcheck:
@@ -94,7 +142,7 @@ services:
       - inference-worker
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - RAG_SERVICE_URL=http://rag-service:8000
       - API_CAPTURE_WORKER_TIMEOUT_SEC=180
       - API_CAPTURE_RAG_TIMEOUT_SEC=30
@@ -122,11 +170,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     ports:
       - "8001:8000"
     environment:
       - RAG_STORAGE_BACKEND=postgres
       - RAG_DATABASE_URL=postgresql://rag_service:rag_service@postgres:5432/smart_glass
+      - LLM_PROVIDER=ollama
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_MODEL=qwen2.5:3b
+      - LLM_API_KEY=ollama
     healthcheck:
       test:
         [
@@ -141,5 +197,6 @@ services:
       start_period: 20s
 
 volumes:
+  ollama-data:
   hf-cache:
   postgres-data:
