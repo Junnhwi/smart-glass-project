@@ -91,19 +91,20 @@ interface VlmInferenceSuccess {
   taskType: "caption" | "metadata";
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: {
     imageKey?: string | null;
     imageUrl?: string | null;
     contentType?: string | null;
   };
   metadata: {
-    caption?: string | null;
-    sceneSummary?: string | null;
+    caption: string | null;
+    sceneSummary: string | null;
     detectedObjects: string[];
     tags: string[];
-    ocrText?: string | null;
-    positionHint?: string | null;
-    location?: {
+    ocrText: string | null;
+    positionHint: string | null;
+    location: {
       name?: string | null;
       address?: string | null;
       latitude?: number | null;
@@ -144,6 +145,7 @@ interface VlmInferenceError {
   taskType: "caption" | "metadata";
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: {
     imageKey?: string | null;
     imageUrl?: string | null;
@@ -152,7 +154,7 @@ interface VlmInferenceError {
   errorCode: string;
   message: string;
   retryable?: boolean;
-  providerMetadata?: {
+  providerMetadata: {
     capabilities?: {
       caption?: boolean;
       positionHint?: boolean;
@@ -173,6 +175,14 @@ interface VlmInferenceError {
   };
 }
 ```
+
+정규화 규칙:
+
+- `metadata`의 핵심 키는 성공 결과에서 항상 존재하며, 값이 없을 때는 키 생략 대신 `null` 또는 빈 배열을 사용합니다.
+- `capturedAt`은 성공/실패 결과 모두에 유지해 업로드-추론-적재 흐름을 같은 컨텍스트로 추적합니다.
+- `detectedObjects`, `tags`는 중복과 빈 문자열을 제거한 뒤 반환합니다.
+- `positionHint`가 비어 있으면 `caption`에서 규칙 기반으로 다시 계산할 수 있습니다.
+- `location`은 좌표/이름/주소를 정규화한 뒤 의미 있는 값이 하나도 없으면 `null`로 반환합니다.
 
 기본 에러 코드 해석:
 

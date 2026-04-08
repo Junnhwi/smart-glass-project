@@ -1,5 +1,6 @@
 import os
 import re
+from collections.abc import Mapping
 from typing import Any, Dict
 from uuid import uuid4
 
@@ -115,6 +116,71 @@ def _include_provider_raw_metadata() -> bool:
     return raw_value in {"1", "true", "yes", "on"}
 
 
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        cleaned = _normalize_whitespace(item)
+        if not cleaned or cleaned in seen:
+            continue
+        normalized.append(cleaned)
+        seen.add(cleaned)
+    return normalized
+
+
+def _normalize_location_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    normalized = _normalize_whitespace(value)
+    if not normalized:
+        return None
+    try:
+        return float(normalized)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_location_payload(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+
+    location = {
+        "name": _normalize_whitespace(value.get("name")) or None,
+        "address": _normalize_whitespace(value.get("address")) or None,
+        "latitude": _normalize_location_number(value.get("latitude")),
+        "longitude": _normalize_location_number(value.get("longitude")),
+    }
+    if all(item is None for item in location.values()):
+        return None
+    return location
+
+
+def _normalize_metadata_payload(
+    metadata: Mapping[str, Any] | None,
+    *,
+    fallback_caption: str | None,
+) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    caption = _normalize_whitespace(metadata.get("caption")) or fallback_caption
+    position_hint = _normalize_whitespace(metadata.get("positionHint")) or None
+    if position_hint is None:
+        position_hint = extract_position_hint(caption)
+
+    return {
+        "caption": caption,
+        "sceneSummary": _normalize_whitespace(metadata.get("sceneSummary")) or None,
+        "detectedObjects": _normalize_string_list(metadata.get("detectedObjects")),
+        "tags": _normalize_string_list(metadata.get("tags")),
+        "ocrText": _normalize_whitespace(metadata.get("ocrText")) or None,
+        "positionHint": position_hint,
+        "location": _normalize_location_payload(metadata.get("location")),
+    }
+
+
 def _resolve_model_metadata(
     model_key: str,
 ) -> tuple[str | None, str | None, str | None, Dict[str, bool] | None]:
@@ -183,15 +249,10 @@ def build_vlm_success_result(
     pipeline_output: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     caption = _normalize_whitespace(generation_result.get("caption")) or None
-    metadata = inference_metadata or {
-        "caption": caption,
-        "sceneSummary": None,
-        "detectedObjects": [],
-        "tags": [],
-        "ocrText": None,
-        "positionHint": extract_position_hint(caption),
-        "location": None,
-    }
+    metadata = _normalize_metadata_payload(
+        inference_metadata,
+        fallback_caption=caption,
+    )
     return {
         "status": "success",
         "requestId": request_id,
@@ -231,6 +292,7 @@ def build_vlm_error_result(
     dtype_name: str,
     memory_id: str | None = None,
     image_url: str | None = None,
+    captured_at: str | None = None,
     task_type: str = "caption",
     content_type: str | None = None,
     error_code: str | None = None,
@@ -246,6 +308,7 @@ def build_vlm_error_result(
         "taskType": task_type,
         "memoryId": _normalize_whitespace(memory_id) or None,
         "userId": _normalize_whitespace(user_id),
+        "capturedAt": _normalize_whitespace(captured_at) or None,
         "sourceImage": {
             "imageKey": _normalize_whitespace(image_key) or None,
             "imageUrl": _normalize_whitespace(image_url) or None,
