@@ -14,7 +14,10 @@ from src.core.logging import configure_logging, get_logger
 from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
 from src.models.registry import resolve_inference_model
-from src.models.serving_profile import resolve_runtime_serving_settings
+from src.models.serving_profile import (
+    resolve_runtime_execution_policy,
+    resolve_task_time_limits,
+)
 from src.storage.s3 import (
     StorageAccessError,
     StorageConfigError,
@@ -27,26 +30,7 @@ broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", broker_url)
 app = Celery("inference_tasks", broker=broker_url, backend=result_backend)
 
-
-def _resolve_positive_int_env(name: str, default: int) -> int:
-    raw_value = os.getenv(name, "").strip()
-    if not raw_value:
-        return default
-    try:
-        parsed = int(raw_value)
-    except ValueError:
-        return default
-    return parsed if parsed > 0 else default
-
-
-TASK_SOFT_TIME_LIMIT_SECONDS = _resolve_positive_int_env(
-    "VISION_TASK_SOFT_TIME_LIMIT_SEC",
-    120,
-)
-TASK_TIME_LIMIT_SECONDS = max(
-    _resolve_positive_int_env("VISION_TASK_HARD_TIME_LIMIT_SEC", 150),
-    TASK_SOFT_TIME_LIMIT_SECONDS + 1,
-)
+TASK_SOFT_TIME_LIMIT_SECONDS, TASK_TIME_LIMIT_SECONDS = resolve_task_time_limits()
 
 app.conf.update(
     task_track_started=True,
@@ -73,22 +57,6 @@ def _should_retry_with_qwen_fallback(error: Exception) -> bool:
         "allocation",
     )
     return any(marker in message for marker in retryable_markers)
-
-
-def _resolve_qwen_fallback_model(current_model_key: str) -> str | None:
-    fallback_model_key = (
-        os.getenv("VISION_QWEN_FALLBACK_MODEL", "qwen2.5-vl-3b").strip()
-        or "qwen2.5-vl-3b"
-    )
-    if fallback_model_key == current_model_key:
-        return None
-    try:
-        descriptor = resolve_inference_model(fallback_model_key)
-    except Exception:
-        return None
-    if descriptor.mode != "vlm":
-        return None
-    return descriptor.key
 
 
 def _classify_inference_error(error: Exception) -> tuple[str, bool]:
@@ -127,16 +95,20 @@ def process_vision_inference(
     quantization = "none"
     dtype_name = "float16"
     settings_source = "legacy_default"
+    execution_policy_payload = None
     resolved_request_id = build_request_id(request_id)
     content_type = None
     model_mode = "unknown"
+    fallback_triggered = False
 
     try:
-        settings = resolve_runtime_serving_settings()
+        execution_policy = resolve_runtime_execution_policy()
+        settings = execution_policy.settings
         model_key = settings.model_key
         quantization = settings.quantization
         dtype_name = settings.dtype_name
         settings_source = settings.source
+        execution_policy_payload = execution_policy.to_payload()
         model_descriptor = resolve_inference_model(model_key)
         model_mode = model_descriptor.mode
         storage_object = get_storage_service().read_object(image_key)
@@ -154,7 +126,7 @@ def process_vision_inference(
             except Exception as primary_error:
                 fallback_model_key = None
                 if _should_retry_with_qwen_fallback(primary_error):
-                    fallback_model_key = _resolve_qwen_fallback_model(model_key)
+                    fallback_model_key = execution_policy.fallback_model_key
                 if fallback_model_key is None:
                     raise
 
@@ -179,6 +151,10 @@ def process_vision_inference(
                 )
                 model_key = fallback_model_key
                 model_descriptor = resolve_inference_model(model_key)
+                fallback_triggered = True
+                execution_policy_payload = execution_policy.to_payload(
+                    fallback_triggered=True
+                )
             metadata = result["metadata"]
             pipeline_output = result.get("pipeline_output")
         else:
@@ -203,6 +179,10 @@ def process_vision_inference(
                 "model_mode": model_mode,
                 "quantization": quantization,
                 "settings_source": settings_source,
+                "soft_time_limit_sec": execution_policy.soft_time_limit_sec,
+                "hard_time_limit_sec": execution_policy.hard_time_limit_sec,
+                "fallback_model_key": execution_policy.fallback_model_key,
+                "fallback_triggered": fallback_triggered,
                 "latency_sec": round(result["elapsed_sec"], 4),
                 "peak_memory_mb": result["peak_memory_mb"],
             },
@@ -223,6 +203,7 @@ def process_vision_inference(
             content_type=content_type,
             inference_metadata=metadata,
             pipeline_output=pipeline_output,
+            execution_policy=execution_policy_payload,
         )
     except Exception as e:
         error_code, retryable = _classify_inference_error(e)
@@ -238,6 +219,8 @@ def process_vision_inference(
                 "model_mode": model_mode,
                 "quantization": quantization,
                 "settings_source": settings_source,
+                "soft_time_limit_sec": TASK_SOFT_TIME_LIMIT_SECONDS,
+                "hard_time_limit_sec": TASK_TIME_LIMIT_SECONDS,
                 "error_code": error_code,
                 "retryable": retryable,
             },
@@ -257,4 +240,5 @@ def process_vision_inference(
             content_type=content_type,
             error_code=error_code,
             retryable=retryable,
+            execution_policy=execution_policy_payload,
         )

@@ -79,9 +79,22 @@ class VlmContractErrorHandlingTestCase(unittest.TestCase):
                     "longitude": "bad-number",
                 },
             },
+            execution_policy={
+                "settingsSource": "env",
+                "profilePath": None,
+                "selectedModelKey": "unknown-model",
+                "softTimeLimitSec": 120,
+                "hardTimeLimitSec": 150,
+                "fallbackModelKey": None,
+                "fallbackTriggered": False,
+            },
         )
 
         self.assertEqual(result["capturedAt"], "2026-04-08T09:00:00Z")
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
+            "unknown-model",
+        )
         self.assertEqual(
             result["metadata"],
             {

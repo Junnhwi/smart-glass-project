@@ -15,7 +15,7 @@ from src.models.qwen_vlm import (
     get_qwen_vlm_components,
 )
 from src.models.registry import resolve_inference_model
-from src.models.serving_profile import resolve_preload_serving_settings
+from src.models.serving_profile import resolve_preload_execution_policy
 
 logger = get_logger(__name__)
 
@@ -32,14 +32,15 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _configured_model_settings() -> Dict[str, str]:
-    resolved = resolve_preload_serving_settings()
+def _configured_model_settings() -> Dict[str, Any]:
+    resolved = resolve_preload_execution_policy()
     return {
-        "model_key": resolved.model_key,
-        "quantization": resolved.quantization,
-        "dtype_name": resolved.dtype_name,
-        "source": resolved.source,
-        "profile_path": resolved.profile_path or "",
+        "model_key": resolved.settings.model_key,
+        "quantization": resolved.settings.quantization,
+        "dtype_name": resolved.settings.dtype_name,
+        "source": resolved.settings.source,
+        "profile_path": resolved.settings.profile_path or "",
+        "execution_policy": resolved.to_payload(),
     }
 
 
@@ -62,12 +63,21 @@ def preload_configured_model() -> Dict[str, Any]:
         "pid": os.getpid(),
         "started_at": _utc_now(),
     }
-    settings: Dict[str, str] = {
+    settings: Dict[str, Any] = {
         "model_key": "",
         "quantization": "",
         "dtype_name": "",
         "source": "unknown",
         "profile_path": "",
+        "execution_policy": {
+            "settingsSource": "unknown",
+            "profilePath": None,
+            "selectedModelKey": None,
+            "softTimeLimitSec": None,
+            "hardTimeLimitSec": None,
+            "fallbackModelKey": None,
+            "fallbackTriggered": False,
+        },
     }
     model_key = "unknown"
     model_mode = "unknown"
@@ -90,6 +100,7 @@ def preload_configured_model() -> Dict[str, Any]:
             "dtype_name": settings["dtype_name"],
             "settings_source": settings["source"],
             "profile_path": settings["profile_path"] or None,
+            "executionPolicy": settings["execution_policy"],
             "device": device_name,
         }
         _write_preload_state(loading_payload)

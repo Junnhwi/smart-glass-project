@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
+from src.models.registry import resolve_inference_model
+
 
 SERVING_PROFILE_ENV = "INFERENCE_SERVING_PROFILE_PATH"
 RUNTIME_ENV_VARS = {
@@ -22,6 +24,12 @@ LEGACY_DEFAULTS = {
     "quantization": "none",
     "dtype_name": "float16",
 }
+TASK_SOFT_LIMIT_ENV = "VISION_TASK_SOFT_TIME_LIMIT_SEC"
+TASK_HARD_LIMIT_ENV = "VISION_TASK_HARD_TIME_LIMIT_SEC"
+DEFAULT_TASK_SOFT_LIMIT_SECONDS = 120
+DEFAULT_TASK_HARD_LIMIT_SECONDS = 150
+QWEN_FALLBACK_ENV = "VISION_QWEN_FALLBACK_MODEL"
+DEFAULT_QWEN_FALLBACK_MODEL = "qwen2.5-vl-3b"
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,25 @@ class ResolvedServingSettings:
     profile_path: str | None = None
 
 
+@dataclass(frozen=True)
+class ResolvedExecutionPolicy:
+    settings: ResolvedServingSettings
+    soft_time_limit_sec: int
+    hard_time_limit_sec: int
+    fallback_model_key: str | None = None
+
+    def to_payload(self, *, fallback_triggered: bool = False) -> Dict[str, Any]:
+        return {
+            "settingsSource": self.settings.source,
+            "profilePath": self.settings.profile_path,
+            "selectedModelKey": self.settings.model_key,
+            "softTimeLimitSec": self.soft_time_limit_sec,
+            "hardTimeLimitSec": self.hard_time_limit_sec,
+            "fallbackModelKey": self.fallback_model_key,
+            "fallbackTriggered": fallback_triggered,
+        }
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -46,6 +73,17 @@ def _utc_now() -> str:
 def _read_nonempty_env(name: str) -> str | None:
     value = os.getenv(name, "").strip()
     return value or None
+
+
+def _resolve_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _resolve_profile_path(profile_path: str | None = None) -> Path | None:
@@ -153,6 +191,69 @@ def resolve_preload_serving_settings(
             profile_path=base.profile_path,
         )
     return base
+
+
+def resolve_task_time_limits() -> tuple[int, int]:
+    soft_limit = _resolve_positive_int_env(
+        TASK_SOFT_LIMIT_ENV,
+        DEFAULT_TASK_SOFT_LIMIT_SECONDS,
+    )
+    hard_limit = max(
+        _resolve_positive_int_env(
+            TASK_HARD_LIMIT_ENV,
+            DEFAULT_TASK_HARD_LIMIT_SECONDS,
+        ),
+        soft_limit + 1,
+    )
+    return soft_limit, hard_limit
+
+
+def _resolve_qwen_fallback_model_key(model_key: str) -> str | None:
+    try:
+        selected_descriptor = resolve_inference_model(model_key)
+    except Exception:
+        return None
+    if selected_descriptor.mode != "vlm":
+        return None
+
+    fallback_model_key = (
+        _read_nonempty_env(QWEN_FALLBACK_ENV) or DEFAULT_QWEN_FALLBACK_MODEL
+    )
+    if fallback_model_key == selected_descriptor.key:
+        return None
+    try:
+        fallback_descriptor = resolve_inference_model(fallback_model_key)
+    except Exception:
+        return None
+    if fallback_descriptor.mode != "vlm":
+        return None
+    return fallback_descriptor.key
+
+
+def resolve_runtime_execution_policy(
+    profile_path: str | None = None,
+) -> ResolvedExecutionPolicy:
+    settings = resolve_runtime_serving_settings(profile_path)
+    soft_limit, hard_limit = resolve_task_time_limits()
+    return ResolvedExecutionPolicy(
+        settings=settings,
+        soft_time_limit_sec=soft_limit,
+        hard_time_limit_sec=hard_limit,
+        fallback_model_key=_resolve_qwen_fallback_model_key(settings.model_key),
+    )
+
+
+def resolve_preload_execution_policy(
+    profile_path: str | None = None,
+) -> ResolvedExecutionPolicy:
+    settings = resolve_preload_serving_settings(profile_path)
+    soft_limit, hard_limit = resolve_task_time_limits()
+    return ResolvedExecutionPolicy(
+        settings=settings,
+        soft_time_limit_sec=soft_limit,
+        hard_time_limit_sec=hard_limit,
+        fallback_model_key=_resolve_qwen_fallback_model_key(settings.model_key),
+    )
 
 
 def _to_float(value: object) -> float | None:
