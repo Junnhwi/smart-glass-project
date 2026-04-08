@@ -252,6 +252,7 @@ def process_vision_inference(
             dtype_name=dtype_name,
             memory_id=memory_id,
             image_url=image_url,
+            captured_at=captured_at,
             task_type=task_type,
             content_type=content_type,
             error_code=error_code,

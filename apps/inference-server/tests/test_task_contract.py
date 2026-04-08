@@ -123,11 +123,13 @@ class TaskContractTestCase(unittest.TestCase):
                 image_key="captures/wallet-01.jpg",
                 user_id="user-1",
                 memory_id="mem-1",
+                captured_at="2026-04-04T10:00:00Z",
                 request_id="req-err-1",
             )
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["requestId"], "req-err-1")
+        self.assertEqual(result["capturedAt"], "2026-04-04T10:00:00Z")
         self.assertEqual(result["errorCode"], "storage_access_error")
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
