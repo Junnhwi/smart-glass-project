@@ -123,6 +123,7 @@ interface VlmInferenceSuccess {
 - 캡션 결과는 `metadata.caption`으로 이동
 - 모델/런타임 정보는 `providerMetadata`, `runtime`으로 분리
 - 오류도 동일한 컨텍스트를 유지한 채 `errorCode`, `message`, `retryable` 반환
+- timeout 및 storage 실패도 같은 오류 계약 위에서 구분 가능한 코드로 정리
 
 ### 3. RAG 적재 어댑터 추가
 
@@ -177,6 +178,25 @@ interface VlmInferenceSuccess {
 - `positionHint`: "책상 옆", "서랍 안" 같은 공간 단서
 
 ### `providerMetadata.raw` 저장 정책
+
+## 기본 실패 / timeout 정책
+
+현재 inference worker는 실패를 아래처럼 최소 구분합니다.
+
+- `source_image_not_found`
+- `storage_config_error`
+- `storage_access_error`
+- `invalid_source_image`
+- `invalid_inference_request`
+- `inference_timeout`
+- `model_runtime_error`
+- `inference_task_error`
+
+의도:
+
+- 상위 서비스가 재시도 가치가 있는 실패와 즉시 사용자/운영자 개입이 필요한 실패를 구분할 수 있게 합니다.
+- `retryable`은 Celery 자동 재시도 설정이 아니라, 제품 계층이 후속 정책을 정할 때 쓰는 힌트입니다.
+- timeout은 worker task 경계에서 기본 soft/hard limit로 다루며, 현재 기본값은 `120초 / 150초`입니다.
 
 기본 정책은 `저장하지 않음`입니다.
 

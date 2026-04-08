@@ -1,8 +1,9 @@
 import os
 import io
 from celery import Celery
+from celery.exceptions import SoftTimeLimitExceeded
 from celery.signals import worker_init
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from src.contracts.vlm import (
     build_request_id,
@@ -14,13 +15,45 @@ from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
 from src.models.registry import resolve_inference_model
 from src.models.serving_profile import resolve_runtime_serving_settings
-from src.storage.s3 import get_storage_service
+from src.storage.s3 import (
+    StorageAccessError,
+    StorageConfigError,
+    StorageNotFoundError,
+    get_storage_service,
+)
 from src.worker_preload import maybe_preload_on_startup
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", broker_url)
 app = Celery("inference_tasks", broker=broker_url, backend=result_backend)
-app.conf.update(task_track_started=True, result_expires=3600)
+
+
+def _resolve_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+TASK_SOFT_TIME_LIMIT_SECONDS = _resolve_positive_int_env(
+    "VISION_TASK_SOFT_TIME_LIMIT_SEC",
+    120,
+)
+TASK_TIME_LIMIT_SECONDS = max(
+    _resolve_positive_int_env("VISION_TASK_HARD_TIME_LIMIT_SEC", 150),
+    TASK_SOFT_TIME_LIMIT_SECONDS + 1,
+)
+
+app.conf.update(
+    task_track_started=True,
+    result_expires=3600,
+    task_soft_time_limit=TASK_SOFT_TIME_LIMIT_SECONDS,
+    task_time_limit=TASK_TIME_LIMIT_SECONDS,
+)
 configure_logging()
 logger = get_logger(__name__)
 
@@ -58,7 +91,29 @@ def _resolve_qwen_fallback_model(current_model_key: str) -> str | None:
     return descriptor.key
 
 
-@app.task(name="process_vision_inference")
+def _classify_inference_error(error: Exception) -> tuple[str, bool]:
+    if isinstance(error, (SoftTimeLimitExceeded, TimeoutError)):
+        return "inference_timeout", True
+    if isinstance(error, StorageNotFoundError):
+        return "source_image_not_found", False
+    if isinstance(error, StorageConfigError):
+        return "storage_config_error", False
+    if isinstance(error, StorageAccessError):
+        return "storage_access_error", True
+    if isinstance(error, UnidentifiedImageError):
+        return "invalid_source_image", False
+    if isinstance(error, ValueError):
+        return "invalid_inference_request", False
+    if isinstance(error, RuntimeError):
+        return "model_runtime_error", True
+    return "inference_task_error", True
+
+
+@app.task(
+    name="process_vision_inference",
+    soft_time_limit=TASK_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=TASK_TIME_LIMIT_SECONDS,
+)
 def process_vision_inference(
     image_key,
     user_id,
@@ -170,6 +225,7 @@ def process_vision_inference(
             pipeline_output=pipeline_output,
         )
     except Exception as e:
+        error_code, retryable = _classify_inference_error(e)
         logger.exception(
             "Inference task failed",
             extra={
@@ -182,7 +238,8 @@ def process_vision_inference(
                 "model_mode": model_mode,
                 "quantization": quantization,
                 "settings_source": settings_source,
-                "error_code": "inference_task_error",
+                "error_code": error_code,
+                "retryable": retryable,
             },
         )
         return build_vlm_error_result(
@@ -197,4 +254,6 @@ def process_vision_inference(
             image_url=image_url,
             task_type=task_type,
             content_type=content_type,
+            error_code=error_code,
+            retryable=retryable,
         )

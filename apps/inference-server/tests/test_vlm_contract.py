@@ -58,6 +58,22 @@ class VlmContractErrorHandlingTestCase(unittest.TestCase):
         self.assertEqual(result["providerMetadata"]["modelId"], "unknown-model")
         self.assertIsNone(result["providerMetadata"]["modelFamily"])
 
+    def test_build_vlm_error_result_accepts_explicit_error_policy(self) -> None:
+        result = build_vlm_error_result(
+            request_id="req-2",
+            user_id="user-2",
+            image_key="captures/sample.jpg",
+            error=RuntimeError("timeout"),
+            model_key="unknown-model",
+            quantization="none",
+            dtype_name="float16",
+            error_code="inference_timeout",
+            retryable=True,
+        )
+
+        self.assertEqual(result["errorCode"], "inference_timeout")
+        self.assertTrue(result["retryable"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -233,9 +233,13 @@ def build_vlm_error_result(
     image_url: str | None = None,
     task_type: str = "caption",
     content_type: str | None = None,
+    error_code: str | None = None,
+    retryable: bool | None = None,
 ) -> Dict[str, Any]:
-    error_code = "inference_task_error"
-    retryable = not isinstance(error, ValueError)
+    resolved_error_code = error_code or "inference_task_error"
+    resolved_retryable = (
+        retryable if retryable is not None else not isinstance(error, ValueError)
+    )
     return {
         "status": "error",
         "requestId": request_id,
@@ -247,9 +251,9 @@ def build_vlm_error_result(
             "imageUrl": _normalize_whitespace(image_url) or None,
             "contentType": _normalize_whitespace(content_type) or None,
         },
-        "errorCode": error_code,
+        "errorCode": resolved_error_code,
         "message": str(error),
-        "retryable": retryable,
+        "retryable": resolved_retryable,
         "providerMetadata": build_provider_metadata(
             model_key=model_key,
             quantization=quantization,

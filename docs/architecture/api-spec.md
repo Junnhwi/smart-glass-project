@@ -174,6 +174,23 @@ interface VlmInferenceError {
 }
 ```
 
+기본 에러 코드 해석:
+
+- `source_image_not_found`: S3 object key가 가리키는 이미지가 없음
+- `storage_config_error`: storage 환경설정 누락 또는 잘못된 설정
+- `storage_access_error`: storage 접근 실패
+- `invalid_source_image`: 이미지 decode 불가
+- `invalid_inference_request`: 잘못된 입력이나 비정상 요청값
+- `inference_timeout`: worker soft timeout 도달
+- `model_runtime_error`: 모델 실행 단계의 일반 런타임 실패
+- `inference_task_error`: 위 분류에 속하지 않는 일반 실패
+
+기본 정책:
+
+- `retryable`은 큐 자동 재시도를 뜻하지 않고, 상위 서비스가 재시도 가치가 있는 실패인지 판단할 때 쓰는 힌트입니다.
+- worker는 기본적으로 `VISION_TASK_SOFT_TIME_LIMIT_SEC`와 `VISION_TASK_HARD_TIME_LIMIT_SEC` 환경변수로 timeout을 제어합니다.
+- 기본값은 soft `120초`, hard `150초`입니다.
+
 ## 비동기 태스크 API
 
 ### `POST /tasks/vision`
