@@ -21,7 +21,7 @@ class WorkerPreloadTestCase(unittest.TestCase):
                     "VISION_CAPTION_QUANTIZATION": "4bit",
                     "VISION_CAPTION_DTYPE": "float16",
                 },
-                clear=False,
+                clear=True,
             ):
                 with patch(
                     "src.worker_preload.get_qwen_vlm_components",
@@ -48,7 +48,7 @@ class WorkerPreloadTestCase(unittest.TestCase):
                     "INFERENCE_PRELOAD_STATUS_PATH": str(status_path),
                     "VISION_CAPTION_MODEL": "qwen2.5-vl-7b",
                 },
-                clear=False,
+                clear=True,
             ):
                 with patch(
                     "src.worker_preload.get_qwen_vlm_components",
@@ -60,6 +60,46 @@ class WorkerPreloadTestCase(unittest.TestCase):
             saved = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["status"], "error")
             self.assertEqual(saved["error"], "OOM")
+
+    def test_preload_uses_serving_profile_when_runtime_env_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            status_path = Path(tmp_dir) / "preload.json"
+            profile_path = Path(tmp_dir) / "serving-profile.json"
+            fake_model = type("FakeModel", (), {"_load_time_sec": 1.2345})()
+
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "profile_type": "caption_serving_profile",
+                        "generated_at_utc": "2026-04-08T00:00:00Z",
+                        "default": {
+                            "model_key": "blip-base",
+                            "quantization": "none",
+                            "dtype_name": "float16",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "INFERENCE_PRELOAD_STATUS_PATH": str(status_path),
+                    "INFERENCE_SERVING_PROFILE_PATH": str(profile_path),
+                },
+                clear=True,
+            ):
+                with patch(
+                    "src.worker_preload.get_caption_model_components",
+                    return_value=("cpu", object(), fake_model, object()),
+                ):
+                    payload = preload_configured_model()
+
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["model_key"], "blip-base")
+            self.assertEqual(payload["settings_source"], "profile")
+            self.assertEqual(payload["profile_path"], str(profile_path))
 
 
 if __name__ == "__main__":
