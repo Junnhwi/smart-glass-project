@@ -9,6 +9,7 @@ import redis
 from celery import Celery
 
 from src.models.registry import resolve_inference_model
+from src.storage.s3 import StorageAccessError, StorageConfigError, get_storage_service
 from src.worker_preload import get_preload_status_path
 
 
@@ -48,6 +49,60 @@ def check_storage_config() -> Tuple[str, Dict[str, Any]]:
     else:
         detail["status"] = "ok"
 
+    return detail["status"], detail
+
+
+def _resolve_storage_readiness_mode() -> str:
+    return (
+        os.getenv("INFERENCE_STORAGE_READINESS_MODE", "config").strip().lower()
+        or "config"
+    )
+
+
+def check_storage() -> Tuple[str, Dict[str, Any]]:
+    config_status, config_detail = check_storage_config()
+    mode = _resolve_storage_readiness_mode()
+    detail: Dict[str, Any] = {
+        **config_detail,
+        "mode": mode,
+    }
+
+    if mode not in {"config", "deep"}:
+        detail["status"] = "error"
+        detail["message"] = (
+            "Unsupported INFERENCE_STORAGE_READINESS_MODE; use 'config' or 'deep'"
+        )
+        return detail["status"], detail
+
+    if config_status != "ok":
+        detail["probe"] = {
+            "status": "skipped",
+            "reason": "storage configuration is incomplete",
+        }
+        return detail["status"], detail
+
+    if mode == "config":
+        detail["status"] = "ok"
+        detail["probe"] = {
+            "status": "skipped",
+            "reason": "storage readiness mode is config",
+        }
+        return detail["status"], detail
+
+    try:
+        get_storage_service().probe_bucket_access(
+            bucket_name=detail.get("bucket_name"),
+        )
+    except (StorageConfigError, StorageAccessError) as exc:
+        detail["status"] = "error"
+        detail["probe"] = {
+            "status": "error",
+            "message": str(exc),
+        }
+        return detail["status"], detail
+
+    detail["status"] = "ok"
+    detail["probe"] = {"status": "ok"}
     return detail["status"], detail
 
 
@@ -188,7 +243,7 @@ def check_worker_ping(
 def build_worker_health_payload() -> Tuple[int, Dict[str, Any]]:
     worker_status, worker_detail = check_worker_ping()
     queue_status, queue_detail = check_queue()
-    storage_status, storage_detail = check_storage_config()
+    storage_status, storage_detail = check_storage()
     model_status, model_detail = check_model_config()
     preload_status, preload_detail = check_model_preload()
 

@@ -61,10 +61,32 @@ class _AccessDeniedClient:
             "PutObject",
         )
 
+    def head_bucket(self, Bucket: str) -> None:
+        raise ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDenied",
+                    "Message": "denied",
+                }
+            },
+            "HeadBucket",
+        )
+
 
 class _BrokenClient:
     def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
         raise BotoCoreError()
+
+    def head_bucket(self, Bucket: str) -> None:
+        raise BotoCoreError()
+
+
+class _ProbeClient:
+    def __init__(self) -> None:
+        self.bucket_calls: list[str] = []
+
+    def head_bucket(self, Bucket: str) -> None:
+        self.bucket_calls.append(Bucket)
 
 
 class StorageServiceTestCase(unittest.TestCase):
@@ -159,6 +181,26 @@ class StorageServiceTestCase(unittest.TestCase):
             aws_secret_access_key="test-secret",
             region_name="ap-northeast-2",
         )
+
+    def test_probe_bucket_access_calls_head_bucket(self) -> None:
+        client = _ProbeClient()
+        service = S3StorageService(
+            client=client,
+            default_bucket_name="smart-glass-test",
+        )
+
+        service.probe_bucket_access()
+
+        self.assertEqual(client.bucket_calls, ["smart-glass-test"])
+
+    def test_probe_bucket_access_raises_access_error(self) -> None:
+        service = S3StorageService(
+            client=_AccessDeniedClient(),
+            default_bucket_name="smart-glass-test",
+        )
+
+        with self.assertRaises(StorageAccessError):
+            service.probe_bucket_access()
 
 
 if __name__ == "__main__":

@@ -63,6 +63,10 @@ def _format_storage_message(action: str, bucket_name: str, key: str, error: Exce
     return f"Failed to {action} S3 object '{key}' in bucket '{bucket_name}': {error}"
 
 
+def _format_bucket_message(action: str, bucket_name: str, error: Exception) -> str:
+    return f"Failed to {action} S3 bucket '{bucket_name}': {error}"
+
+
 def _translate_client_error(
     *,
     action: str,
@@ -80,6 +84,26 @@ def _translate_client_error(
         )
         if error_code in {"404", "NoSuchKey", "NotFound"}:
             return StorageNotFoundError(message)
+        return StorageAccessError(message)
+
+    if isinstance(error, BotoCoreError):
+        return StorageAccessError(message)
+
+    if isinstance(error, StorageError):
+        return error
+
+    return StorageAccessError(message)
+
+
+def _translate_bucket_error(
+    *,
+    action: str,
+    bucket_name: str,
+    error: Exception,
+) -> StorageError:
+    message = _format_bucket_message(action, bucket_name, error)
+
+    if isinstance(error, ClientError):
         return StorageAccessError(message)
 
     if isinstance(error, BotoCoreError):
@@ -160,6 +184,17 @@ class S3StorageService:
                 action="write",
                 bucket_name=resolved_bucket_name,
                 key=key,
+                error=exc,
+            ) from exc
+
+    def probe_bucket_access(self, *, bucket_name: str | None = None) -> None:
+        resolved_bucket_name = self._resolve_bucket_name(bucket_name)
+        try:
+            self._get_client().head_bucket(Bucket=resolved_bucket_name)
+        except (ClientError, BotoCoreError, StorageError) as exc:
+            raise _translate_bucket_error(
+                action="probe",
+                bucket_name=resolved_bucket_name,
                 error=exc,
             ) from exc
 

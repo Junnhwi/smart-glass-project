@@ -10,8 +10,24 @@
 - `GET /health/ready`
   - Purpose: readiness probe
   - Meaning: the API process is up and key dependencies are ready
-  - Current checks: Redis broker connectivity, S3-related required env vars, caption model config
+  - Current checks: Redis broker connectivity, storage readiness, caption model config
   - Returns `503` when the service is not ready to accept traffic
+
+## Storage Readiness Modes
+
+Storage readiness is controlled by `INFERENCE_STORAGE_READINESS_MODE`.
+
+- `config` (default)
+  - validates required storage env vars
+  - skips a real S3 bucket probe
+  - keeps readiness checks fast and predictable for local and CI environments
+
+- `deep`
+  - validates required storage env vars
+  - performs a real `head_bucket` probe through `StorageService`
+  - surfaces bucket access or network problems directly in readiness
+
+The readiness payload includes the selected `mode` and nested `probe` detail so operators can tell whether the response reflects configuration-only validation or actual storage access verification.
 
 ## Docker Compose
 
@@ -50,9 +66,21 @@ inference-api:
 
 - the Celery worker responds to `ping`
 - Redis broker connectivity is available
-- required S3 env vars are present
+- storage readiness passes in the configured mode (`config` or `deep`)
 - configured model key / quantization / dtype are valid
 - worker startup preload finished successfully and wrote a ready status file
+
+```mermaid
+flowchart LR
+  A["/health/ready"] --> B["check_queue()"]
+  A --> C["check_storage()"]
+  A --> D["check_model_config()"]
+  C --> E["mode=config"]
+  C --> F["mode=deep"]
+  E --> G["env validation only"]
+  F --> H["StorageService.probe_bucket_access()"]
+  H --> I["S3 head_bucket"]
+```
 
 ## Worker Preload
 

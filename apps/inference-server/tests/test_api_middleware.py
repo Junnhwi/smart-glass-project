@@ -28,7 +28,7 @@ class MiddlewareTestCase(unittest.TestCase):
     def test_readiness_returns_request_id(self) -> None:
         with patch("src.api.health._check_queue", return_value=("ok", {"status": "ok"})):
             with patch(
-                "src.api.health._check_storage_config",
+                "src.api.health._check_storage",
                 return_value=("ok", {"status": "ok"}),
             ):
                 with patch(
@@ -49,7 +49,7 @@ class MiddlewareTestCase(unittest.TestCase):
             return_value=("error", {"status": "error", "message": "redis down"}),
         ):
             with patch(
-                "src.api.health._check_storage_config",
+                "src.api.health._check_storage",
                 return_value=("ok", {"status": "ok"}),
             ):
                 with patch(
@@ -66,7 +66,7 @@ class MiddlewareTestCase(unittest.TestCase):
     def test_health_alias_points_to_readiness(self) -> None:
         with patch("src.api.health._check_queue", return_value=("ok", {"status": "ok"})):
             with patch(
-                "src.api.health._check_storage_config",
+                "src.api.health._check_storage",
                 return_value=("ok", {"status": "ok"}),
             ):
                 with patch(
