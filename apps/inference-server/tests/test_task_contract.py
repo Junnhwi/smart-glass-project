@@ -3,10 +3,11 @@ import os
 import unittest
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from PIL import Image
 
 from src.queue.tasks import process_vision_inference
-from src.storage.s3 import StorageObject
+from src.storage.s3 import StorageAccessError, StorageNotFoundError, StorageObject
 
 
 class _FakeStorageService:
@@ -116,7 +117,7 @@ class TaskContractTestCase(unittest.TestCase):
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
             "src.queue.tasks.get_storage_service",
-            return_value=_FailingStorageService(RuntimeError("s3 unavailable")),
+            return_value=_FailingStorageService(StorageAccessError("s3 unavailable")),
         ):
             result = process_vision_inference(
                 image_key="captures/wallet-01.jpg",
@@ -127,13 +128,51 @@ class TaskContractTestCase(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["requestId"], "req-err-1")
-        self.assertEqual(result["errorCode"], "inference_task_error")
+        self.assertEqual(result["errorCode"], "storage_access_error")
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
         self.assertEqual(
             result["providerMetadata"]["capabilities"]["sceneSummary"], False
         )
+
+    def test_process_vision_inference_marks_missing_source_image_as_non_retryable(
+        self,
+    ) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(
+                StorageNotFoundError("captures/missing.jpg not found")
+            ),
+        ):
+            result = process_vision_inference(
+                image_key="captures/missing.jpg",
+                user_id="user-1",
+                request_id="req-missing-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "source_image_not_found")
+        self.assertFalse(result["retryable"])
+
+    def test_process_vision_inference_marks_timeout_as_retryable_timeout_error(self) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
+        ):
+            with patch(
+                "src.queue.tasks.generate_caption",
+                side_effect=SoftTimeLimitExceeded(),
+            ):
+                result = process_vision_inference(
+                    image_key="captures/wallet-01.jpg",
+                    user_id="user-1",
+                    request_id="req-timeout-1",
+                )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "inference_timeout")
+        self.assertTrue(result["retryable"])
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"
