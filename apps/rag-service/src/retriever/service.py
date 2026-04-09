@@ -6,13 +6,13 @@ from src.embedder.tfidf import TfidfTextEmbedder
 from src.ingestion.service import MemoryIngestionService
 from src.retriever.hybrid import HybridMemoryRetriever, SearchHit
 from src.utils.config import Settings
-from src.vectorstore.store import FileBackedMemoryStore
+from src.vectorstore.store import FileBackedMemoryStore, PostgresMemoryStore
 
 
 class RagQueryService:
     def __init__(
         self,
-        store: FileBackedMemoryStore,
+        store: FileBackedMemoryStore | PostgresMemoryStore,
         ingestion_service: MemoryIngestionService,
         retriever: HybridMemoryRetriever,
         answer_generator: OpenAICompatibleAnswerGenerator,
@@ -24,7 +24,14 @@ class RagQueryService:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RagQueryService":
-        store = FileBackedMemoryStore(settings.storage_path)
+        if settings.storage_backend == "postgres":
+            if not settings.database_url:
+                raise ValueError(
+                    "RAG_DATABASE_URL is required when RAG_STORAGE_BACKEND=postgres"
+                )
+            store = PostgresMemoryStore(settings.database_url)
+        else:
+            store = FileBackedMemoryStore(settings.storage_path)
         ingestion_service = MemoryIngestionService()
         retriever = HybridMemoryRetriever(store=store, embedder=TfidfTextEmbedder())
         answer_generator = OpenAICompatibleAnswerGenerator(settings)

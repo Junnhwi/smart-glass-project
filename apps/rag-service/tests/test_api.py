@@ -23,6 +23,8 @@ class RagServiceApiTestCase(unittest.TestCase):
             self.temp_dir.name,
             "memory_store.json",
         )
+        os.environ["RAG_STORAGE_BACKEND"] = "file"
+        os.environ.pop("RAG_DATABASE_URL", None)
         os.environ.pop("LLM_API_KEY", None)
         os.environ.pop("LLM_MODEL", None)
         os.environ.pop("LLM_BASE_URL", None)
@@ -32,6 +34,8 @@ class RagServiceApiTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
         os.environ.pop("RAG_STORAGE_PATH", None)
+        os.environ.pop("RAG_STORAGE_BACKEND", None)
+        os.environ.pop("RAG_DATABASE_URL", None)
         os.environ.pop("LLM_PROVIDER", None)
 
     def test_health_endpoint_returns_request_id(self) -> None:
@@ -91,6 +95,61 @@ class RagServiceApiTestCase(unittest.TestCase):
         self.assertEqual(payload["hits"][0]["location"]["name"], WORKROOM)
         self.assertEqual(payload["hits"][0]["position_hint"], "\uD0A4\uBCF4\uB4DC \uC606")
         self.assertIn("wallet", " ".join(payload["hits"][0]["matched_terms"]))
+
+    def test_index_vlm_result_endpoint_indexes_raw_worker_payload(self) -> None:
+        response = self.client.post(
+            "/memories/index/vlm",
+            json={
+                "result": {
+                    "status": "success",
+                    "requestId": "req-vlm-1",
+                    "taskType": "metadata",
+                    "memoryId": "mem-vlm-01",
+                    "userId": "user-vlm",
+                    "capturedAt": "2026-04-04T10:00:00Z",
+                    "sourceImage": {
+                        "imageKey": "captures/vlm-01.jpg",
+                        "imageUrl": "https://example.com/captures/vlm-01.jpg",
+                        "contentType": "image/jpeg",
+                    },
+                    "metadata": {
+                        "caption": "a laptop is on the desk",
+                        "sceneSummary": "desk scene",
+                        "detectedObjects": ["laptop", "desk"],
+                        "tags": ["office"],
+                        "ocrText": "todo list",
+                        "positionHint": "on the desk",
+                        "location": None,
+                    },
+                    "pipelineOutput": {
+                        "scene_summary": "desk scene",
+                        "location_context": "office desk",
+                        "objects": [],
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["indexed_count"], 1)
+        self.assertEqual(payload["total_user_memories"]["user-vlm"], 1)
+
+        search_response = self.client.post(
+            "/search",
+            json={
+                "user_id": "user-vlm",
+                "query": "laptop",
+                "top_k": 3,
+            },
+        )
+
+        self.assertEqual(search_response.status_code, 200)
+        search_payload = search_response.json()
+        self.assertEqual(search_payload["total_hits"], 1)
+        self.assertEqual(search_payload["hits"][0]["memory_id"], "mem-vlm-01")
+        self.assertEqual(search_payload["hits"][0]["scene_summary"], "desk scene")
+        self.assertEqual(search_payload["hits"][0]["location"]["name"], "office desk")
 
     def test_chat_returns_answer_and_supporting_hits(self) -> None:
         self.client.post(
