@@ -10,6 +10,7 @@ import numpy as np
 
 from src.embedder.hashing import HashingTextEmbedder
 from src.ingestion.models import MemoryDocument
+from src.utils.text import build_search_query_text
 
 try:  # pragma: no cover - optional runtime dependency
     import psycopg
@@ -120,7 +121,8 @@ class FileBackedMemoryStore:
         if not documents:
             return []
 
-        query_embedding = self._embedder.embed(query)
+        search_query = build_search_query_text(query)
+        query_embedding = self._embedder.embed(search_query)
         if query_embedding is None:
             return []
 
@@ -184,7 +186,12 @@ class PostgresMemoryStore:
     def _connect(self, register_vector_type: bool = False):  # type: ignore[no-untyped-def]
         self._require_driver()
         conn = psycopg.connect(self.database_url)
-        if register_vector_type and register_vector is not None:
+        if (
+            register_vector_type
+            and register_vector is not None
+            and hasattr(psycopg, "Connection")
+            and isinstance(conn, psycopg.Connection)
+        ):
             register_vector(conn)
         return conn
 
@@ -198,40 +205,40 @@ class PostgresMemoryStore:
 
             with self._connect() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
                     cur.execute(
-                        f"""
-                        CREATE TABLE IF NOT EXISTS {self.table_name} (
-                            memory_id TEXT PRIMARY KEY,
-                            user_id TEXT NOT NULL,
-                            captured_at TEXT,
-                            searchable_text TEXT NOT NULL DEFAULT '',
-                            embedding vector({self.embedding_dimension}),
-                            document JSONB NOT NULL,
-                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        """
+                        SELECT 1
+                        FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name = %s
+                        LIMIT 1
+                        """,
+                        (self.table_name,),
+                    )
+                    table_row = cur.fetchone()
+                    if table_row is None:
+                        raise RuntimeError(
+                            f"Schema table {self.table_name} is missing. "
+                            "Run Alembic migrations before using the postgres memory store."
                         )
-                        """
-                    )
+
                     cur.execute(
-                        f"""
-                        ALTER TABLE {self.table_name}
-                        ADD COLUMN IF NOT EXISTS embedding vector({self.embedding_dimension})
                         """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = %s
+                          AND column_name = %s
+                        LIMIT 1
+                        """,
+                        (self.table_name, "embedding"),
                     )
-                    cur.execute(
-                        f"""
-                        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id
-                        ON {self.table_name} (user_id)
-                        """
-                    )
-                    cur.execute(
-                        f"""
-                        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id_captured_at
-                        ON {self.table_name} (user_id, captured_at DESC, memory_id DESC)
-                        """
-                    )
-                conn.commit()
+                    embedding_row = cur.fetchone()
+                    if embedding_row is None:
+                        raise RuntimeError(
+                            f"Schema column embedding is missing from {self.table_name}. "
+                            "Run Alembic migrations before using the postgres memory store."
+                        )
 
             self._schema_ready = True
 
@@ -324,7 +331,8 @@ class PostgresMemoryStore:
         top_k: int,
     ) -> list[VectorSearchResult]:
         self._ensure_schema()
-        query_embedding = self._embedder.embed(query)
+        search_query = build_search_query_text(query)
+        query_embedding = self._embedder.embed(search_query)
         if query_embedding is None:
             return []
 

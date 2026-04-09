@@ -21,13 +21,11 @@ class _FakeCursor:
         normalized = " ".join(query.split()).lower()
         rows = self._state.setdefault("rows", {})  # type: ignore[assignment]
 
-        if normalized.startswith("create extension if not exists vector"):
+        if normalized.startswith("select 1 from information_schema.tables"):
+            self._results = [(1,)]
             return
-        if normalized.startswith("create table if not exists"):
-            return
-        if normalized.startswith("alter table rag_memory_records add column if not exists embedding vector"):
-            return
-        if normalized.startswith("create index if not exists"):
+        if normalized.startswith("select 1 from information_schema.columns"):
+            self._results = [(1,)]
             return
 
         if normalized.startswith("insert into rag_memory_records"):

@@ -2,7 +2,12 @@ from dataclasses import dataclass
 
 from src.embedder.tfidf import TfidfTextEmbedder
 from src.ingestion.models import MemoryDocument
-from src.utils.text import expand_terms, normalize_search_query, tokenize_text
+from src.utils.text import (
+    build_search_query_text,
+    expand_terms,
+    normalize_search_query,
+    tokenize_text,
+)
 from src.vectorstore.store import MemoryStore
 
 
@@ -30,15 +35,21 @@ class HybridMemoryRetriever:
         self.embedder = embedder
 
     def search(self, user_id: str, query: str, top_k: int) -> list[SearchHit]:
-        candidate_limit = max(top_k * 5, 20)
-        vector_hits = self.store.search_similar(user_id=user_id, query=query, top_k=candidate_limit)
-        documents = [hit.memory for hit in vector_hits] if vector_hits else self.store.list_by_user(user_id)
+        documents = self.store.list_by_user(user_id)
         if not documents:
             return []
 
+        candidate_limit = max(top_k * 10, 40)
+        search_query_text = build_search_query_text(query)
+        vector_hits = self.store.search_similar(
+            user_id=user_id,
+            query=query,
+            top_k=candidate_limit,
+        )
+
         normalized_query = normalize_search_query(query)
         query_terms = set(expand_terms(tokenize_text(normalized_query)))
-        query_text = " ".join([normalized_query, *sorted(query_terms)])
+        query_text = search_query_text
         search_texts = [document.searchable_text() for document in documents]
         vector_scores = {hit.memory.memory_id: hit.similarity for hit in vector_hits}
 
