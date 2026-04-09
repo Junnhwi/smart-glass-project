@@ -12,11 +12,11 @@ class Settings:
     service_name: str
     storage_path: Path
     default_top_k: int
-    llm_provider: str
-    llm_api_key: str
-    llm_base_url: str | None
-    llm_model: str
-    llm_timeout_sec: float
+    llm_provider: str = "auto"
+    llm_api_key: str = ""
+    llm_base_url: str | None = None
+    llm_model: str = ""
+    llm_timeout_sec: float = 20.0
     storage_backend: str = "file"
     database_url: str | None = None
 

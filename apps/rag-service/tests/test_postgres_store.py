@@ -21,19 +21,28 @@ class _FakeCursor:
         normalized = " ".join(query.split()).lower()
         rows = self._state.setdefault("rows", {})  # type: ignore[assignment]
 
+        if normalized.startswith("create extension if not exists vector"):
+            return
         if normalized.startswith("create table if not exists"):
+            return
+        if normalized.startswith("alter table rag_memory_records add column if not exists embedding vector"):
             return
         if normalized.startswith("create index if not exists"):
             return
 
         if normalized.startswith("insert into rag_memory_records"):
             assert params is not None
-            memory_id, user_id, captured_at, searchable_text, document_json = params
+            if len(params) == 5:
+                memory_id, user_id, captured_at, searchable_text, document_json = params
+                embedding = None
+            else:
+                memory_id, user_id, captured_at, searchable_text, embedding, document_json = params
             rows[memory_id] = {
                 "memory_id": memory_id,
                 "user_id": user_id,
                 "captured_at": captured_at,
                 "searchable_text": searchable_text,
+                "embedding": embedding,
                 "document": json.loads(document_json),
             }
             return

@@ -21,6 +21,7 @@ class SearchHit:
     score: float
     lexical_score: float
     matched_terms: list[str]
+    vector_score: float = 0.0
 
 
 class HybridMemoryRetriever:
@@ -29,7 +30,9 @@ class HybridMemoryRetriever:
         self.embedder = embedder
 
     def search(self, user_id: str, query: str, top_k: int) -> list[SearchHit]:
-        documents = self.store.list_by_user(user_id)
+        candidate_limit = max(top_k * 5, 20)
+        vector_hits = self.store.search_similar(user_id=user_id, query=query, top_k=candidate_limit)
+        documents = [hit.memory for hit in vector_hits] if vector_hits else self.store.list_by_user(user_id)
         if not documents:
             return []
 
@@ -37,6 +40,7 @@ class HybridMemoryRetriever:
         query_terms = set(expand_terms(tokenize_text(normalized_query)))
         query_text = " ".join([normalized_query, *sorted(query_terms)])
         search_texts = [document.searchable_text() for document in documents]
+        vector_scores = {hit.memory.memory_id: hit.similarity for hit in vector_hits}
 
         index = self.embedder.build_index(search_texts)
         lexical_scores = self.embedder.score_query(index, query_text)
@@ -45,6 +49,7 @@ class HybridMemoryRetriever:
 
         hits: list[SearchHit] = []
         for document, lexical_score in zip(documents, lexical_scores, strict=True):
+            vector_score = vector_scores.get(document.memory_id, 0.0)
             object_terms = set(expand_terms(document.detected_objects))
             tag_terms = set(expand_terms(document.tags))
             location_terms = set(expand_terms([document.location.as_text()]))
@@ -62,6 +67,7 @@ class HybridMemoryRetriever:
             )
 
             score = lexical_score
+            score += vector_score * 0.2
             score += _overlap_score(query_terms, object_terms, 0.45)
             score += _overlap_score(query_terms, tag_terms, 0.2)
             score += _overlap_score(query_terms, location_terms, 0.2)
@@ -76,6 +82,7 @@ class HybridMemoryRetriever:
                     score=round(score, 6),
                     lexical_score=round(float(lexical_score), 6),
                     matched_terms=matched_terms,
+                    vector_score=round(float(vector_score), 6),
                 )
             )
 

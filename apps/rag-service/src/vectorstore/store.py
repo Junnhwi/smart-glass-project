@@ -1,16 +1,34 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
 
+import numpy as np
+
+from src.embedder.hashing import HashingTextEmbedder
 from src.ingestion.models import MemoryDocument
 
 try:  # pragma: no cover - optional runtime dependency
     import psycopg
 except ImportError:  # pragma: no cover - handled at runtime
     psycopg = None
+
+try:  # pragma: no cover - optional runtime dependency
+    from pgvector.psycopg import register_vector
+except ImportError:  # pragma: no cover - handled at runtime
+    register_vector = None
+
+
+@dataclass(slots=True)
+class VectorSearchResult:
+    memory: MemoryDocument
+    similarity: float
+
+
+MIN_VECTOR_SIMILARITY = 0.15
 
 
 @runtime_checkable
@@ -23,12 +41,20 @@ class MemoryStore(Protocol):
 
     def readiness_detail(self) -> dict[str, Any]: ...
 
+    def search_similar(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int,
+    ) -> list[VectorSearchResult]: ...
+
 
 class FileBackedMemoryStore:
     def __init__(self, storage_path: Path):
         self.storage_path = storage_path
         self._lock = Lock()
         self._documents: dict[str, dict[str, MemoryDocument]] = {}
+        self._embedder = HashingTextEmbedder()
         self._load()
 
     def _load(self) -> None:
@@ -84,6 +110,47 @@ class FileBackedMemoryStore:
             return len(self._documents.get(user_id, {}))
         return sum(len(user_documents) for user_documents in self._documents.values())
 
+    def search_similar(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int,
+    ) -> list[VectorSearchResult]:
+        documents = self.list_by_user(user_id)
+        if not documents:
+            return []
+
+        query_embedding = self._embedder.embed(query)
+        if query_embedding is None:
+            return []
+
+        hits: list[VectorSearchResult] = []
+        for document in documents:
+            document_embedding = self._embedder.embed(document.searchable_text())
+            if document_embedding is None:
+                continue
+
+            similarity = float(np.dot(query_embedding.values, document_embedding.values))
+            if similarity < MIN_VECTOR_SIMILARITY:
+                continue
+
+            hits.append(
+                VectorSearchResult(
+                    memory=document,
+                    similarity=round(similarity, 6),
+                )
+            )
+
+        hits.sort(
+            key=lambda item: (
+                item.similarity,
+                item.memory.captured_at or "",
+                item.memory.memory_id,
+            ),
+            reverse=True,
+        )
+        return hits[:top_k]
+
     def readiness_detail(self) -> dict[str, Any]:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         return {
@@ -91,11 +158,13 @@ class FileBackedMemoryStore:
             "backend": "file",
             "path": str(self.storage_path),
             "indexed_documents": self.count(),
+            "vector_dimension": self._embedder.dimension,
         }
 
 
 class PostgresMemoryStore:
     table_name = "rag_memory_records"
+    embedding_dimension = 384
 
     def __init__(self, database_url: str):
         self.database_url = database_url.strip()
@@ -103,6 +172,7 @@ class PostgresMemoryStore:
             raise ValueError("database_url must not be blank")
         self._lock = Lock()
         self._schema_ready = False
+        self._embedder = HashingTextEmbedder(self.embedding_dimension)
 
     def _require_driver(self) -> None:
         if psycopg is None:
@@ -111,9 +181,12 @@ class PostgresMemoryStore:
                 "Install apps/rag-service requirements."
             )
 
-    def _connect(self):  # type: ignore[no-untyped-def]
+    def _connect(self, register_vector_type: bool = False):  # type: ignore[no-untyped-def]
         self._require_driver()
-        return psycopg.connect(self.database_url)
+        conn = psycopg.connect(self.database_url)
+        if register_vector_type and register_vector is not None:
+            register_vector(conn)
+        return conn
 
     def _ensure_schema(self) -> None:
         if self._schema_ready:
@@ -125,6 +198,7 @@ class PostgresMemoryStore:
 
             with self._connect() as conn:
                 with conn.cursor() as cur:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
                     cur.execute(
                         f"""
                         CREATE TABLE IF NOT EXISTS {self.table_name} (
@@ -132,10 +206,17 @@ class PostgresMemoryStore:
                             user_id TEXT NOT NULL,
                             captured_at TEXT,
                             searchable_text TEXT NOT NULL DEFAULT '',
+                            embedding vector({self.embedding_dimension}),
                             document JSONB NOT NULL,
                             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                         )
+                        """
+                    )
+                    cur.execute(
+                        f"""
+                        ALTER TABLE {self.table_name}
+                        ADD COLUMN IF NOT EXISTS embedding vector({self.embedding_dimension})
                         """
                     )
                     cur.execute(
@@ -154,12 +235,18 @@ class PostgresMemoryStore:
 
             self._schema_ready = True
 
-    def _serialize_document(self, document: MemoryDocument) -> tuple[str, str, str | None, str]:
+    def _serialize_document(
+        self,
+        document: MemoryDocument,
+    ) -> tuple[str, str, str | None, str, np.ndarray | None]:
+        searchable_text = document.searchable_text()
+        embedding = self._embedder.embed(searchable_text)
         return (
             document.memory_id,
             document.user_id,
             document.captured_at,
-            document.searchable_text(),
+            searchable_text,
+            embedding.values if embedding is not None else None,
         )
 
     def upsert_many(self, documents: list[MemoryDocument]) -> int:
@@ -167,10 +254,16 @@ class PostgresMemoryStore:
             return 0
 
         self._ensure_schema()
-        with self._connect() as conn:
+        with self._connect(register_vector_type=True) as conn:
             with conn.cursor() as cur:
                 for document in documents:
-                    memory_id, user_id, captured_at, searchable_text = self._serialize_document(document)
+                    (
+                        memory_id,
+                        user_id,
+                        captured_at,
+                        searchable_text,
+                        embedding,
+                    ) = self._serialize_document(document)
                     cur.execute(
                         f"""
                         INSERT INTO {self.table_name} (
@@ -178,14 +271,16 @@ class PostgresMemoryStore:
                             user_id,
                             captured_at,
                             searchable_text,
+                            embedding,
                             document,
                             created_at,
                             updated_at
-                        ) VALUES (%s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+                        ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
                         ON CONFLICT (memory_id) DO UPDATE SET
                             user_id = EXCLUDED.user_id,
                             captured_at = EXCLUDED.captured_at,
                             searchable_text = EXCLUDED.searchable_text,
+                            embedding = EXCLUDED.embedding,
                             document = EXCLUDED.document,
                             updated_at = NOW()
                         """,
@@ -194,6 +289,7 @@ class PostgresMemoryStore:
                             user_id,
                             captured_at,
                             searchable_text,
+                            embedding,
                             json.dumps(document.to_dict(), ensure_ascii=False),
                         ),
                     )
@@ -221,6 +317,50 @@ class PostgresMemoryStore:
             documents.append(MemoryDocument.from_dict(json.loads(document_json)))
         return documents
 
+    def search_similar(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int,
+    ) -> list[VectorSearchResult]:
+        self._ensure_schema()
+        query_embedding = self._embedder.embed(query)
+        if query_embedding is None:
+            return []
+
+        with self._connect(register_vector_type=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT document::text, 1 - (embedding <=> %s) AS similarity
+                    FROM {self.table_name}
+                    WHERE user_id = %s
+                      AND embedding IS NOT NULL
+                    ORDER BY embedding <=> %s, captured_at DESC, memory_id DESC
+                    LIMIT %s
+                    """,
+                    (
+                        query_embedding.values,
+                        user_id,
+                        query_embedding.values,
+                        top_k,
+                    ),
+                )
+                rows = cur.fetchall()
+
+        hits: list[VectorSearchResult] = []
+        for document_json, similarity in rows:
+            score = round(float(similarity or 0.0), 6)
+            if score < MIN_VECTOR_SIMILARITY:
+                continue
+            hits.append(
+                VectorSearchResult(
+                    memory=MemoryDocument.from_dict(json.loads(document_json)),
+                    similarity=score,
+                )
+            )
+        return hits
+
     def count(self, user_id: str | None = None) -> int:
         self._ensure_schema()
         with self._connect() as conn:
@@ -242,6 +382,7 @@ class PostgresMemoryStore:
                 "status": "ok",
                 "backend": "postgres",
                 "indexed_documents": self.count(),
+                "vector_dimension": self.embedding_dimension,
             }
         except Exception as exc:
             return {
