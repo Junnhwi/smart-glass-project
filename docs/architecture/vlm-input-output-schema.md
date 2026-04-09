@@ -86,6 +86,15 @@ interface VlmInferenceSuccess {
       location?: boolean;
       pipelineOutput?: boolean;
     } | null;
+    executionPolicy?: {
+      settingsSource?: string | null;
+      profilePath?: string | null;
+      selectedModelKey?: string | null;
+      softTimeLimitSec?: number | null;
+      hardTimeLimitSec?: number | null;
+      fallbackModelKey?: string | null;
+      fallbackTriggered?: boolean | null;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -123,6 +132,7 @@ interface VlmInferenceSuccess {
 - 성공/실패 모두 `requestId`, `userId`, `memoryId`, `capturedAt`, `sourceImage` 유지
 - 캡션 결과는 `metadata.caption`으로 이동
 - 모델/런타임 정보는 `providerMetadata`, `runtime`으로 분리
+- 실행 정책 정보는 `providerMetadata.executionPolicy`로 분리
 - 오류도 동일한 컨텍스트를 유지한 채 `errorCode`, `message`, `retryable` 반환
 - timeout 및 storage 실패도 같은 오류 계약 위에서 구분 가능한 코드로 정리
 - metadata는 caption/Qwen 경로와 무관하게 같은 키 집합과 값 형태로 정규화
@@ -268,6 +278,30 @@ VISION_PROVIDER_METADATA_INCLUDE_RAW=true
 
 - 미지원이라서 비어 있음
 - 지원하지만 이번 이미지에서 값이 비어 있음
+
+### `providerMetadata.executionPolicy` 계약
+
+이번 단계부터는 `providerMetadata.executionPolicy`를 통해 “어떤 실행 정책으로 이 결과가 생성됐는지”를 함께 내려보냅니다.
+
+핵심 필드:
+
+- `settingsSource`
+  - `env`
+  - `profile`
+  - `legacy_default`
+  - preload 경로에서는 `preload_env`
+- `profilePath`
+- `selectedModelKey`
+- `softTimeLimitSec`
+- `hardTimeLimitSec`
+- `fallbackModelKey`
+- `fallbackTriggered`
+
+의도:
+
+- worker result만 보고도 어떤 source에서 모델 설정이 왔는지 알 수 있게 합니다.
+- fallback이 실제로 발동했는지 로그가 아닌 payload 수준에서 추적할 수 있게 합니다.
+- health/preload/result가 같은 정책 언어를 쓰도록 맞춥니다.
 
 ## 현재 구현 상태
 

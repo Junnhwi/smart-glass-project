@@ -122,6 +122,15 @@ interface VlmInferenceSuccess {
       location?: boolean;
       pipelineOutput?: boolean;
     } | null;
+    executionPolicy?: {
+      settingsSource?: string | null;
+      profilePath?: string | null;
+      selectedModelKey?: string | null;
+      softTimeLimitSec?: number | null;
+      hardTimeLimitSec?: number | null;
+      fallbackModelKey?: string | null;
+      fallbackTriggered?: boolean | null;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -165,6 +174,15 @@ interface VlmInferenceError {
       location?: boolean;
       pipelineOutput?: boolean;
     } | null;
+    executionPolicy?: {
+      settingsSource?: string | null;
+      profilePath?: string | null;
+      selectedModelKey?: string | null;
+      softTimeLimitSec?: number | null;
+      hardTimeLimitSec?: number | null;
+      fallbackModelKey?: string | null;
+      fallbackTriggered?: boolean | null;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -183,6 +201,7 @@ interface VlmInferenceError {
 - `detectedObjects`, `tags`는 중복과 빈 문자열을 제거한 뒤 반환합니다.
 - `positionHint`가 비어 있으면 `caption`에서 규칙 기반으로 다시 계산할 수 있습니다.
 - `location`은 좌표/이름/주소를 정규화한 뒤 의미 있는 값이 하나도 없으면 `null`로 반환합니다.
+- `providerMetadata.executionPolicy`는 모델 선택 source, configured time limit, fallback 설정/발생 여부를 함께 제공합니다.
 
 기본 에러 코드 해석:
 
@@ -298,6 +317,7 @@ interface VisionInferenceTaskStatusResponse {
 - `providerMetadata.raw`는 기본값으로 저장하지 않습니다. 현재 구현은 `VISION_PROVIDER_METADATA_INCLUDE_RAW=true`일 때만 `device`, `prompt` 같은 소형 디버그 필드만 포함합니다.
 - 모델 변경 시에도 `caption`, `positionHint` 의미가 유지되도록 post-processing 계층을 둡니다.
 - `sceneSummary`, `ocrText`, `location`은 `providerMetadata.capabilities`를 확인한 뒤 저장/검색에 반영합니다.
+- `providerMetadata.executionPolicy`는 운영/재현성 추적용 메타데이터이며, 현재 worker / preload / health가 같은 정책 언어를 사용하도록 맞춰져 있습니다.
 - 재처리를 위해 `requestId`, `memoryId`, `imageKey`, `modelKey` 조합은 반드시 로그에 남깁니다.
 
 ## 결론

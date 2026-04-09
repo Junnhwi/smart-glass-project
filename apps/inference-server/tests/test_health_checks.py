@@ -121,6 +121,31 @@ class StorageHealthCheckTestCase(unittest.TestCase):
         self.assertEqual(detail["source"], "profile")
         self.assertEqual(detail["model_key"], "blip-base")
         self.assertEqual(detail["profile_path"], str(profile_path))
+        self.assertEqual(detail["executionPolicy"]["settingsSource"], "profile")
+        self.assertEqual(detail["executionPolicy"]["profilePath"], str(profile_path))
+
+    def test_check_model_config_reports_execution_policy_for_vlm(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "VISION_CAPTION_MODEL": "qwen2.5-vl-7b",
+                "VISION_CAPTION_QUANTIZATION": "4bit",
+                "VISION_TASK_SOFT_TIME_LIMIT_SEC": "90",
+                "VISION_TASK_HARD_TIME_LIMIT_SEC": "120",
+                "VISION_QWEN_FALLBACK_MODEL": "qwen2.5-vl-3b",
+            },
+            clear=True,
+        ):
+            status, detail = check_model_config()
+
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail["model_key"], "qwen2.5-vl-7b")
+        self.assertEqual(detail["mode"], "vlm")
+        self.assertEqual(detail["executionPolicy"]["softTimeLimitSec"], 90)
+        self.assertEqual(detail["executionPolicy"]["hardTimeLimitSec"], 120)
+        self.assertEqual(
+            detail["executionPolicy"]["fallbackModelKey"], "qwen2.5-vl-3b"
+        )
 
 
 if __name__ == "__main__":

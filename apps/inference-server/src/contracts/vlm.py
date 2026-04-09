@@ -203,6 +203,7 @@ def build_provider_metadata(
     quantization: str,
     dtype_name: str,
     generation_result: Dict[str, Any] | None = None,
+    execution_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     generation_result = generation_result or {}
     (
@@ -219,6 +220,7 @@ def build_provider_metadata(
         "dtype": dtype_name,
         "provider": "huggingface-transformers",
         "capabilities": resolved_capabilities,
+        "executionPolicy": execution_policy,
         "raw": None,
     }
 
@@ -247,6 +249,7 @@ def build_vlm_success_result(
     content_type: str | None = None,
     inference_metadata: Dict[str, Any] | None = None,
     pipeline_output: Dict[str, Any] | None = None,
+    execution_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     caption = _normalize_whitespace(generation_result.get("caption")) or None
     metadata = _normalize_metadata_payload(
@@ -272,6 +275,7 @@ def build_vlm_success_result(
             quantization=quantization,
             dtype_name=dtype_name,
             generation_result=generation_result,
+            execution_policy=execution_policy,
         ),
         "runtime": {
             "latencySec": generation_result.get("elapsed_sec"),
@@ -297,6 +301,7 @@ def build_vlm_error_result(
     content_type: str | None = None,
     error_code: str | None = None,
     retryable: bool | None = None,
+    execution_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     resolved_error_code = error_code or "inference_task_error"
     resolved_retryable = (
@@ -321,5 +326,6 @@ def build_vlm_error_result(
             model_key=model_key,
             quantization=quantization,
             dtype_name=dtype_name,
+            execution_policy=execution_policy,
         ),
     }

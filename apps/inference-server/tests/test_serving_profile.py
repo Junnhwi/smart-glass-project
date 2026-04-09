@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from src.models.serving_profile import (
     build_caption_serving_profile,
+    resolve_runtime_execution_policy,
     resolve_runtime_serving_settings,
 )
 
@@ -136,6 +137,38 @@ class ServingProfileTestCase(unittest.TestCase):
         ):
             with self.assertRaises(FileNotFoundError):
                 resolve_runtime_serving_settings()
+
+    def test_resolve_runtime_execution_policy_includes_time_limits_and_vlm_fallback(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "VISION_CAPTION_MODEL": "qwen2.5-vl-7b",
+                "VISION_CAPTION_QUANTIZATION": "4bit",
+                "VISION_TASK_SOFT_TIME_LIMIT_SEC": "90",
+                "VISION_TASK_HARD_TIME_LIMIT_SEC": "120",
+                "VISION_QWEN_FALLBACK_MODEL": "qwen2.5-vl-3b",
+            },
+            clear=True,
+        ):
+            policy = resolve_runtime_execution_policy()
+
+        self.assertEqual(policy.settings.source, "env")
+        self.assertEqual(policy.settings.model_key, "qwen2.5-vl-7b")
+        self.assertEqual(policy.soft_time_limit_sec, 90)
+        self.assertEqual(policy.hard_time_limit_sec, 120)
+        self.assertEqual(policy.fallback_model_key, "qwen2.5-vl-3b")
+        self.assertEqual(
+            policy.to_payload(),
+            {
+                "settingsSource": "env",
+                "profilePath": None,
+                "selectedModelKey": "qwen2.5-vl-7b",
+                "softTimeLimitSec": 90,
+                "hardTimeLimitSec": 120,
+                "fallbackModelKey": "qwen2.5-vl-3b",
+                "fallbackTriggered": False,
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -69,6 +69,7 @@ inference-api:
 - storage readiness passes in the configured mode (`config` or `deep`)
 - configured model key / quantization / dtype are valid
 - worker startup preload finished successfully and wrote a ready status file
+- resolved execution policy is visible through the same `settingsSource / profilePath / selectedModelKey / time limits / fallback` vocabulary used by runtime results
 
 ```mermaid
 flowchart LR
@@ -90,6 +91,7 @@ flowchart LR
 - preload status file path defaults to `/tmp/inference-worker-preload.json`
 - when `INFERENCE_PRELOAD_FAIL_FAST=1`, preload failure stops worker startup
 - preload target defaults to `VISION_CAPTION_MODEL` and can be overridden with `VISION_PRELOAD_MODEL`
+- preload status payload also includes `executionPolicy` so startup selection can be compared against runtime result metadata
 
 This is a startup-time behavior, not an image build-time behavior. Docker image build only installs code and dependencies; the model is downloaded and loaded when the worker container actually starts.
 

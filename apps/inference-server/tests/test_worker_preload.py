@@ -32,11 +32,18 @@ class WorkerPreloadTestCase(unittest.TestCase):
             self.assertEqual(payload["status"], "ready")
             self.assertEqual(payload["model_key"], "qwen2.5-vl-7b")
             self.assertEqual(payload["quantization"], "4bit")
+            self.assertEqual(
+                payload["executionPolicy"]["selectedModelKey"], "qwen2.5-vl-7b"
+            )
+            self.assertEqual(payload["executionPolicy"]["fallbackTriggered"], False)
             self.assertTrue(status_path.exists())
 
             saved = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["status"], "ready")
             self.assertEqual(saved["model_key"], "qwen2.5-vl-7b")
+            self.assertEqual(
+                saved["executionPolicy"]["selectedModelKey"], "qwen2.5-vl-7b"
+            )
 
     def test_preload_writes_error_status_when_loader_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -100,6 +107,8 @@ class WorkerPreloadTestCase(unittest.TestCase):
             self.assertEqual(payload["model_key"], "blip-base")
             self.assertEqual(payload["settings_source"], "profile")
             self.assertEqual(payload["profile_path"], str(profile_path))
+            self.assertEqual(payload["executionPolicy"]["settingsSource"], "profile")
+            self.assertEqual(payload["executionPolicy"]["profilePath"], str(profile_path))
 
 
 if __name__ == "__main__":

@@ -50,8 +50,19 @@ export interface VlmRuntimeMetrics {
   loadTimeSec?: number | null;
 }
 
+export interface VlmExecutionPolicyMetadata {
+  settingsSource?: string | null;
+  profilePath?: string | null;
+  selectedModelKey?: string | null;
+  softTimeLimitSec?: number | null;
+  hardTimeLimitSec?: number | null;
+  fallbackModelKey?: string | null;
+  fallbackTriggered?: boolean | null;
+}
+
 export interface VlmProviderMetadata {
   capabilities?: VlmProviderCapabilities | null;
+  executionPolicy?: VlmExecutionPolicyMetadata | null;
   modelKey?: string | null;
   modelId?: string | null;
   modelFamily?: string | null;

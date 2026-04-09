@@ -169,6 +169,16 @@ runtime 해석 우선순위는 다음과 같습니다.
 2. `INFERENCE_SERVING_PROFILE_PATH`가 가리키는 profile 기본값
 3. 기존 legacy 기본값 (`blip-base`, `none`, `float16`)
 
+runtime / preload / health는 이제 이 선택 결과를 공통 `executionPolicy` 언어로 드러냅니다.
+
+- `settingsSource`
+- `profilePath`
+- `selectedModelKey`
+- `softTimeLimitSec`
+- `hardTimeLimitSec`
+- `fallbackModelKey`
+- `fallbackTriggered`
+
 주의:
 
 - 현재처럼 compose나 배포 환경에서 `VISION_CAPTION_*`를 이미 명시한 경우, serving profile은 관여하지 않습니다.

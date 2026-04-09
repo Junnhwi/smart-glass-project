@@ -102,6 +102,16 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
         self.assertEqual(result["providerMetadata"]["capabilities"]["caption"], True)
         self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["settingsSource"], "env"
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
+            "blip-base",
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["fallbackTriggered"], False
+        )
+        self.assertEqual(
             result["providerMetadata"]["capabilities"]["sceneSummary"], False
         )
         self.assertEqual(
@@ -134,6 +144,13 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
+            "blip-base",
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["softTimeLimitSec"], 120
+        )
         self.assertEqual(
             result["providerMetadata"]["capabilities"]["sceneSummary"], False
         )
@@ -260,6 +277,17 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["pipelineOutput"]["objects"][0]["name"], "지갑")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-7b")
         self.assertEqual(result["providerMetadata"]["modelFamily"], "qwen2_5_vl")
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
+            "qwen2.5-vl-7b",
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["fallbackTriggered"], False
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["fallbackModelKey"],
+            "qwen2.5-vl-3b",
+        )
         self.assertEqual(result["providerMetadata"]["capabilities"]["sceneSummary"], True)
         self.assertEqual(
             result["providerMetadata"]["capabilities"]["detectedObjects"], True
@@ -332,6 +360,17 @@ class TaskContractTestCase(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["providerMetadata"]["modelKey"], "qwen2.5-vl-3b")
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
+            "qwen2.5-vl-7b",
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["fallbackModelKey"],
+            "qwen2.5-vl-3b",
+        )
+        self.assertEqual(
+            result["providerMetadata"]["executionPolicy"]["fallbackTriggered"], True
+        )
         self.assertEqual(result["providerMetadata"]["capabilities"]["sceneSummary"], True)
         self.assertEqual(result["metadata"]["detectedObjects"], ["맥북", "아이폰"])
         self.assertEqual(result["pipelineOutput"]["capture_id"], "capture-fallback")

@@ -9,7 +9,7 @@ import redis
 from celery import Celery
 
 from src.models.registry import resolve_inference_model
-from src.models.serving_profile import resolve_runtime_serving_settings
+from src.models.serving_profile import resolve_runtime_execution_policy
 from src.storage.s3 import StorageAccessError, StorageConfigError, get_storage_service
 from src.worker_preload import get_preload_status_path
 
@@ -112,13 +112,15 @@ def check_model_config() -> Tuple[str, Dict[str, Any]]:
 
     errors = []
     try:
-        settings = resolve_runtime_serving_settings()
+        execution_policy = resolve_runtime_execution_policy()
+        settings = execution_policy.settings
         detail.update(
             {
                 "model_key": settings.model_key,
                 "quantization": settings.quantization,
                 "dtype": settings.dtype_name,
                 "source": settings.source,
+                "executionPolicy": execution_policy.to_payload(),
             }
         )
         if settings.profile_path:
