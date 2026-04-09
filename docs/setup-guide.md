@@ -43,3 +43,58 @@ git config --global core.autocrlf input
 - Local chat responses now use an Ollama-backed OpenAI-compatible endpoint in the local compose stack.
 - `docker compose -f infra/compose/docker-compose.local.yml up --build` starts Ollama, pulls `qwen2.5:3b`, and points `rag-service` at `http://ollama:11434/v1`.
 - Team members do not need to install the model manually when they use the compose setup.
+
+## Object Storage / DNS 점검
+
+- inference-server는 AWS S3 전용이 아니라 S3 호환 Object Storage 설정을 사용합니다.
+- 기본 환경변수는 `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY`, `STORAGE_BUCKET_NAME`, `STORAGE_REGION`, `STORAGE_ENDPOINT_URL`, `STORAGE_ADDRESSING_STYLE` 입니다.
+- 네이버 Object Storage 기본값은 `STORAGE_REGION=kr-standard`, `STORAGE_ENDPOINT_URL=https://kr.object.ncloudstorage.com`, `STORAGE_ADDRESSING_STYLE=path` 입니다.
+
+### WSL 호스트 DNS 이슈
+
+- WSL에서 `kr.object.ncloudstorage.com` 해석이 실패하면, 컨테이너 밖 Python/CLI probe는 실패할 수 있습니다.
+- 이번 저장소에서 재현된 증상은 아래와 같습니다.
+  - `getent hosts kr.object.ncloudstorage.com` 실패
+  - `socket.getaddrinfo('kr.object.ncloudstorage.com', 443)` 실패
+  - `/etc/resolv.conf` 에 WSL 자동 생성 nameserver 하나만 설정됨
+
+### 점검 명령
+
+```bash
+getent hosts kr.object.ncloudstorage.com
+python -c "import socket; print(socket.getaddrinfo('kr.object.ncloudstorage.com', 443))"
+cat /etc/resolv.conf
+```
+
+### 권장 조치
+
+1. `/etc/wsl.conf`에 아래 설정을 추가해 WSL의 자동 DNS 생성을 끕니다.
+
+```ini
+[network]
+generateResolvConf = false
+```
+
+2. WSL을 종료한 뒤 다시 시작합니다.
+
+```bash
+wsl --shutdown
+```
+
+3. Ubuntu 재진입 후 `/etc/resolv.conf`를 직접 작성합니다.
+
+```bash
+sudo rm -f /etc/resolv.conf
+printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" | sudo tee /etc/resolv.conf
+```
+
+4. 다시 이름 해석을 확인합니다.
+
+```bash
+getent hosts kr.object.ncloudstorage.com
+```
+
+### 참고
+
+- Docker 컨테이너 내부에서는 DNS가 정상일 수 있어, 호스트 probe만 실패하고 compose 기반 smoke test는 성공할 수 있습니다.
+- 운영 검증은 가능하면 `scripts/smoke-inference-qwen.sh` 또는 `scripts/run-qwen-via-api.sh` 같은 compose 경로 기준으로 함께 확인하는 것을 권장합니다.

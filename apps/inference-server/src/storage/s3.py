@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 
@@ -37,34 +38,79 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _require_any_env(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    raise StorageConfigError(
+        f"Missing required environment variable: one of {', '.join(names)}"
+    )
+
+
 def _resolve_region_name() -> str:
-    return os.getenv("AWS_REGION", "ap-northeast-2").strip() or "ap-northeast-2"
+    return (
+        os.getenv("STORAGE_REGION")
+        or os.getenv("AWS_REGION")
+        or "ap-northeast-2"
+    ).strip() or "ap-northeast-2"
+
+
+def _resolve_endpoint_url() -> str | None:
+    endpoint_url = os.getenv("STORAGE_ENDPOINT_URL", "").strip()
+    return endpoint_url or None
+
+
+def _resolve_addressing_style() -> str:
+    return (os.getenv("STORAGE_ADDRESSING_STYLE", "auto").strip().lower() or "auto")
 
 
 def _resolve_bucket_name(bucket_name: str | None = None) -> str:
-    normalized = (bucket_name or os.getenv("AWS_S3_BUCKET_NAME", "")).strip()
+    normalized = (
+        bucket_name
+        or os.getenv("STORAGE_BUCKET_NAME")
+        or os.getenv("AWS_S3_BUCKET_NAME")
+        or ""
+    ).strip()
     if not normalized:
         raise StorageConfigError(
-            "Missing required environment variable: AWS_S3_BUCKET_NAME"
+            "Missing required environment variable: STORAGE_BUCKET_NAME"
         )
     return normalized
 
 
 def _build_s3_client():
+    client_kwargs: dict[str, Any] = {
+        "service_name": "s3",
+        "aws_access_key_id": _require_any_env(
+            "STORAGE_ACCESS_KEY_ID",
+            "AWS_ACCESS_KEY_ID",
+        ),
+        "aws_secret_access_key": _require_any_env(
+            "STORAGE_SECRET_ACCESS_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+        ),
+        "region_name": _resolve_region_name(),
+    }
+    endpoint_url = _resolve_endpoint_url()
+    if endpoint_url:
+        client_kwargs["endpoint_url"] = endpoint_url
+
+    addressing_style = _resolve_addressing_style()
+    if addressing_style != "auto":
+        client_kwargs["config"] = Config(s3={"addressing_style": addressing_style})
+
     return boto3.client(
-        "s3",
-        aws_access_key_id=_require_env("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=_require_env("AWS_SECRET_ACCESS_KEY"),
-        region_name=_resolve_region_name(),
+        **client_kwargs,
     )
 
 
 def _format_storage_message(action: str, bucket_name: str, key: str, error: Exception) -> str:
-    return f"Failed to {action} S3 object '{key}' in bucket '{bucket_name}': {error}"
+    return f"Failed to {action} storage object '{key}' in bucket '{bucket_name}': {error}"
 
 
 def _format_bucket_message(action: str, bucket_name: str, error: Exception) -> str:
-    return f"Failed to {action} S3 bucket '{bucket_name}': {error}"
+    return f"Failed to {action} storage bucket '{bucket_name}': {error}"
 
 
 def _translate_client_error(

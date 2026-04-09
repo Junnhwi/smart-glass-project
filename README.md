@@ -43,6 +43,6 @@ docker compose -f infra/compose/docker-compose.local.yml up --build
 
 ## Notes
 
-- AWS 관련 민감한 값은 `.env`에만 보관하세요.
+- Object Storage 및 기타 민감한 값은 `.env`에만 보관하세요.
 - 추론 워커 테스트 스크립트는 `apps/inference-server/scripts/test_task.py`에 있습니다.
 - 문서와 운영 스크립트는 각각 `docs/`, `scripts/` 아래로 정리했습니다.

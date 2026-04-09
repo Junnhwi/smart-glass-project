@@ -18,7 +18,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [[ ! -f "$ROOT_DIR/.env" ]]; then
-  echo ".env file is required. Copy from .env.example and fill AWS/S3 credentials." >&2
+  echo ".env file is required. Copy from .env.example and fill object storage credentials." >&2
   exit 1
 fi
 
