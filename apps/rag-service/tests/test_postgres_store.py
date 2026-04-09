@@ -27,6 +27,11 @@ class _FakeCursor:
         if normalized.startswith("select 1 from information_schema.columns"):
             self._results = [(1,)]
             return
+        if normalized.startswith(
+            "select kcu.column_name from information_schema.table_constraints as tc"
+        ):
+            self._results = [("user_id",), ("memory_id",)]
+            return
 
         if normalized.startswith("insert into rag_memory_records"):
             assert params is not None
@@ -35,7 +40,7 @@ class _FakeCursor:
                 embedding = None
             else:
                 memory_id, user_id, captured_at, searchable_text, embedding, document_json = params
-            rows[memory_id] = {
+            rows[(user_id, memory_id)] = {
                 "memory_id": memory_id,
                 "user_id": user_id,
                 "captured_at": captured_at,
@@ -166,6 +171,51 @@ class PostgresMemoryStoreTestCase(unittest.TestCase):
         self.assertEqual(readiness["backend"], "postgres")
         self.assertEqual(readiness["indexed_documents"], 2)
         self.assertEqual(self.state["database_url"], "postgresql://example")
+
+    def test_same_memory_id_is_scoped_by_user(self) -> None:
+        store = PostgresMemoryStore("postgresql://example")
+
+        shared_memory_id = "mem-shared-01"
+        store.upsert_many(
+            [
+                MemoryDocument(
+                    memory_id=shared_memory_id,
+                    user_id="user-a",
+                    image_key="captures/shared-a.jpg",
+                    image_url=None,
+                    captured_at="2026-04-06T12:00:00Z",
+                    caption="user a memory",
+                    scene_summary="scene a",
+                    detected_objects=["desk"],
+                    tags=["alpha"],
+                    ocr_text=None,
+                    note=None,
+                    position_hint=None,
+                    location=MemoryLocation(name="office"),
+                ),
+                MemoryDocument(
+                    memory_id=shared_memory_id,
+                    user_id="user-b",
+                    image_key="captures/shared-b.jpg",
+                    image_url=None,
+                    captured_at="2026-04-06T13:00:00Z",
+                    caption="user b memory",
+                    scene_summary="scene b",
+                    detected_objects=["desk"],
+                    tags=["beta"],
+                    ocr_text=None,
+                    note=None,
+                    position_hint=None,
+                    location=MemoryLocation(name="home"),
+                ),
+            ]
+        )
+
+        self.assertEqual(store.count(), 2)
+        self.assertEqual(store.count("user-a"), 1)
+        self.assertEqual(store.count("user-b"), 1)
+        self.assertEqual(store.list_by_user("user-a")[0].caption, "user a memory")
+        self.assertEqual(store.list_by_user("user-b")[0].caption, "user b memory")
 
 
 class RagQueryServiceStorageSelectionTestCase(unittest.TestCase):

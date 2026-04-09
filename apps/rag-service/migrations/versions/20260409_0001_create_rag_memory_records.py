@@ -25,14 +25,15 @@ def upgrade() -> None:
     op.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            memory_id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
+            memory_id TEXT NOT NULL,
             captured_at TEXT,
             searchable_text TEXT NOT NULL DEFAULT '',
             embedding vector({EMBEDDING_DIMENSION}),
             document JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, memory_id)
         )
         """
     )

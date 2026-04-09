@@ -240,6 +240,28 @@ class PostgresMemoryStore:
                             "Run Alembic migrations before using the postgres memory store."
                         )
 
+                    cur.execute(
+                        """
+                        SELECT kcu.column_name
+                        FROM information_schema.table_constraints AS tc
+                        JOIN information_schema.key_column_usage AS kcu
+                          ON tc.constraint_name = kcu.constraint_name
+                         AND tc.table_schema = kcu.table_schema
+                        WHERE tc.table_schema = 'public'
+                          AND tc.table_name = %s
+                          AND tc.constraint_type = 'PRIMARY KEY'
+                        ORDER BY kcu.ordinal_position
+                        """,
+                        (self.table_name,),
+                    )
+                    primary_key_columns = [row[0] for row in cur.fetchall()]
+                    if primary_key_columns != ["user_id", "memory_id"]:
+                        raise RuntimeError(
+                            f"Schema primary key for {self.table_name} must be "
+                            "(user_id, memory_id). Run Alembic migrations before "
+                            "using the postgres memory store."
+                        )
+
             self._schema_ready = True
 
     def _serialize_document(
@@ -283,8 +305,7 @@ class PostgresMemoryStore:
                             created_at,
                             updated_at
                         ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
-                        ON CONFLICT (memory_id) DO UPDATE SET
-                            user_id = EXCLUDED.user_id,
+                        ON CONFLICT (user_id, memory_id) DO UPDATE SET
                             captured_at = EXCLUDED.captured_at,
                             searchable_text = EXCLUDED.searchable_text,
                             embedding = EXCLUDED.embedding,
