@@ -11,9 +11,13 @@ def _guess_content_type(image_path: Path) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Upload a local image to S3.")
+    parser = argparse.ArgumentParser(
+        description="Upload a local image to object storage."
+    )
     parser.add_argument("--image", required=True, help="Path to image inside container")
-    parser.add_argument("--image-key", required=True, help="Destination S3 object key")
+    parser.add_argument(
+        "--image-key", required=True, help="Destination object storage key"
+    )
     args = parser.parse_args()
 
     image_path = Path(args.image)

@@ -2,6 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from src.storage.s3 import (
@@ -92,6 +93,12 @@ class _ProbeClient:
 class StorageServiceTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         for name in (
+            "STORAGE_ACCESS_KEY_ID",
+            "STORAGE_SECRET_ACCESS_KEY",
+            "STORAGE_REGION",
+            "STORAGE_BUCKET_NAME",
+            "STORAGE_ENDPOINT_URL",
+            "STORAGE_ADDRESSING_STYLE",
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION",
@@ -165,22 +172,27 @@ class StorageServiceTestCase(unittest.TestCase):
             service.read_object("captures/test.png")
 
     def test_service_builds_client_from_env(self) -> None:
-        os.environ["AWS_ACCESS_KEY_ID"] = "test-access"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "test-secret"
-        os.environ["AWS_REGION"] = "ap-northeast-2"
-        os.environ["AWS_S3_BUCKET_NAME"] = "smart-glass-test"
+        os.environ["STORAGE_ACCESS_KEY_ID"] = "test-access"
+        os.environ["STORAGE_SECRET_ACCESS_KEY"] = "test-secret"
+        os.environ["STORAGE_REGION"] = "kr-standard"
+        os.environ["STORAGE_BUCKET_NAME"] = "smart-glass-test"
+        os.environ["STORAGE_ENDPOINT_URL"] = "https://kr.object.ncloudstorage.com"
+        os.environ["STORAGE_ADDRESSING_STYLE"] = "path"
 
         fake_client = _FakeS3Client()
         with patch("src.storage.s3.boto3.client", return_value=fake_client) as mocked_client:
             service = S3StorageService()
             service.read_object("captures/test.png")
 
-        mocked_client.assert_called_once_with(
-            "s3",
-            aws_access_key_id="test-access",
-            aws_secret_access_key="test-secret",
-            region_name="ap-northeast-2",
-        )
+        mocked_client.assert_called_once()
+        _, kwargs = mocked_client.call_args
+        self.assertEqual(kwargs["service_name"], "s3")
+        self.assertEqual(kwargs["aws_access_key_id"], "test-access")
+        self.assertEqual(kwargs["aws_secret_access_key"], "test-secret")
+        self.assertEqual(kwargs["region_name"], "kr-standard")
+        self.assertEqual(kwargs["endpoint_url"], "https://kr.object.ncloudstorage.com")
+        self.assertIsInstance(kwargs["config"], Config)
+        self.assertEqual(kwargs["config"].s3.get("addressing_style"), "path")
 
     def test_probe_bucket_access_calls_head_bucket(self) -> None:
         client = _ProbeClient()

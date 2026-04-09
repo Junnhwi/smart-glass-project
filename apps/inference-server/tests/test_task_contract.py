@@ -17,7 +17,11 @@ class _FakeStorageService:
 
     def read_object(self, key: str, *, bucket_name: str | None = None) -> StorageObject:
         return StorageObject(
-            bucket_name=bucket_name or os.getenv("AWS_S3_BUCKET_NAME", "smart-glass-test"),
+            bucket_name=(
+                bucket_name
+                or os.getenv("STORAGE_BUCKET_NAME")
+                or os.getenv("AWS_S3_BUCKET_NAME", "smart-glass-test")
+            ),
             key=key,
             body=self.payload,
             content_type=self.content_type,
@@ -41,7 +45,7 @@ def _build_test_image_bytes() -> bytes:
 
 class TaskContractTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        os.environ["AWS_S3_BUCKET_NAME"] = "smart-glass-test"
+        os.environ["STORAGE_BUCKET_NAME"] = "smart-glass-test"
         os.environ["VISION_CAPTION_MODEL"] = "blip-base"
         os.environ["VISION_CAPTION_QUANTIZATION"] = "none"
         os.environ["VISION_CAPTION_DTYPE"] = "float16"
@@ -49,6 +53,7 @@ class TaskContractTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         for name in (
+            "STORAGE_BUCKET_NAME",
             "AWS_S3_BUCKET_NAME",
             "VISION_CAPTION_MODEL",
             "VISION_CAPTION_QUANTIZATION",

@@ -19,7 +19,7 @@ Storage readiness is controlled by `INFERENCE_STORAGE_READINESS_MODE`.
 
 - `config` (default)
   - validates required storage env vars
-  - skips a real S3 bucket probe
+  - skips a real object storage bucket probe
   - keeps readiness checks fast and predictable for local and CI environments
 
 - `deep`
@@ -80,7 +80,7 @@ flowchart LR
   C --> F["mode=deep"]
   E --> G["env validation only"]
   F --> H["StorageService.probe_bucket_access()"]
-  H --> I["S3 head_bucket"]
+  H --> I["Object storage head_bucket"]
 ```
 
 ## Worker Preload

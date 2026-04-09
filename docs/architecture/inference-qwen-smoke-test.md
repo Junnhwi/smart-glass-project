@@ -9,7 +9,7 @@
 
 - inference-server 이미지 빌드
 - readiness endpoint 확인
-- 샘플 이미지 1장을 S3에 업로드
+- 샘플 이미지 1장을 Object Storage에 업로드
 - worker 내부에서 `process_vision_inference()` 실행
 - 결과가 `VlmInferenceResult` 계약을 만족하는지 검증
 
@@ -18,10 +18,11 @@
 - Docker Desktop WSL integration 활성화
 - `.env` 파일 존재
 - 아래 환경변수 설정
-  - `AWS_ACCESS_KEY_ID`
-  - `AWS_SECRET_ACCESS_KEY`
-  - `AWS_S3_BUCKET_NAME`
-  - `AWS_REGION`
+  - `STORAGE_ACCESS_KEY_ID`
+  - `STORAGE_SECRET_ACCESS_KEY`
+  - `STORAGE_BUCKET_NAME`
+  - `STORAGE_REGION`
+  - `STORAGE_ENDPOINT_URL`
 
 ## 실행 방법
 
@@ -44,12 +45,12 @@ MODEL_KEY=qwen2.5-vl-7b bash scripts/smoke-inference-qwen.sh
 1. `infra/docker/inference-server.Dockerfile` 기준으로 `inference-worker`, `inference-api` 이미지를 빌드
 2. `redis`, `inference-api`를 기동
 3. `GET /health/ready`를 컨테이너 내부에서 확인
-4. `apps/inference-server/sample_data/key_1.jpg`를 S3에 업로드
+4. `apps/inference-server/sample_data/key_1.jpg`를 Object Storage에 업로드
 5. worker 컨테이너에서 `apps/inference-server/scripts/smoke_qwen_e2e.py` 실행
 6. `VlmInferenceResult` JSON 출력 및 필수 키 검증
 
 ## 참고
 
 - smoke test는 Celery broker round-trip 대신 worker 프로세스 내부에서 `process_vision_inference()`를 직접 호출합니다.
-- 목적은 모델 로딩, S3 접근, 계약 직렬화, Qwen adapter 연결을 빠르게 검증하는 것입니다.
+- 목적은 모델 로딩, Object Storage 접근, 계약 직렬화, Qwen adapter 연결을 빠르게 검증하는 것입니다.
 - 이후 실제 비동기 큐 round-trip 검증이 필요하면 별도 통합 테스트를 추가하는 것이 좋습니다.

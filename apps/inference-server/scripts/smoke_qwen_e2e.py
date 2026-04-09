@@ -73,7 +73,7 @@ def main() -> int:
     parser.add_argument(
         "--image-key",
         default="smoke-tests/qwen/key_1.jpg",
-        help="S3 object key to upload before inference",
+        help="Object storage key to upload before inference",
     )
     parser.add_argument("--user-id", default="smoke-user")
     parser.add_argument("--memory-id", default="smoke-memory")

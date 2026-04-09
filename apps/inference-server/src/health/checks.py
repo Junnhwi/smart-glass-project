@@ -32,17 +32,31 @@ def check_queue() -> Tuple[str, Dict[str, Any]]:
 
 
 def check_storage_config() -> Tuple[str, Dict[str, Any]]:
-    region = os.getenv("AWS_REGION", "ap-northeast-2").strip() or "ap-northeast-2"
-    bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "").strip()
+    region = (
+        os.getenv("STORAGE_REGION")
+        or os.getenv("AWS_REGION")
+        or "ap-northeast-2"
+    ).strip() or "ap-northeast-2"
+    bucket_name = (
+        os.getenv("STORAGE_BUCKET_NAME") or os.getenv("AWS_S3_BUCKET_NAME") or ""
+    ).strip()
     missing = [
         name
-        for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_BUCKET_NAME")
-        if not os.getenv(name, "").strip()
+        for name, aliases in (
+            ("STORAGE_ACCESS_KEY_ID", ("STORAGE_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")),
+            (
+                "STORAGE_SECRET_ACCESS_KEY",
+                ("STORAGE_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
+            ),
+            ("STORAGE_BUCKET_NAME", ("STORAGE_BUCKET_NAME", "AWS_S3_BUCKET_NAME")),
+        )
+        if not any(os.getenv(alias, "").strip() for alias in aliases)
     ]
 
     detail: Dict[str, Any] = {
         "region": region,
         "bucket_name": bucket_name or None,
+        "endpoint_url": os.getenv("STORAGE_ENDPOINT_URL", "").strip() or None,
     }
     if missing:
         detail["status"] = "error"

@@ -18,7 +18,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [[ ! -f "$ROOT_DIR/.env" ]]; then
-  echo ".env file is required. Copy from .env.example and fill AWS/S3 credentials." >&2
+  echo ".env file is required. Copy from .env.example and fill object storage credentials." >&2
   exit 1
 fi
 
@@ -68,7 +68,7 @@ if [[ "$READY" -ne 1 ]]; then
   exit 1
 fi
 
-echo "[4/6] Copy local image into running inference-api and upload to S3"
+echo "[4/6] Copy local image into running inference-api and upload to object storage"
 docker compose -f "$COMPOSE_FILE" exec -T inference-api mkdir -p /tmp/local-images
 docker compose -f "$COMPOSE_FILE" cp "$ABS_IMAGE_PATH" "inference-api:$API_CONTAINER_IMAGE_PATH"
 docker compose -f "$COMPOSE_FILE" exec -T \

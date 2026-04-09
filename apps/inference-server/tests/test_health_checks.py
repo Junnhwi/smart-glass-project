@@ -11,13 +11,19 @@ from src.storage.s3 import StorageAccessError
 
 class StorageHealthCheckTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        os.environ["AWS_ACCESS_KEY_ID"] = "test-access"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "test-secret"
-        os.environ["AWS_S3_BUCKET_NAME"] = "smart-glass-test"
-        os.environ["AWS_REGION"] = "ap-northeast-2"
+        os.environ["STORAGE_ACCESS_KEY_ID"] = "test-access"
+        os.environ["STORAGE_SECRET_ACCESS_KEY"] = "test-secret"
+        os.environ["STORAGE_BUCKET_NAME"] = "smart-glass-test"
+        os.environ["STORAGE_REGION"] = "kr-standard"
+        os.environ["STORAGE_ENDPOINT_URL"] = "https://kr.object.ncloudstorage.com"
 
     def tearDown(self) -> None:
         for name in (
+            "STORAGE_ACCESS_KEY_ID",
+            "STORAGE_SECRET_ACCESS_KEY",
+            "STORAGE_BUCKET_NAME",
+            "STORAGE_REGION",
+            "STORAGE_ENDPOINT_URL",
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_S3_BUCKET_NAME",
@@ -81,7 +87,7 @@ class StorageHealthCheckTestCase(unittest.TestCase):
         self.assertIn("Unsupported INFERENCE_STORAGE_READINESS_MODE", detail["message"])
 
     def test_check_storage_skips_probe_when_config_is_missing(self) -> None:
-        os.environ.pop("AWS_S3_BUCKET_NAME", None)
+        os.environ.pop("STORAGE_BUCKET_NAME", None)
         os.environ["INFERENCE_STORAGE_READINESS_MODE"] = "deep"
 
         with patch("src.health.checks.get_storage_service") as mocked_service:

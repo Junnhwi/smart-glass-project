@@ -76,7 +76,7 @@ interface VlmInferenceRequest {
 
 설계 의도:
 
-- `sourceImage`는 S3 key 기반 처리와 외부 URL 기반 처리 둘 다 수용합니다.
+- `sourceImage`는 object storage key 기반 처리와 외부 URL 기반 처리 둘 다 수용합니다.
 - `generation.modelKey`는 실험 모델 선택에 쓰되, 없으면 서버 기본값을 사용합니다.
 - `taskType`은 지금은 캡셔닝 중심이지만, 이후 OCR/scene metadata 조합 작업으로 확장할 수 있게 둡니다.
 
@@ -205,7 +205,7 @@ interface VlmInferenceError {
 
 기본 에러 코드 해석:
 
-- `source_image_not_found`: S3 object key가 가리키는 이미지가 없음
+- `source_image_not_found`: object storage key가 가리키는 이미지가 없음
 - `storage_config_error`: storage 환경설정 누락 또는 잘못된 설정
 - `storage_access_error`: storage 접근 실패
 - `invalid_source_image`: 이미지 decode 불가

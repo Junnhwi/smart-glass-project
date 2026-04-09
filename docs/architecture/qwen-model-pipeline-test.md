@@ -65,10 +65,11 @@
 
 필수 env:
 
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_S3_BUCKET_NAME`
-- `AWS_REGION`
+- `STORAGE_ACCESS_KEY_ID`
+- `STORAGE_SECRET_ACCESS_KEY`
+- `STORAGE_BUCKET_NAME`
+- `STORAGE_REGION`
+- `STORAGE_ENDPOINT_URL`
 - `HF_TOKEN`
 
 권장 env:
@@ -94,7 +95,7 @@ MODEL_KEY=qwen2.5-vl-7b bash scripts/smoke-inference-qwen.sh
 
 - inference image build
 - readiness probe
-- sample image S3 upload
+- sample image object storage upload
 - worker 내부 `process_vision_inference()` 호출
 - `VlmInferenceResult` contract 검증
 
