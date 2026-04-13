@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple
 from src.health.checks import (
     check_model_config as _check_model_config,
     check_queue as _check_queue,
-    check_storage_config as _check_storage_config,
+    check_storage as _check_storage,
 )
 
 
@@ -19,9 +19,10 @@ def build_liveness_payload() -> Tuple[int, Dict[str, Any]]:
         },
     }
 
+
 def build_health_payload() -> Tuple[int, Dict[str, Any]]:
     queue_status, queue_detail = _check_queue()
-    storage_status, storage_detail = _check_storage_config()
+    storage_status, storage_detail = _check_storage()
     model_status, model_detail = _check_model_config()
 
     checks = {

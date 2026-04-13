@@ -15,6 +15,7 @@ from src.models.qwen_vlm import (
     get_qwen_vlm_components,
 )
 from src.models.registry import resolve_inference_model
+from src.models.serving_profile import resolve_preload_execution_policy
 
 logger = get_logger(__name__)
 
@@ -31,25 +32,15 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _configured_model_settings() -> Dict[str, str]:
-    model_key = os.getenv("VISION_PRELOAD_MODEL", "").strip()
-    if not model_key:
-        model_key = os.getenv("VISION_CAPTION_MODEL", "blip-base").strip() or "blip-base"
-
-    quantization = os.getenv("VISION_PRELOAD_QUANTIZATION", "").strip()
-    if not quantization:
-        quantization = (
-            os.getenv("VISION_CAPTION_QUANTIZATION", "none").strip() or "none"
-        )
-
-    dtype_name = os.getenv("VISION_PRELOAD_DTYPE", "").strip()
-    if not dtype_name:
-        dtype_name = os.getenv("VISION_CAPTION_DTYPE", "float16").strip() or "float16"
-
+def _configured_model_settings() -> Dict[str, Any]:
+    resolved = resolve_preload_execution_policy()
     return {
-        "model_key": model_key,
-        "quantization": quantization,
-        "dtype_name": dtype_name,
+        "model_key": resolved.settings.model_key,
+        "quantization": resolved.settings.quantization,
+        "dtype_name": resolved.settings.dtype_name,
+        "source": resolved.settings.source,
+        "profile_path": resolved.settings.profile_path or "",
+        "execution_policy": resolved.to_payload(),
     }
 
 
@@ -66,26 +57,54 @@ def clear_preload_state() -> None:
 
 
 def preload_configured_model() -> Dict[str, Any]:
-    settings = _configured_model_settings()
-    descriptor = resolve_inference_model(settings["model_key"])
-    device_name = DEFAULT_QWEN_DEVICE if descriptor.mode == "vlm" else DEFAULT_CAPTION_DEVICE
-
     loading_payload: Dict[str, Any] = {
-        "status": "loading",
         "service": "inference-worker",
-        "model_key": descriptor.key,
-        "model_id": descriptor.model_id,
-        "model_mode": descriptor.mode,
-        "quantization": settings["quantization"],
-        "dtype_name": settings["dtype_name"],
-        "device": device_name,
         "hostname": socket.gethostname(),
         "pid": os.getpid(),
         "started_at": _utc_now(),
     }
-    _write_preload_state(loading_payload)
+    settings: Dict[str, Any] = {
+        "model_key": "",
+        "quantization": "",
+        "dtype_name": "",
+        "source": "unknown",
+        "profile_path": "",
+        "execution_policy": {
+            "settingsSource": "unknown",
+            "profilePath": None,
+            "selectedModelKey": None,
+            "softTimeLimitSec": None,
+            "hardTimeLimitSec": None,
+            "fallbackModelKey": None,
+            "fallbackTriggered": False,
+        },
+    }
+    model_key = "unknown"
+    model_mode = "unknown"
 
     try:
+        settings = _configured_model_settings()
+        descriptor = resolve_inference_model(settings["model_key"])
+        model_key = descriptor.key
+        model_mode = descriptor.mode
+        device_name = (
+            DEFAULT_QWEN_DEVICE if descriptor.mode == "vlm" else DEFAULT_CAPTION_DEVICE
+        )
+        loading_payload = {
+            **loading_payload,
+            "status": "loading",
+            "model_key": descriptor.key,
+            "model_id": descriptor.model_id,
+            "model_mode": descriptor.mode,
+            "quantization": settings["quantization"],
+            "dtype_name": settings["dtype_name"],
+            "settings_source": settings["source"],
+            "profile_path": settings["profile_path"] or None,
+            "executionPolicy": settings["execution_policy"],
+            "device": device_name,
+        }
+        _write_preload_state(loading_payload)
+
         if descriptor.mode == "vlm":
             _, _, model, _ = get_qwen_vlm_components(
                 model_key=descriptor.key,
@@ -112,10 +131,11 @@ def preload_configured_model() -> Dict[str, Any]:
             "Worker model preload failed",
             extra={
                 "task_name": "worker_preload",
-                "model_key": descriptor.key,
-                "model_mode": descriptor.mode,
+                "model_key": model_key,
+                "model_mode": model_mode,
                 "quantization": settings["quantization"],
                 "dtype_name": settings["dtype_name"],
+                "settings_source": settings["source"],
                 "error_code": "worker_preload_failed",
             },
         )
@@ -132,10 +152,11 @@ def preload_configured_model() -> Dict[str, Any]:
         "Worker model preload completed",
         extra={
             "task_name": "worker_preload",
-            "model_key": descriptor.key,
-            "model_mode": descriptor.mode,
+            "model_key": model_key,
+            "model_mode": model_mode,
             "quantization": settings["quantization"],
             "dtype_name": settings["dtype_name"],
+            "settings_source": settings["source"],
             "load_time_sec": ready_payload["load_time_sec"],
         },
     )

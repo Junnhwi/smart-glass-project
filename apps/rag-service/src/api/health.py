@@ -22,6 +22,7 @@ def build_health_payload(
     service: RagQueryService,
 ) -> tuple[int, dict[str, Any]]:
     storage_detail = service.store.readiness_detail()
+    storage_ok = storage_detail.get("status") == "ok"
     llm_detail = {
         "status": "ok",
         "provider": "openai-compatible" if settings.llm_enabled else "template-fallback",
@@ -30,7 +31,7 @@ def build_health_payload(
     }
 
     payload = {
-        "status": "ok",
+        "status": "ok" if storage_ok else "degraded",
         "service": "rag-service",
         "check_type": "readiness",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -40,4 +41,4 @@ def build_health_payload(
             "llm": llm_detail,
         },
     }
-    return 200, payload
+    return (200 if storage_ok else 503), payload

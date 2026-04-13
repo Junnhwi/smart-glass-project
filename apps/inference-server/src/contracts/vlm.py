@@ -1,5 +1,6 @@
 import os
 import re
+from collections.abc import Mapping
 from typing import Any, Dict
 from uuid import uuid4
 
@@ -115,13 +116,85 @@ def _include_provider_raw_metadata() -> bool:
     return raw_value in {"1", "true", "yes", "on"}
 
 
-def _resolve_model_metadata(model_key: str) -> tuple[str | None, str | None, str | None]:
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        cleaned = _normalize_whitespace(item)
+        if not cleaned or cleaned in seen:
+            continue
+        normalized.append(cleaned)
+        seen.add(cleaned)
+    return normalized
+
+
+def _normalize_location_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    normalized = _normalize_whitespace(value)
+    if not normalized:
+        return None
+    try:
+        return float(normalized)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_location_payload(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+
+    location = {
+        "name": _normalize_whitespace(value.get("name")) or None,
+        "address": _normalize_whitespace(value.get("address")) or None,
+        "latitude": _normalize_location_number(value.get("latitude")),
+        "longitude": _normalize_location_number(value.get("longitude")),
+    }
+    if all(item is None for item in location.values()):
+        return None
+    return location
+
+
+def _normalize_metadata_payload(
+    metadata: Mapping[str, Any] | None,
+    *,
+    fallback_caption: str | None,
+) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    caption = _normalize_whitespace(metadata.get("caption")) or fallback_caption
+    position_hint = _normalize_whitespace(metadata.get("positionHint")) or None
+    if position_hint is None:
+        position_hint = extract_position_hint(caption)
+
+    return {
+        "caption": caption,
+        "sceneSummary": _normalize_whitespace(metadata.get("sceneSummary")) or None,
+        "detectedObjects": _normalize_string_list(metadata.get("detectedObjects")),
+        "tags": _normalize_string_list(metadata.get("tags")),
+        "ocrText": _normalize_whitespace(metadata.get("ocrText")) or None,
+        "positionHint": position_hint,
+        "location": _normalize_location_payload(metadata.get("location")),
+    }
+
+
+def _resolve_model_metadata(
+    model_key: str,
+) -> tuple[str | None, str | None, str | None, Dict[str, bool] | None]:
     normalized_key = _normalize_whitespace(model_key) or None
     try:
         spec = resolve_inference_model(model_key)
-        return spec.key, spec.model_id, spec.family
+        return (
+            spec.key,
+            spec.model_id,
+            spec.family,
+            spec.capabilities.to_contract_payload(),
+        )
     except Exception:
-        return normalized_key, normalized_key, None
+        return normalized_key, normalized_key, None, None
 
 
 def build_provider_metadata(
@@ -130,9 +203,15 @@ def build_provider_metadata(
     quantization: str,
     dtype_name: str,
     generation_result: Dict[str, Any] | None = None,
+    execution_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     generation_result = generation_result or {}
-    resolved_key, resolved_model_id, resolved_family = _resolve_model_metadata(model_key)
+    (
+        resolved_key,
+        resolved_model_id,
+        resolved_family,
+        resolved_capabilities,
+    ) = _resolve_model_metadata(model_key)
     provider_metadata: Dict[str, Any] = {
         "modelKey": resolved_key,
         "modelId": resolved_model_id,
@@ -140,6 +219,8 @@ def build_provider_metadata(
         "quantization": quantization,
         "dtype": dtype_name,
         "provider": "huggingface-transformers",
+        "capabilities": resolved_capabilities,
+        "executionPolicy": execution_policy,
         "raw": None,
     }
 
@@ -168,17 +249,13 @@ def build_vlm_success_result(
     content_type: str | None = None,
     inference_metadata: Dict[str, Any] | None = None,
     pipeline_output: Dict[str, Any] | None = None,
+    execution_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     caption = _normalize_whitespace(generation_result.get("caption")) or None
-    metadata = inference_metadata or {
-        "caption": caption,
-        "sceneSummary": None,
-        "detectedObjects": [],
-        "tags": [],
-        "ocrText": None,
-        "positionHint": extract_position_hint(caption),
-        "location": None,
-    }
+    metadata = _normalize_metadata_payload(
+        inference_metadata,
+        fallback_caption=caption,
+    )
     return {
         "status": "success",
         "requestId": request_id,
@@ -198,6 +275,7 @@ def build_vlm_success_result(
             quantization=quantization,
             dtype_name=dtype_name,
             generation_result=generation_result,
+            execution_policy=execution_policy,
         ),
         "runtime": {
             "latencySec": generation_result.get("elapsed_sec"),
@@ -218,28 +296,36 @@ def build_vlm_error_result(
     dtype_name: str,
     memory_id: str | None = None,
     image_url: str | None = None,
+    captured_at: str | None = None,
     task_type: str = "caption",
     content_type: str | None = None,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+    execution_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    error_code = "inference_task_error"
-    retryable = not isinstance(error, ValueError)
+    resolved_error_code = error_code or "inference_task_error"
+    resolved_retryable = (
+        retryable if retryable is not None else not isinstance(error, ValueError)
+    )
     return {
         "status": "error",
         "requestId": request_id,
         "taskType": task_type,
         "memoryId": _normalize_whitespace(memory_id) or None,
         "userId": _normalize_whitespace(user_id),
+        "capturedAt": _normalize_whitespace(captured_at) or None,
         "sourceImage": {
             "imageKey": _normalize_whitespace(image_key) or None,
             "imageUrl": _normalize_whitespace(image_url) or None,
             "contentType": _normalize_whitespace(content_type) or None,
         },
-        "errorCode": error_code,
+        "errorCode": resolved_error_code,
         "message": str(error),
-        "retryable": retryable,
+        "retryable": resolved_retryable,
         "providerMetadata": build_provider_metadata(
             model_key=model_key,
             quantization=quantization,
             dtype_name=dtype_name,
+            execution_policy=execution_policy,
         ),
     }

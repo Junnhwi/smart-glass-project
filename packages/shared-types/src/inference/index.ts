@@ -35,13 +35,13 @@ export interface VlmLocationPayload {
 }
 
 export interface VlmMetadataPayload {
-  caption?: string | null;
-  sceneSummary?: string | null;
+  caption: string | null;
+  sceneSummary: string | null;
   detectedObjects: string[];
   tags: string[];
-  ocrText?: string | null;
-  positionHint?: string | null;
-  location?: VlmLocationPayload | null;
+  ocrText: string | null;
+  positionHint: string | null;
+  location: VlmLocationPayload | null;
 }
 
 export interface VlmRuntimeMetrics {
@@ -50,7 +50,19 @@ export interface VlmRuntimeMetrics {
   loadTimeSec?: number | null;
 }
 
+export interface VlmExecutionPolicyMetadata {
+  settingsSource?: string | null;
+  profilePath?: string | null;
+  selectedModelKey?: string | null;
+  softTimeLimitSec?: number | null;
+  hardTimeLimitSec?: number | null;
+  fallbackModelKey?: string | null;
+  fallbackTriggered?: boolean | null;
+}
+
 export interface VlmProviderMetadata {
+  capabilities?: VlmProviderCapabilities | null;
+  executionPolicy?: VlmExecutionPolicyMetadata | null;
   modelKey?: string | null;
   modelId?: string | null;
   modelFamily?: string | null;
@@ -58,6 +70,17 @@ export interface VlmProviderMetadata {
   dtype?: string | null;
   provider?: string | null;
   raw?: Record<string, unknown> | null;
+}
+
+export interface VlmProviderCapabilities {
+  caption?: boolean;
+  positionHint?: boolean;
+  sceneSummary?: boolean;
+  detectedObjects?: boolean;
+  tags?: boolean;
+  ocrText?: boolean;
+  location?: boolean;
+  pipelineOutput?: boolean;
 }
 
 export interface VlmPipelineObjectPosition {
@@ -108,6 +131,7 @@ export interface VlmInferenceSuccess {
   taskType: VlmModelTask;
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: VlmSourceImageRef;
   metadata: VlmMetadataPayload;
   pipelineOutput?: VlmPipelineOutput | null;
@@ -121,11 +145,12 @@ export interface VlmInferenceError {
   taskType: VlmModelTask;
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: VlmSourceImageRef;
   errorCode: string;
   message: string;
   retryable?: boolean;
-  providerMetadata?: VlmProviderMetadata;
+  providerMetadata: VlmProviderMetadata;
 }
 
 export type VlmInferenceResult = VlmInferenceSuccess | VlmInferenceError;

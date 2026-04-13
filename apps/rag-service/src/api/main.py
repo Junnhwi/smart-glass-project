@@ -12,8 +12,10 @@ from src.api.schemas import (
     SearchHitPayload,
     SearchResponse,
     SearchRequest,
+    VlmIndexRequest,
 )
 from src.core.logging import configure_logging, get_logger
+from src.ingestion.vlm_adapter import memory_record_from_vlm_result
 from src.retriever.hybrid import SearchHit
 from src.retriever.service import RagQueryService
 from src.utils.config import get_settings
@@ -82,6 +84,14 @@ def create_app() -> FastAPI:
         request: Request, payload: IndexMemoriesRequest
     ) -> IndexMemoriesResponse:
         result = request.app.state.rag_service.index_memories(payload.memories)
+        return IndexMemoriesResponse(**result)
+
+    @app.post("/memories/index/vlm", response_model=IndexMemoriesResponse)
+    async def index_vlm_result(
+        request: Request, payload: VlmIndexRequest
+    ) -> IndexMemoriesResponse:
+        memory_record = memory_record_from_vlm_result(payload.result)
+        result = request.app.state.rag_service.index_memories([memory_record])
         return IndexMemoriesResponse(**result)
 
     @app.post("/search", response_model=SearchResponse)

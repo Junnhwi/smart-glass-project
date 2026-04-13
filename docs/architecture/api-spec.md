@@ -42,6 +42,13 @@ API 서버, inference worker, RAG 적재 계층 사이에서 비전-언어 모�
 4. `detectedObjects`, `tags`는 검색 친화적인 정규화 결과를 담고, 모델 출력 원문 배열을 그대로 계약화하지 않습니다.
 5. 실패 응답도 동일한 식별자와 이미지 참조를 유지해 재처리와 추적이 가능해야 합니다.
 
+## 요청 추적 규칙
+
+- `POST /tasks/vision`에서 클라이언트가 `requestId`를 보내면 그 값을 그대로 사용합니다.
+- 클라이언트가 `requestId`를 보내지 않으면 API 미들웨어가 생성한 `x-request-id` / `request.state.request_id`를 inference 요청 식별자로 재사용합니다.
+- 이 값은 Celery task kwargs, worker 로그, 최종 `VlmInferenceResult.requestId`로 그대로 전파됩니다.
+- `taskId`는 polling 식별자이고, `requestId`는 end-to-end correlation id입니다.
+
 ## VLM 입력 스키마
 
 ```ts
@@ -69,7 +76,7 @@ interface VlmInferenceRequest {
 
 설계 의도:
 
-- `sourceImage`는 S3 key 기반 처리와 외부 URL 기반 처리 둘 다 수용합니다.
+- `sourceImage`는 object storage key 기반 처리와 외부 URL 기반 처리 둘 다 수용합니다.
 - `generation.modelKey`는 실험 모델 선택에 쓰되, 없으면 서버 기본값을 사용합니다.
 - `taskType`은 지금은 캡셔닝 중심이지만, 이후 OCR/scene metadata 조합 작업으로 확장할 수 있게 둡니다.
 
@@ -84,19 +91,20 @@ interface VlmInferenceSuccess {
   taskType: "caption" | "metadata";
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: {
     imageKey?: string | null;
     imageUrl?: string | null;
     contentType?: string | null;
   };
   metadata: {
-    caption?: string | null;
-    sceneSummary?: string | null;
+    caption: string | null;
+    sceneSummary: string | null;
     detectedObjects: string[];
     tags: string[];
-    ocrText?: string | null;
-    positionHint?: string | null;
-    location?: {
+    ocrText: string | null;
+    positionHint: string | null;
+    location: {
       name?: string | null;
       address?: string | null;
       latitude?: number | null;
@@ -104,6 +112,25 @@ interface VlmInferenceSuccess {
     } | null;
   };
   providerMetadata: {
+    capabilities?: {
+      caption?: boolean;
+      positionHint?: boolean;
+      sceneSummary?: boolean;
+      detectedObjects?: boolean;
+      tags?: boolean;
+      ocrText?: boolean;
+      location?: boolean;
+      pipelineOutput?: boolean;
+    } | null;
+    executionPolicy?: {
+      settingsSource?: string | null;
+      profilePath?: string | null;
+      selectedModelKey?: string | null;
+      softTimeLimitSec?: number | null;
+      hardTimeLimitSec?: number | null;
+      fallbackModelKey?: string | null;
+      fallbackTriggered?: boolean | null;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -127,6 +154,7 @@ interface VlmInferenceError {
   taskType: "caption" | "metadata";
   memoryId?: string | null;
   userId: string;
+  capturedAt: string | null;
   sourceImage: {
     imageKey?: string | null;
     imageUrl?: string | null;
@@ -135,7 +163,26 @@ interface VlmInferenceError {
   errorCode: string;
   message: string;
   retryable?: boolean;
-  providerMetadata?: {
+  providerMetadata: {
+    capabilities?: {
+      caption?: boolean;
+      positionHint?: boolean;
+      sceneSummary?: boolean;
+      detectedObjects?: boolean;
+      tags?: boolean;
+      ocrText?: boolean;
+      location?: boolean;
+      pipelineOutput?: boolean;
+    } | null;
+    executionPolicy?: {
+      settingsSource?: string | null;
+      profilePath?: string | null;
+      selectedModelKey?: string | null;
+      softTimeLimitSec?: number | null;
+      hardTimeLimitSec?: number | null;
+      fallbackModelKey?: string | null;
+      fallbackTriggered?: boolean | null;
+    } | null;
     modelKey?: string | null;
     modelId?: string | null;
     modelFamily?: string | null;
@@ -147,6 +194,100 @@ interface VlmInferenceError {
 }
 ```
 
+정규화 규칙:
+
+- `metadata`의 핵심 키는 성공 결과에서 항상 존재하며, 값이 없을 때는 키 생략 대신 `null` 또는 빈 배열을 사용합니다.
+- `capturedAt`은 성공/실패 결과 모두에 유지해 업로드-추론-적재 흐름을 같은 컨텍스트로 추적합니다.
+- `detectedObjects`, `tags`는 중복과 빈 문자열을 제거한 뒤 반환합니다.
+- `positionHint`가 비어 있으면 `caption`에서 규칙 기반으로 다시 계산할 수 있습니다.
+- `location`은 좌표/이름/주소를 정규화한 뒤 의미 있는 값이 하나도 없으면 `null`로 반환합니다.
+- `providerMetadata.executionPolicy`는 모델 선택 source, configured time limit, fallback 설정/발생 여부를 함께 제공합니다.
+
+기본 에러 코드 해석:
+
+- `source_image_not_found`: object storage key가 가리키는 이미지가 없음
+- `storage_config_error`: storage 환경설정 누락 또는 잘못된 설정
+- `storage_access_error`: storage 접근 실패
+- `invalid_source_image`: 이미지 decode 불가
+- `invalid_inference_request`: 잘못된 입력이나 비정상 요청값
+- `inference_timeout`: worker soft timeout 도달
+- `model_runtime_error`: 모델 실행 단계의 일반 런타임 실패
+- `inference_task_error`: 위 분류에 속하지 않는 일반 실패
+
+기본 정책:
+
+- `retryable`은 큐 자동 재시도를 뜻하지 않고, 상위 서비스가 재시도 가치가 있는 실패인지 판단할 때 쓰는 힌트입니다.
+- worker는 기본적으로 `VISION_TASK_SOFT_TIME_LIMIT_SEC`와 `VISION_TASK_HARD_TIME_LIMIT_SEC` 환경변수로 timeout을 제어합니다.
+- 기본값은 soft `120초`, hard `150초`입니다.
+
+## 비동기 태스크 API
+
+### `POST /tasks/vision`
+
+- 목적: 비전 추론 작업 enqueue
+- 응답: `202 Accepted`
+
+```ts
+interface VisionInferenceEnqueueResponse {
+  taskId: string;
+  state: string;
+  requestId: string;
+  taskType: "caption" | "metadata";
+  statusUrl: string;
+}
+```
+
+의도:
+
+- `taskId`: `GET /tasks/{taskId}` polling 식별자
+- `requestId`: HTTP -> Celery -> worker -> result 전체를 묶는 correlation id
+- `taskType`: enqueue 시점에 확정된 작업 유형
+- `statusUrl`: 상위 서비스가 즉시 polling에 사용할 상대 경로
+
+예시:
+
+```json
+{
+  "taskId": "8bb3d7f7-9db7-4c39-b67c-8f5a9cf9b3a9",
+  "state": "PENDING",
+  "requestId": "req-upload-123",
+  "taskType": "metadata",
+  "statusUrl": "/tasks/8bb3d7f7-9db7-4c39-b67c-8f5a9cf9b3a9"
+}
+```
+
+호출 연동 권장 방식:
+
+1. 상위 서비스는 enqueue 응답에서 `taskId`, `requestId`, `statusUrl`, `taskType`를 함께 저장합니다.
+2. 이후 polling은 `statusUrl` 기준으로 수행합니다.
+3. 작업 완료 후 `GET /tasks/{taskId}`의 `taskStatus`, `resultStatus`, `result`를 기준으로 후속 저장/상태 반영을 진행합니다.
+
+### `GET /tasks/{taskId}`
+
+- 목적: 비전 추론 작업 상태 확인
+
+```ts
+interface VisionInferenceTaskStatusResponse {
+  taskId: string;
+  state: string;
+  ready: boolean;
+  successful: boolean;
+  resultStatus?: "success" | "error" | null;
+  requestId?: string | null;
+  result?: VlmInferenceResult | null;
+  error?: string | null;
+  taskStatus: "pending" | "running" | "completed" | "failed";
+}
+```
+
+의도:
+
+- 작업 완료 후에는 `result.requestId`와 같은 값을 top-level `requestId`에서도 바로 확인할 수 있습니다.
+- 작업 미완료 상태에서는 `requestId`가 아직 없을 수 있습니다.
+- `state`는 raw Celery 상태를 유지하고, `taskStatus`는 제품 관점 정규화 상태를 뜻합니다.
+- `resultStatus`는 결과 payload가 있을 때 실제 inference outcome(`success` / `error`)을 보여줍니다.
+- worker가 에러 payload를 정상 반환한 경우에도 polling 응답은 `taskStatus: "failed"`와 `successful: false`로 정규화됩니다.
+
 ## 현재 코드와의 대응
 
 - inference worker는 이미 `caption`, `model_key`, `quantization`, `latency_sec`, `peak_memory_mb`를 반환합니다.
@@ -156,11 +297,27 @@ interface VlmInferenceError {
 
 즉, 지금 필요한 것은 새 필드를 마구 늘리는 것이 아니라, 이미 존재하는 저장/검색 필드를 기준으로 inference 결과를 정렬하는 일입니다.
 
+## Capability 계약
+
+`providerMetadata.capabilities`는 현재 inference 경로가 어떤 의미 필드를 책임질 수 있는지 선언합니다.
+
+- `caption`, `positionHint`: 현재 시스템에서 안정적으로 기대하는 공통 필드
+- `sceneSummary`, `ocrText`, `location`: capability가 있을 때만 downstream이 적극적으로 신뢰해야 하는 필드
+- `pipelineOutput`: 디버그/실험성 구조화 payload 지원 여부
+
+의도:
+
+- 빈 값과 미지원 상태를 구분합니다.
+- downstream이 optional field를 무조건 저장하거나 무조건 버리지 않게 합니다.
+- 모델 변경 시에도 field ownership을 한 곳에서 관리할 수 있게 합니다.
+
 ## 운영 관점 권장사항
 
 - DB나 벡터스토어에는 `metadata`의 안정 필드만 1차 저장합니다.
 - `providerMetadata.raw`는 기본값으로 저장하지 않습니다. 현재 구현은 `VISION_PROVIDER_METADATA_INCLUDE_RAW=true`일 때만 `device`, `prompt` 같은 소형 디버그 필드만 포함합니다.
-- 모델 변경 시에도 `caption`, `detectedObjects`, `tags`, `positionHint` 의미가 유지되도록 post-processing 계층을 둡니다.
+- 모델 변경 시에도 `caption`, `positionHint` 의미가 유지되도록 post-processing 계층을 둡니다.
+- `sceneSummary`, `ocrText`, `location`은 `providerMetadata.capabilities`를 확인한 뒤 저장/검색에 반영합니다.
+- `providerMetadata.executionPolicy`는 운영/재현성 추적용 메타데이터이며, 현재 worker / preload / health가 같은 정책 언어를 사용하도록 맞춰져 있습니다.
 - 재처리를 위해 `requestId`, `memoryId`, `imageKey`, `modelKey` 조합은 반드시 로그에 남깁니다.
 
 ## 결론

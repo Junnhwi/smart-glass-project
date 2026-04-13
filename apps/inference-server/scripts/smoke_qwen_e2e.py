@@ -6,14 +6,7 @@ from pathlib import Path
 
 from src.queue.tasks import process_vision_inference
 from src.models.qwen_vlm import get_qwen_vlm_spec
-from src.storage.s3 import get_s3_client
-
-
-def _require_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
+from src.storage.s3 import get_storage_service
 
 
 def _guess_content_type(image_path: Path) -> str:
@@ -22,14 +15,11 @@ def _guess_content_type(image_path: Path) -> str:
 
 
 def _upload_sample_image(image_path: Path, image_key: str) -> None:
-    bucket_name = _require_env("AWS_S3_BUCKET_NAME")
-    client = get_s3_client()
     with image_path.open("rb") as file_obj:
-        client.put_object(
-            Bucket=bucket_name,
-            Key=image_key,
-            Body=file_obj.read(),
-            ContentType=_guess_content_type(image_path),
+        get_storage_service().write_object(
+            key=image_key,
+            body=file_obj.read(),
+            content_type=_guess_content_type(image_path),
         )
 
 
@@ -83,7 +73,7 @@ def main() -> int:
     parser.add_argument(
         "--image-key",
         default="smoke-tests/qwen/key_1.jpg",
-        help="S3 object key to upload before inference",
+        help="Object storage key to upload before inference",
     )
     parser.add_argument("--user-id", default="smoke-user")
     parser.add_argument("--memory-id", default="smoke-memory")

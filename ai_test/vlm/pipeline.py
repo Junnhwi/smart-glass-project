@@ -647,5 +647,5 @@ class VLMPipeline:
 
 if __name__ == "__main__":
     pipeline = VLMPipeline(model_id="Qwen/Qwen2.5-VL-7B-Instruct")
-    result = pipeline.run_single("AI/esp640x480.jfif")
+    result = pipeline.run_single("ai_test/vlm/esp640x480.jfif")
     print(json.dumps(result, indent=2, ensure_ascii=False))

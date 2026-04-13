@@ -9,6 +9,8 @@ import redis
 from celery import Celery
 
 from src.models.registry import resolve_inference_model
+from src.models.serving_profile import resolve_runtime_execution_policy
+from src.storage.s3 import StorageAccessError, StorageConfigError, get_storage_service
 from src.worker_preload import get_preload_status_path
 
 
@@ -30,17 +32,31 @@ def check_queue() -> Tuple[str, Dict[str, Any]]:
 
 
 def check_storage_config() -> Tuple[str, Dict[str, Any]]:
-    region = os.getenv("AWS_REGION", "ap-northeast-2").strip() or "ap-northeast-2"
-    bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "").strip()
+    region = (
+        os.getenv("STORAGE_REGION")
+        or os.getenv("AWS_REGION")
+        or "ap-northeast-2"
+    ).strip() or "ap-northeast-2"
+    bucket_name = (
+        os.getenv("STORAGE_BUCKET_NAME") or os.getenv("AWS_S3_BUCKET_NAME") or ""
+    ).strip()
     missing = [
         name
-        for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_BUCKET_NAME")
-        if not os.getenv(name, "").strip()
+        for name, aliases in (
+            ("STORAGE_ACCESS_KEY_ID", ("STORAGE_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")),
+            (
+                "STORAGE_SECRET_ACCESS_KEY",
+                ("STORAGE_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
+            ),
+            ("STORAGE_BUCKET_NAME", ("STORAGE_BUCKET_NAME", "AWS_S3_BUCKET_NAME")),
+        )
+        if not any(os.getenv(alias, "").strip() for alias in aliases)
     ]
 
     detail: Dict[str, Any] = {
         "region": region,
         "bucket_name": bucket_name or None,
+        "endpoint_url": os.getenv("STORAGE_ENDPOINT_URL", "").strip() or None,
     }
     if missing:
         detail["status"] = "error"
@@ -51,30 +67,90 @@ def check_storage_config() -> Tuple[str, Dict[str, Any]]:
     return detail["status"], detail
 
 
-def check_model_config() -> Tuple[str, Dict[str, Any]]:
-    model_key = os.getenv("VISION_CAPTION_MODEL", "blip-base").strip() or "blip-base"
-    quantization = (
-        os.getenv("VISION_CAPTION_QUANTIZATION", "none").strip() or "none"
+def _resolve_storage_readiness_mode() -> str:
+    return (
+        os.getenv("INFERENCE_STORAGE_READINESS_MODE", "config").strip().lower()
+        or "config"
     )
-    dtype_name = os.getenv("VISION_CAPTION_DTYPE", "float16").strip() or "float16"
 
+
+def check_storage() -> Tuple[str, Dict[str, Any]]:
+    config_status, config_detail = check_storage_config()
+    mode = _resolve_storage_readiness_mode()
     detail: Dict[str, Any] = {
-        "model_key": model_key,
-        "quantization": quantization,
-        "dtype": dtype_name,
+        **config_detail,
+        "mode": mode,
     }
+
+    if mode not in {"config", "deep"}:
+        detail["status"] = "error"
+        detail["message"] = (
+            "Unsupported INFERENCE_STORAGE_READINESS_MODE; use 'config' or 'deep'"
+        )
+        return detail["status"], detail
+
+    if config_status != "ok":
+        detail["probe"] = {
+            "status": "skipped",
+            "reason": "storage configuration is incomplete",
+        }
+        return detail["status"], detail
+
+    if mode == "config":
+        detail["status"] = "ok"
+        detail["probe"] = {
+            "status": "skipped",
+            "reason": "storage readiness mode is config",
+        }
+        return detail["status"], detail
+
+    try:
+        get_storage_service().probe_bucket_access(
+            bucket_name=detail.get("bucket_name"),
+        )
+    except (StorageConfigError, StorageAccessError) as exc:
+        detail["status"] = "error"
+        detail["probe"] = {
+            "status": "error",
+            "message": str(exc),
+        }
+        return detail["status"], detail
+
+    detail["status"] = "ok"
+    detail["probe"] = {"status": "ok"}
+    return detail["status"], detail
+
+
+def check_model_config() -> Tuple[str, Dict[str, Any]]:
+    detail: Dict[str, Any] = {}
 
     errors = []
     try:
-        spec = resolve_inference_model(model_key)
+        execution_policy = resolve_runtime_execution_policy()
+        settings = execution_policy.settings
+        detail.update(
+            {
+                "model_key": settings.model_key,
+                "quantization": settings.quantization,
+                "dtype": settings.dtype_name,
+                "source": settings.source,
+                "executionPolicy": execution_policy.to_payload(),
+            }
+        )
+        if settings.profile_path:
+            detail["profile_path"] = settings.profile_path
+
+        spec = resolve_inference_model(settings.model_key)
         detail["model_id"] = spec.model_id
         detail["mode"] = spec.mode
     except Exception as exc:
         errors.append(str(exc))
 
-    if quantization not in {"none", "8bit", "4bit"}:
+    quantization = detail.get("quantization")
+    dtype_name = detail.get("dtype")
+    if quantization is not None and quantization not in {"none", "8bit", "4bit"}:
         errors.append("Unsupported quantization")
-    if dtype_name not in {"float16", "bfloat16", "float32"}:
+    if dtype_name is not None and dtype_name not in {"float16", "bfloat16", "float32"}:
         errors.append("Unsupported dtype")
 
     if errors:
@@ -188,7 +264,7 @@ def check_worker_ping(
 def build_worker_health_payload() -> Tuple[int, Dict[str, Any]]:
     worker_status, worker_detail = check_worker_ping()
     queue_status, queue_detail = check_queue()
-    storage_status, storage_detail = check_storage_config()
+    storage_status, storage_detail = check_storage()
     model_status, model_detail = check_model_config()
     preload_status, preload_detail = check_model_preload()
 

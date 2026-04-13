@@ -280,6 +280,15 @@ def expand_terms(values: Iterable[str]) -> list[str]:
     return sorted(expanded)
 
 
+def build_search_query_text(text: str | None) -> str:
+    normalized = normalize_search_query(text)
+    if not normalized:
+        return ""
+
+    expanded_terms = expand_terms(tokenize_text(normalized))
+    return " ".join(dedupe_strings([normalized, *expanded_terms]))
+
+
 def humanize_term(value: str) -> str:
     tokens = tokenize_text(value)
     if not tokens:
