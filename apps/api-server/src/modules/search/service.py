@@ -41,6 +41,8 @@ class MemorySearchRepository(Protocol):
         limit: int | None = None,
     ) -> list[MemoryRecord]: ...
 
+    def check_health(self) -> None: ...
+
 
 class TemplateAnswerGenerator:
     def _describe_location(self, hit: SearchHit) -> str:
@@ -200,6 +202,9 @@ class MemoryQueryService:
         hits = self.search(user_id, query, top_k)
         answer = self.answer_generator.generate(query, hits)
         return answer, hits
+
+    def check_health(self) -> None:
+        self.repository.check_health()
 
 
 def build_default_memory_query_service() -> MemoryQueryService:

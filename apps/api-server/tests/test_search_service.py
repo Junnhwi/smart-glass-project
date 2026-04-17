@@ -11,11 +11,15 @@ class FakeMemoryRepository:
         self.records = records
         self.last_user_id: str | None = None
         self.last_limit: int | None = None
+        self.health_checked = False
 
     def list_by_user(self, user_id: str, *, limit: int | None = None) -> list[MemoryRecord]:
         self.last_user_id = user_id
         self.last_limit = limit
         return [record for record in self.records if record.user_id == user_id]
+
+    def check_health(self) -> None:
+        self.health_checked = True
 
 
 class MemoryQueryServiceTests(unittest.TestCase):
@@ -34,7 +38,7 @@ class MemoryQueryServiceTests(unittest.TestCase):
                     tags=["office"],
                     ocr_text=None,
                     note=None,
-                    position_hint="keyboard beside",
+                    position_hint="keyboard 옆",
                     location=MemoryLocation(name="workspace"),
                 ),
                 MemoryRecord(
@@ -49,7 +53,7 @@ class MemoryQueryServiceTests(unittest.TestCase):
                     tags=["living-room"],
                     ocr_text=None,
                     note=None,
-                    position_hint="sofa beside",
+                    position_hint="sofa 옆",
                     location=MemoryLocation(name="living room"),
                 ),
             ]
@@ -79,7 +83,7 @@ class MemoryQueryServiceTests(unittest.TestCase):
                     tags=["living-room"],
                     ocr_text=None,
                     note=None,
-                    position_hint="sofa beside",
+                    position_hint="sofa 옆",
                     location=MemoryLocation(name="living room"),
                 ),
             ]
@@ -101,6 +105,14 @@ class MemoryQueryServiceTests(unittest.TestCase):
         self.assertEqual(answer.mode, "template")
         self.assertEqual(answer.cited_memory_ids, [])
         self.assertIn("\uba54\ubaa8\ub9ac", answer.text)
+
+    def test_check_health_delegates_to_repository(self) -> None:
+        repository = FakeMemoryRepository([])
+        service = MemoryQueryService(repository)
+
+        service.check_health()
+
+        self.assertTrue(repository.health_checked)
 
 
 if __name__ == "__main__":

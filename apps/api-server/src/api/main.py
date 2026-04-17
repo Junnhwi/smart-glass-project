@@ -40,6 +40,22 @@ def _map_hit(hit: SearchHit) -> MemorySearchHitPayload:
     )
 
 
+def _get_capture_pipeline(request: Request):
+    pipeline = getattr(request.app.state, "capture_pipeline", None)
+    if pipeline is None:
+        pipeline = request.app.state.capture_pipeline_factory()
+        request.app.state.capture_pipeline = pipeline
+    return pipeline
+
+
+def _get_memory_query_service(request: Request):
+    memory_query_service = getattr(request.app.state, "memory_query_service", None)
+    if memory_query_service is None:
+        memory_query_service = request.app.state.memory_query_service_factory()
+        request.app.state.memory_query_service = memory_query_service
+    return memory_query_service
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="smart-glass-api-server",
@@ -85,14 +101,48 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/health/ready")
-    async def readiness_check() -> JSONResponse:
+    async def readiness_check(request: Request) -> JSONResponse:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        checks: dict[str, str] = {}
+        errors: dict[str, str] = {}
+
+        try:
+            pipeline = _get_capture_pipeline(request)
+            pipeline.check_health()
+            checks["capturePipeline"] = "ok"
+        except Exception as exc:
+            checks["capturePipeline"] = "error"
+            errors["capturePipeline"] = str(exc)
+
+        try:
+            memory_query_service = _get_memory_query_service(request)
+            memory_query_service.check_health()
+            checks["memoryQuery"] = "ok"
+        except Exception as exc:
+            checks["memoryQuery"] = "error"
+            errors["memoryQuery"] = str(exc)
+
+        if errors:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "status": "error",
+                    "service": "api-server",
+                    "checkType": "readiness",
+                    "timestamp": timestamp,
+                    "checks": checks,
+                    "errors": errors,
+                },
+            )
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
                 "status": "ok",
                 "service": "api-server",
                 "checkType": "readiness",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": timestamp,
+                "checks": checks,
             },
         )
 
@@ -105,10 +155,7 @@ def create_app() -> FastAPI:
         request: Request, payload: CaptureUploadRequest
     ) -> CaptureProcessingResponse:
         try:
-            pipeline = getattr(request.app.state, "capture_pipeline", None)
-            if pipeline is None:
-                pipeline = request.app.state.capture_pipeline_factory()
-                request.app.state.capture_pipeline = pipeline
+            pipeline = _get_capture_pipeline(request)
             response = pipeline.process(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -122,10 +169,7 @@ def create_app() -> FastAPI:
         payload: MemorySearchRequest,
     ) -> MemorySearchResponse:
         try:
-            memory_query_service = getattr(request.app.state, "memory_query_service", None)
-            if memory_query_service is None:
-                memory_query_service = request.app.state.memory_query_service_factory()
-                request.app.state.memory_query_service = memory_query_service
+            memory_query_service = _get_memory_query_service(request)
             hits = memory_query_service.search(
                 user_id=payload.userId,
                 query=payload.query,
@@ -135,6 +179,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Memory query backend unavailable: {exc}",
+            ) from exc
 
         return MemorySearchResponse(
             query=payload.query,
@@ -148,10 +197,7 @@ def create_app() -> FastAPI:
         payload: MemoryChatRequest,
     ) -> MemoryChatResponse:
         try:
-            memory_query_service = getattr(request.app.state, "memory_query_service", None)
-            if memory_query_service is None:
-                memory_query_service = request.app.state.memory_query_service_factory()
-                request.app.state.memory_query_service = memory_query_service
+            memory_query_service = _get_memory_query_service(request)
             answer_result, hits = memory_query_service.chat(
                 user_id=payload.userId,
                 query=payload.query,
@@ -161,6 +207,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Memory query backend unavailable: {exc}",
+            ) from exc
 
         return MemoryChatResponse(
             answer=answer_result.text,

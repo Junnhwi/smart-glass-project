@@ -42,6 +42,8 @@ class TaskTransport(Protocol):
         timeout_sec: float,
     ) -> CaptureTaskOutcome: ...
 
+    def check_health(self) -> None: ...
+
 
 class MemoryStoreClient(Protocol):
     backend_name: str
@@ -49,6 +51,8 @@ class MemoryStoreClient(Protocol):
     def persist_vlm_result(
         self, worker_result: dict[str, Any]
     ) -> MemoryStoreOutcome: ...
+
+    def check_health(self) -> None: ...
 
 
 class CeleryTaskTransport:
@@ -98,6 +102,14 @@ class CeleryTaskTransport:
         if not isinstance(result, dict):
             raise CapturePipelineError("Inference worker returned an invalid payload")
         return CaptureTaskOutcome(task_id=async_result.id, result=result)
+
+    def check_health(self) -> None:
+        celery_app = self._get_celery_app()
+        try:
+            with celery_app.connection_for_read() as connection:
+                connection.ensure_connection(max_retries=0)
+        except Exception as exc:
+            raise CapturePipelineError(f"Celery broker is unavailable: {exc}") from exc
 
 
 def _normalize_status(value: Any) -> str:
@@ -238,3 +250,8 @@ class CaptureProcessingPipeline:
             ),
             memoryStore=memory_store_payload,
         )
+
+    def check_health(self) -> None:
+        self.task_transport.check_health()
+        if self.memory_store_client is not None:
+            self.memory_store_client.check_health()

@@ -4,12 +4,24 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, validator
 
+try:
+    from pydantic import ConfigDict
+except ImportError:  # pragma: no cover - pydantic v1 fallback
+    ConfigDict = None
+
 
 class ApiSchema(BaseModel):
-    class Config:
-        extra = "ignore"
-        anystr_strip_whitespace = True
-        allow_population_by_field_name = True
+    if ConfigDict is not None:
+        model_config = ConfigDict(
+            extra="ignore",
+            str_strip_whitespace=True,
+            populate_by_name=True,
+        )
+    else:
+        class Config:
+            extra = "ignore"
+            anystr_strip_whitespace = True
+            allow_population_by_field_name = True
 
 
 class CaptureSourceImagePayload(ApiSchema):
@@ -185,7 +197,7 @@ class MemoryChatResponse(ApiSchema):
 
 
 class HealthPayload(ApiSchema):
-    status: Literal["ok"]
+    status: Literal["ok", "error"]
     service: Literal["api-server"]
     checkType: Literal["liveness", "readiness"]
     timestamp: str

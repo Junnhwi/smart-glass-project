@@ -44,9 +44,29 @@ def _sanitize_path_segment(value: str | None, fallback: str) -> str:
 
 def _capture_timestamp(captured_at: str | None) -> str:
     normalized = _normalize_text(captured_at)
-    if normalized:
-        return normalized
-    return datetime.now(timezone.utc).isoformat()
+    if not normalized:
+        return (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    candidate = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise ValueError("capturedAt must be a valid ISO 8601 timestamp") from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return (
+        parsed.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _date_path(captured_at: str) -> str:

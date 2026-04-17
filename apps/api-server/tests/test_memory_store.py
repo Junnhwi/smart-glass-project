@@ -12,7 +12,7 @@ class MemoryStoreAdapterTests(unittest.TestCase):
                 "status": "success",
                 "memoryId": "mem-101",
                 "userId": "user-101",
-                "capturedAt": "2026-04-17T01:23:45Z",
+                "capturedAt": "2026-04-17T10:23:45+09:00",
                 "sourceImage": {
                     "imageKey": "captures/user-101/2026/04/17/mem-101-photo.jpg",
                     "imageUrl": "https://example.com/photo.jpg",
@@ -46,6 +46,7 @@ class MemoryStoreAdapterTests(unittest.TestCase):
         self.assertEqual(record.memory_id, "mem-101")
         self.assertEqual(record.user_id, "user-101")
         self.assertEqual(record.image_key, "captures/user-101/2026/04/17/mem-101-photo.jpg")
+        self.assertEqual(record.captured_at, "2026-04-17T01:23:45Z")
         self.assertEqual(record.caption, "wallet on the desk")
         self.assertEqual(record.position_hint, "on the desk")
         self.assertEqual(record.location.name, "office")
@@ -78,7 +79,7 @@ class MemoryStoreAdapterTests(unittest.TestCase):
 
         self.assertEqual(record.detected_objects, ["keys"])
         self.assertEqual(record.tags, ["keys", "mug", "Starbucks"])
-        self.assertEqual(record.position_hint, "mug beside")
+        self.assertEqual(record.position_hint, "mug 옆")
 
     def test_memory_record_from_vlm_result_rejects_failed_payload(self) -> None:
         with self.assertRaisesRegex(
@@ -86,6 +87,23 @@ class MemoryStoreAdapterTests(unittest.TestCase):
             "Only successful VLM inference results can be stored",
         ):
             memory_record_from_vlm_result({"status": "error"})
+
+    def test_memory_record_from_vlm_result_rejects_invalid_timestamp(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "capturedAt must be a valid ISO 8601 timestamp",
+        ):
+            memory_record_from_vlm_result(
+                {
+                    "status": "success",
+                    "memoryId": "mem-303",
+                    "userId": "user-303",
+                    "capturedAt": "not-a-timestamp",
+                    "sourceImage": {"imageKey": "captures/user-303/photo.jpg"},
+                    "metadata": {"caption": "wallet on the desk"},
+                    "pipelineOutput": {"objects": []},
+                }
+            )
 
 
 if __name__ == "__main__":

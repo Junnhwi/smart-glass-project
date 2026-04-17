@@ -19,6 +19,7 @@ from src.modules.search.service import GeneratedAnswer, SearchHit
 class FakeCapturePipeline:
     def __init__(self) -> None:
         self.last_payload: CaptureUploadRequest | None = None
+        self.health_checked = False
 
     def process(self, payload: CaptureUploadRequest) -> CaptureProcessingResponse:
         self.last_payload = payload
@@ -68,11 +69,15 @@ class FakeCapturePipeline:
             ),
         )
 
+    def check_health(self) -> None:
+        self.health_checked = True
+
 
 class FakeMemoryQueryService:
     def __init__(self) -> None:
         self.last_search_args: tuple[str, str, int] | None = None
         self.last_chat_args: tuple[str, str, int] | None = None
+        self.health_checked = False
         self.hit = SearchHit(
             memory=MemoryRecord(
                 memory_id="mem-wallet-01",
@@ -86,7 +91,7 @@ class FakeMemoryQueryService:
                 tags=["office"],
                 ocr_text="notes",
                 note=None,
-                position_hint="keyboard beside",
+                position_hint="keyboard 옆",
                 location=MemoryLocation(name="workspace"),
             ),
             score=0.72,
@@ -110,6 +115,9 @@ class FakeMemoryQueryService:
             ),
             [self.hit],
         )
+
+    def check_health(self) -> None:
+        self.health_checked = True
 
 
 class ApiServerCaptureIntakeTests(unittest.TestCase):
@@ -213,6 +221,10 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         response = self.client.get("/health/ready")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["service"], "api-server")
+        self.assertEqual(response.json()["checks"]["capturePipeline"], "ok")
+        self.assertEqual(response.json()["checks"]["memoryQuery"], "ok")
+        self.assertTrue(self.fake_pipeline.health_checked)
+        self.assertTrue(self.fake_memory_query_service.health_checked)
 
 
 if __name__ == "__main__":

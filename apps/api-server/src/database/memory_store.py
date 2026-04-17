@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Mapping
 
@@ -18,56 +19,56 @@ SPATIAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
             r"\bnext to\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "{obj} beside",
+        "{obj} 옆",
     ),
     (
         re.compile(
             r"\bbeside\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "{obj} beside",
+        "{obj} 옆",
     ),
     (
         re.compile(
             r"\bnear\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "{obj} nearby",
+        "{obj} 근처",
     ),
     (
         re.compile(
             r"\binside\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "inside {obj}",
+        "{obj} 안",
     ),
     (
         re.compile(
             r"\bunder\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "under {obj}",
+        "{obj} 아래",
     ),
     (
         re.compile(
             r"\bon top of\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "on {obj}",
+        "{obj} 위",
     ),
     (
         re.compile(
             r"\bon\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "on {obj}",
+        "{obj} 위",
     ),
     (
         re.compile(
             r"\bin\s+(?:the\s+|a\s+|an\s+)?([a-z0-9][a-z0-9\s-]{1,40})",
             re.I,
         ),
-        "in {obj}",
+        "{obj} 안",
     ),
 )
 
@@ -81,6 +82,28 @@ def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
     return " ".join(str(value).strip().split())
+
+
+def _normalize_timestamp(value: Any, *, field_name: str) -> str | None:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return None
+
+    candidate = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid ISO 8601 timestamp") from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return (
+        parsed.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _dedupe_strings(values: Any) -> list[str]:
@@ -267,7 +290,10 @@ class MemoryRecord:
             user_id=_normalize_text(payload.get("user_id")),
             image_key=_normalize_text(payload.get("image_key")) or None,
             image_url=_normalize_text(payload.get("image_url")) or None,
-            captured_at=_normalize_text(payload.get("captured_at")) or None,
+            captured_at=_normalize_timestamp(
+                payload.get("captured_at"),
+                field_name="captured_at",
+            ),
             caption=_normalize_text(payload.get("caption")) or None,
             scene_summary=_normalize_text(payload.get("scene_summary")) or None,
             detected_objects=_dedupe_strings(payload.get("detected_objects") or []),
@@ -283,6 +309,10 @@ class MemoryRecord:
 class MemoryStoreOutcome:
     stored_count: int
     total_user_memories: dict[str, int]
+
+
+class MemoryStoreUnavailableError(RuntimeError):
+    pass
 
 
 def _build_location(
@@ -398,7 +428,10 @@ def memory_record_from_vlm_result(result: Mapping[str, Any]) -> MemoryRecord:
         user_id=user_id,
         image_key=_normalize_text(source_image.get("imageKey")) or None,
         image_url=_normalize_text(source_image.get("imageUrl")) or None,
-        captured_at=_normalize_text(result.get("capturedAt")) or None,
+        captured_at=_normalize_timestamp(
+            result.get("capturedAt"),
+            field_name="capturedAt",
+        ),
         caption=_normalize_text(metadata.get("caption")) or None,
         scene_summary=scene_summary,
         detected_objects=detected_objects,
@@ -430,7 +463,12 @@ class PostgresMemoryStoreClient:
 
     def _connect(self):  # type: ignore[no-untyped-def]
         self._require_driver()
-        return psycopg.connect(self.database_url)
+        try:
+            return psycopg.connect(self.database_url)
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres connection failed: {exc}"
+            ) from exc
 
     def _ensure_schema(self) -> None:
         if self._schema_ready:
@@ -440,34 +478,41 @@ class PostgresMemoryStoreClient:
             if self._schema_ready:
                 return
 
-            with self._connect() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        CREATE TABLE IF NOT EXISTS {self.table_name} (
-                            user_id TEXT NOT NULL,
-                            memory_id TEXT NOT NULL,
-                            captured_at TEXT,
-                            document JSONB NOT NULL,
-                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                            PRIMARY KEY (user_id, memory_id)
+            try:
+                with self._connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f"""
+                            CREATE TABLE IF NOT EXISTS {self.table_name} (
+                                user_id TEXT NOT NULL,
+                                memory_id TEXT NOT NULL,
+                                captured_at TEXT,
+                                document JSONB NOT NULL,
+                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                PRIMARY KEY (user_id, memory_id)
+                            )
+                            """
                         )
-                        """
-                    )
-                    cur.execute(
-                        f"""
-                        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id
-                        ON {self.table_name} (user_id)
-                        """
-                    )
-                    cur.execute(
-                        f"""
-                        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id_captured_at
-                        ON {self.table_name} (user_id, captured_at DESC, memory_id DESC)
-                        """
-                    )
-                conn.commit()
+                        cur.execute(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id
+                            ON {self.table_name} (user_id)
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id_captured_at
+                            ON {self.table_name} (user_id, captured_at DESC, memory_id DESC)
+                            """
+                        )
+                    conn.commit()
+            except MemoryStoreUnavailableError:
+                raise
+            except Exception as exc:
+                raise MemoryStoreUnavailableError(
+                    f"Postgres schema initialization failed: {exc}"
+                ) from exc
 
             self._schema_ready = True
 
@@ -475,36 +520,43 @@ class PostgresMemoryStoreClient:
         record = memory_record_from_vlm_result(worker_result)
         self._ensure_schema()
 
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {self.table_name} (
-                        user_id,
-                        memory_id,
-                        captured_at,
-                        document,
-                        created_at,
-                        updated_at
-                    ) VALUES (%s, %s, %s, %s::jsonb, NOW(), NOW())
-                    ON CONFLICT (user_id, memory_id) DO UPDATE SET
-                        captured_at = EXCLUDED.captured_at,
-                        document = EXCLUDED.document,
-                        updated_at = NOW()
-                    """,
-                    (
-                        record.user_id,
-                        record.memory_id,
-                        record.captured_at,
-                        json.dumps(record.to_dict(), ensure_ascii=False),
-                    ),
-                )
-                cur.execute(
-                    f"SELECT COUNT(*) FROM {self.table_name} WHERE user_id = %s",
-                    (record.user_id,),
-                )
-                row = cur.fetchone()
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {self.table_name} (
+                            user_id,
+                            memory_id,
+                            captured_at,
+                            document,
+                            created_at,
+                            updated_at
+                        ) VALUES (%s, %s, %s, %s::jsonb, NOW(), NOW())
+                        ON CONFLICT (user_id, memory_id) DO UPDATE SET
+                            captured_at = EXCLUDED.captured_at,
+                            document = EXCLUDED.document,
+                            updated_at = NOW()
+                        """,
+                        (
+                            record.user_id,
+                            record.memory_id,
+                            record.captured_at,
+                            json.dumps(record.to_dict(), ensure_ascii=False),
+                        ),
+                    )
+                    cur.execute(
+                        f"SELECT COUNT(*) FROM {self.table_name} WHERE user_id = %s",
+                        (record.user_id,),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
 
         return MemoryStoreOutcome(
             stored_count=1,
@@ -537,12 +589,36 @@ class PostgresMemoryStoreClient:
         else:
             params = (normalized_user_id,)
 
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                rows = cur.fetchall()
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres read failed: {exc}"
+            ) from exc
 
         documents: list[MemoryRecord] = []
         for (document_json,) in rows:
             documents.append(MemoryRecord.from_dict(json.loads(document_json)))
         return documents
+
+    def check_health(self) -> None:
+        if not self._schema_ready:
+            self._ensure_schema()
+            return
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres health check failed: {exc}"
+            ) from exc
