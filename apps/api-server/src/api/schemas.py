@@ -111,12 +111,11 @@ class CaptureWorkerExecutionPayload(ApiSchema):
     error: str | None = None
 
 
-class CaptureRagIndexExecutionPayload(ApiSchema):
-    endpoint: str
+class CaptureMemoryStoreExecutionPayload(ApiSchema):
+    backend: str
     status: Literal["success", "error", "skipped"]
-    indexedCount: int | None = None
+    storedCount: int | None = None
     totalUserMemories: dict[str, int] = Field(default_factory=dict)
-    response: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -125,7 +124,64 @@ class CaptureProcessingResponse(ApiSchema):
     service: Literal["api-server"] = "api-server"
     capture: CaptureUploadResponse
     worker: CaptureWorkerExecutionPayload
-    ragIndex: CaptureRagIndexExecutionPayload | None = None
+    memoryStore: CaptureMemoryStoreExecutionPayload | None = None
+
+
+class MemoryLocationPayload(ApiSchema):
+    name: str | None = None
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class MemorySearchRequest(ApiSchema):
+    userId: str = Field(alias="user_id", min_length=1)
+    query: str = Field(min_length=1)
+    topK: int = Field(default=5, alias="top_k", ge=1, le=20)
+
+    @validator("userId", "query")
+    def validate_non_blank_search_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class MemoryChatRequest(MemorySearchRequest):
+    conversationId: str | None = Field(default=None, alias="conversation_id")
+
+
+class MemorySearchHitPayload(ApiSchema):
+    memoryId: str
+    score: float
+    lexicalScore: float
+    matchedTerms: list[str]
+    imageKey: str | None = None
+    imageUrl: str | None = None
+    capturedAt: str | None = None
+    caption: str | None = None
+    sceneSummary: str | None = None
+    positionHint: str | None = None
+    location: MemoryLocationPayload
+    detectedObjects: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class MemorySearchResponse(ApiSchema):
+    query: str
+    totalHits: int
+    hits: list[MemorySearchHitPayload]
+
+
+class MemoryChatResponse(ApiSchema):
+    answer: str
+    answerMode: str
+    query: str
+    totalHits: int
+    hits: list[MemorySearchHitPayload]
+    citedMemoryIds: list[str] = Field(default_factory=list)
+    confidence: float | None = None
+    reason: str | None = None
 
 
 class HealthPayload(ApiSchema):

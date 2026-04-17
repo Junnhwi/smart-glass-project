@@ -4,27 +4,24 @@ import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import httpx
-
 from src.api.intake import build_capture_upload_response, build_worker_task_kwargs
 from src.api.schemas import (
+    CaptureMemoryStoreExecutionPayload,
     CaptureProcessingResponse,
-    CaptureRagIndexExecutionPayload,
     CaptureUploadRequest,
     CaptureWorkerExecutionPayload,
 )
+from src.database.memory_store import MemoryStoreOutcome, PostgresMemoryStoreClient
 
 
 @dataclass(frozen=True, slots=True)
 class CapturePipelineSettings:
     broker_url: str
     result_backend_url: str
-    enable_rag_index: bool = False
-    rag_service_base_url: str | None = None
+    enable_memory_store: bool = False
+    database_url: str | None = None
     worker_timeout_sec: float = 180.0
-    rag_timeout_sec: float = 30.0
     worker_task_name: str = "process_vision_inference"
-    rag_index_path: str = "/memories/index/vlm"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +43,12 @@ class TaskTransport(Protocol):
     ) -> CaptureTaskOutcome: ...
 
 
-class RagIndexClient(Protocol):
-    def index_vlm_result(self, worker_result: dict[str, Any]) -> dict[str, Any]: ...
+class MemoryStoreClient(Protocol):
+    backend_name: str
+
+    def persist_vlm_result(
+        self, worker_result: dict[str, Any]
+    ) -> MemoryStoreOutcome: ...
 
 
 class CeleryTaskTransport:
@@ -99,25 +100,6 @@ class CeleryTaskTransport:
         return CaptureTaskOutcome(task_id=async_result.id, result=result)
 
 
-class HttpRagIndexClient:
-    def __init__(self, *, base_url: str, request_path: str, timeout_sec: float) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._request_path = request_path
-        self._timeout_sec = timeout_sec
-
-    def index_vlm_result(self, worker_result: dict[str, Any]) -> dict[str, Any]:
-        try:
-            with httpx.Client(base_url=self._base_url, timeout=self._timeout_sec) as client:
-                response = client.post(self._request_path, json={"result": worker_result})
-                response.raise_for_status()
-                payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:  # pragma: no cover - runtime failure
-            raise CapturePipelineError(f"rag-service indexing failed: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise CapturePipelineError("rag-service returned an invalid payload")
-        return payload
-
-
 def _normalize_status(value: Any) -> str:
     return " ".join(str(value).split()).strip().lower()
 
@@ -144,6 +126,7 @@ def _default_bool(name: str, fallback: bool) -> bool:
 
 
 def build_default_capture_pipeline() -> "CaptureProcessingPipeline":
+    database_url = os.getenv("API_CAPTURE_DATABASE_URL", "").strip() or None
     settings = CapturePipelineSettings(
         broker_url=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0").strip()
         or "redis://redis:6379/0",
@@ -151,18 +134,16 @@ def build_default_capture_pipeline() -> "CaptureProcessingPipeline":
             "CELERY_RESULT_BACKEND", "redis://redis:6379/1"
         ).strip()
         or "redis://redis:6379/1",
-        enable_rag_index=_default_bool("API_CAPTURE_ENABLE_RAG_INDEX", False),
-        rag_service_base_url=os.getenv("RAG_SERVICE_URL", "").strip() or None,
+        enable_memory_store=_default_bool(
+            "API_CAPTURE_ENABLE_MEMORY_STORE",
+            bool(database_url),
+        ),
+        database_url=database_url,
         worker_timeout_sec=_default_float("API_CAPTURE_WORKER_TIMEOUT_SEC", 180.0),
-        rag_timeout_sec=_default_float("API_CAPTURE_RAG_TIMEOUT_SEC", 30.0),
         worker_task_name=os.getenv(
             "API_CAPTURE_WORKER_TASK_NAME", "process_vision_inference"
         ).strip()
         or "process_vision_inference",
-        rag_index_path=os.getenv(
-            "RAG_INDEX_PATH", "/memories/index/vlm"
-        ).strip()
-        or "/memories/index/vlm",
     )
     return CaptureProcessingPipeline.from_settings(settings)
 
@@ -173,11 +154,11 @@ class CaptureProcessingPipeline:
         *,
         settings: CapturePipelineSettings,
         task_transport: TaskTransport,
-        rag_index_client: RagIndexClient | None = None,
+        memory_store_client: MemoryStoreClient | None = None,
     ) -> None:
         self.settings = settings
         self.task_transport = task_transport
-        self.rag_index_client = rag_index_client
+        self.memory_store_client = memory_store_client
 
     @classmethod
     def from_settings(cls, settings: CapturePipelineSettings) -> "CaptureProcessingPipeline":
@@ -186,21 +167,17 @@ class CaptureProcessingPipeline:
             result_backend_url=settings.result_backend_url,
             task_name=settings.worker_task_name,
         )
-        rag_index_client = None
-        if settings.enable_rag_index:
-            if not settings.rag_service_base_url:
+        memory_store_client = None
+        if settings.enable_memory_store:
+            if not settings.database_url:
                 raise CapturePipelineError(
-                    "RAG indexing is enabled but RAG_SERVICE_URL is not configured"
+                    "Memory storage is enabled but API_CAPTURE_DATABASE_URL is not configured"
                 )
-            rag_index_client = HttpRagIndexClient(
-                base_url=settings.rag_service_base_url,
-                request_path=settings.rag_index_path,
-                timeout_sec=settings.rag_timeout_sec,
-            )
+            memory_store_client = PostgresMemoryStoreClient(settings.database_url)
         return cls(
             settings=settings,
             task_transport=task_transport,
-            rag_index_client=rag_index_client,
+            memory_store_client=memory_store_client,
         )
 
     def process(self, payload: CaptureUploadRequest) -> CaptureProcessingResponse:
@@ -217,42 +194,37 @@ class CaptureProcessingPipeline:
             message = worker_result.get("message") or "Inference worker returned an error"
             raise CapturePipelineError(str(message))
 
-        rag_index_payload = CaptureRagIndexExecutionPayload(
-            endpoint=self.settings.rag_index_path,
+        memory_store_payload = CaptureMemoryStoreExecutionPayload(
+            backend=(
+                self.memory_store_client.backend_name
+                if self.memory_store_client is not None
+                else "disabled"
+            ),
             status="skipped",
-            indexedCount=None,
+            storedCount=None,
             totalUserMemories={},
-            response=None,
             error=None,
         )
         response_status = "completed"
 
-        if self.rag_index_client is not None:
+        if self.memory_store_client is not None:
             try:
-                rag_index_result = self.rag_index_client.index_vlm_result(worker_result)
-                indexed_count = rag_index_result.get("indexed_count")
-                total_user_memories = rag_index_result.get("total_user_memories") or {}
-                if not isinstance(total_user_memories, dict):
-                    total_user_memories = {}
-                rag_index_payload = CaptureRagIndexExecutionPayload(
-                    endpoint=self.settings.rag_index_path,
+                store_outcome = self.memory_store_client.persist_vlm_result(worker_result)
+                memory_store_payload = CaptureMemoryStoreExecutionPayload(
+                    backend=self.memory_store_client.backend_name,
                     status="success",
-                    indexedCount=(
-                        indexed_count if isinstance(indexed_count, int) else None
-                    ),
-                    totalUserMemories=total_user_memories,
-                    response=rag_index_result,
+                    storedCount=store_outcome.stored_count,
+                    totalUserMemories=store_outcome.total_user_memories,
                     error=None,
                 )
-            except CapturePipelineError as exc:
+            except Exception as exc:
                 response_status = "partial"
-                rag_index_payload = CaptureRagIndexExecutionPayload(
-                    endpoint=self.settings.rag_index_path,
+                memory_store_payload = CaptureMemoryStoreExecutionPayload(
+                    backend=self.memory_store_client.backend_name,
                     status="error",
-                    indexedCount=None,
+                    storedCount=None,
                     totalUserMemories={},
-                    response=None,
-                    error=str(exc),
+                    error=f"memory store persistence failed: {exc}",
                 )
 
         return CaptureProcessingResponse(
@@ -264,5 +236,5 @@ class CaptureProcessingPipeline:
                 result=worker_result,
                 error=None,
             ),
-            ragIndex=rag_index_payload,
+            memoryStore=memory_store_payload,
         )
