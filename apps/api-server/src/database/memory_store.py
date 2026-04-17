@@ -506,6 +506,12 @@ class PostgresMemoryStoreClient:
                             ON {self.table_name} (user_id, captured_at DESC, memory_id DESC)
                             """
                         )
+                        cur.execute(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_user_id_image_key
+                            ON {self.table_name} (user_id, ((document->>'image_key')))
+                            """
+                        )
                     conn.commit()
             except MemoryStoreUnavailableError:
                 raise
@@ -605,6 +611,75 @@ class PostgresMemoryStoreClient:
         for (document_json,) in rows:
             documents.append(MemoryRecord.from_dict(json.loads(document_json)))
         return documents
+
+    def get_by_image_key(self, user_id: str, image_key: str) -> MemoryRecord | None:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_image_key = _normalize_text(image_key)
+        if not normalized_user_id or not normalized_image_key:
+            return None
+
+        self._ensure_schema()
+        query = f"""
+            SELECT document::text
+            FROM {self.table_name}
+            WHERE user_id = %s
+              AND document->>'image_key' = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (normalized_user_id, normalized_image_key))
+                    row = cur.fetchone()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres read failed: {exc}"
+            ) from exc
+
+        if not row:
+            return None
+        return MemoryRecord.from_dict(json.loads(row[0]))
+
+    def list_by_image_keys(
+        self,
+        user_id: str,
+        image_keys: list[str],
+    ) -> list[MemoryRecord]:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_image_keys = [
+            normalized
+            for normalized in (_normalize_text(image_key) for image_key in image_keys)
+            if normalized
+        ]
+        if not normalized_user_id or not normalized_image_keys:
+            return []
+
+        self._ensure_schema()
+        query = f"""
+            SELECT document::text
+            FROM {self.table_name}
+            WHERE user_id = %s
+              AND document->>'image_key' = ANY(%s)
+            ORDER BY updated_at DESC
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (normalized_user_id, normalized_image_keys))
+                    rows = cur.fetchall()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres read failed: {exc}"
+            ) from exc
+
+        return [MemoryRecord.from_dict(json.loads(document_json)) for (document_json,) in rows]
 
     def check_health(self) -> None:
         if not self._schema_ready:

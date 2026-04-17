@@ -13,6 +13,7 @@ from src.api.schemas import (
     CaptureWorkerExecutionPayload,
 )
 from src.database.memory_store import MemoryLocation, MemoryRecord
+from src.modules.media.service import GalleryItem, MediaAccessUrl
 from src.modules.search.service import GeneratedAnswer, SearchHit
 
 
@@ -120,17 +121,93 @@ class FakeMemoryQueryService:
         self.health_checked = True
 
 
+class FakeMediaAccessService:
+    def __init__(self) -> None:
+        self.last_issue_access_url_args: tuple[str, str, int] | None = None
+        self.last_issue_access_urls_args: tuple[str, tuple[str, ...], int] | None = None
+        self.last_gallery_args: tuple[str, int] | None = None
+        self.should_fail = False
+        self.should_forbid = False
+        self.health_checked = False
+        self.gallery_item = GalleryItem(
+            memory_id="mem-wallet-01",
+            image_key="captures/user-1/mem-wallet-01.jpg",
+            image_url="https://example.com/captures/mem-wallet-01.jpg",
+            captured_at="2026-04-07T08:00:00Z",
+            caption="wallet on the desk next to the keyboard",
+            scene_summary="desk scene",
+            position_hint="keyboard 옆",
+        )
+
+    def issue_access_url(
+        self,
+        *,
+        user_id: str,
+        image_key: str,
+        expires_in_sec: int | None = None,
+    ) -> MediaAccessUrl:
+        if self.should_fail:
+            raise RuntimeError("storage signer unavailable")
+        if self.should_forbid:
+            raise PermissionError("imageKey does not belong to the requested user")
+        resolved_expiration = 300 if expires_in_sec is None else expires_in_sec
+        self.last_issue_access_url_args = (user_id, image_key, resolved_expiration)
+        return MediaAccessUrl(
+            image_key=image_key,
+            access_url=f"https://signed.example.com/{image_key}?expires={resolved_expiration}",
+            expires_at="2026-04-17T00:05:00Z",
+            expires_in_sec=resolved_expiration,
+        )
+
+    def issue_access_urls(
+        self,
+        *,
+        user_id: str,
+        image_keys: list[str],
+        expires_in_sec: int | None = None,
+    ) -> list[MediaAccessUrl]:
+        if self.should_fail:
+            raise RuntimeError("storage signer unavailable")
+        if self.should_forbid:
+            raise PermissionError("imageKey does not belong to the requested user")
+        resolved_expiration = 300 if expires_in_sec is None else expires_in_sec
+        self.last_issue_access_urls_args = (
+            user_id,
+            tuple(image_keys),
+            resolved_expiration,
+        )
+        return [
+            MediaAccessUrl(
+                image_key=image_key,
+                access_url=f"https://signed.example.com/{image_key}?expires={resolved_expiration}",
+                expires_at="2026-04-17T00:05:00Z",
+                expires_in_sec=resolved_expiration,
+            )
+            for image_key in image_keys
+        ]
+
+    def list_gallery_items(self, *, user_id: str, limit: int) -> list[GalleryItem]:
+        self.last_gallery_args = (user_id, limit)
+        return [self.gallery_item]
+
+    def check_health(self) -> None:
+        self.health_checked = True
+
+
 class ApiServerCaptureIntakeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fake_pipeline = FakeCapturePipeline()
         self.fake_memory_query_service = FakeMemoryQueryService()
+        self.fake_media_access_service = FakeMediaAccessService()
         app.state.capture_pipeline = self.fake_pipeline
         app.state.memory_query_service = self.fake_memory_query_service
+        app.state.media_access_service = self.fake_media_access_service
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
         app.state.capture_pipeline = None
         app.state.memory_query_service = None
+        app.state.media_access_service = None
 
     def test_capture_processing_endpoint_runs_pipeline(self) -> None:
         payload = {
@@ -179,6 +256,99 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(body["hits"][0]["location"]["name"], "workspace")
         self.assertEqual(self.fake_memory_query_service.last_search_args, ("user-1", "\ub0b4 \uc9c0\uac11 \uc5b4\ub514\uc5d0 \uc788\uc5c8\uc9c0?", 3))
 
+    def test_media_access_url_endpoint_returns_presigned_url(self) -> None:
+        response = self.client.post(
+            "/media/access-url",
+            json={
+                "userId": "user-1",
+                "imageKey": "captures/user-1/mem-wallet-01.jpg",
+                "expiresInSec": 180,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["imageKey"], "captures/user-1/mem-wallet-01.jpg")
+        self.assertEqual(body["expiresInSec"], 180)
+        self.assertIn("https://signed.example.com/", body["accessUrl"])
+        self.assertEqual(
+            self.fake_media_access_service.last_issue_access_url_args,
+            ("user-1", "captures/user-1/mem-wallet-01.jpg", 180),
+        )
+
+    def test_media_access_url_endpoint_surfaces_signer_failure(self) -> None:
+        self.fake_media_access_service.should_fail = True
+
+        response = self.client.post(
+            "/media/access-url",
+            json={
+                "userId": "user-1",
+                "imageKey": "captures/user-1/mem-wallet-01.jpg",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("storage signer unavailable", response.json()["detail"])
+
+    def test_media_access_url_endpoint_rejects_non_owned_image(self) -> None:
+        self.fake_media_access_service.should_forbid = True
+
+        response = self.client.post(
+            "/media/access-url",
+            json={
+                "userId": "user-1",
+                "imageKey": "captures/user-2/private-photo.jpg",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not belong", response.json()["detail"])
+
+    def test_media_gallery_endpoint_returns_metadata_items(self) -> None:
+        response = self.client.post(
+            "/media/gallery",
+            json={
+                "userId": "user-1",
+                "limit": 20,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["totalItems"], 1)
+        self.assertEqual(body["items"][0]["memoryId"], "mem-wallet-01")
+        self.assertEqual(body["items"][0]["imageKey"], "captures/user-1/mem-wallet-01.jpg")
+        self.assertEqual(self.fake_media_access_service.last_gallery_args, ("user-1", 20))
+
+    def test_media_access_urls_endpoint_returns_multiple_presigned_urls(self) -> None:
+        response = self.client.post(
+            "/media/access-urls",
+            json={
+                "userId": "user-1",
+                "imageKeys": [
+                    "captures/user-1/mem-wallet-01.jpg",
+                    "captures/user-1/mem-wallet-02.jpg",
+                ],
+                "expiresInSec": 240,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["totalItems"], 2)
+        self.assertEqual(body["items"][0]["imageKey"], "captures/user-1/mem-wallet-01.jpg")
+        self.assertEqual(
+            self.fake_media_access_service.last_issue_access_urls_args,
+            (
+                "user-1",
+                (
+                    "captures/user-1/mem-wallet-01.jpg",
+                    "captures/user-1/mem-wallet-02.jpg",
+                ),
+                240,
+            ),
+        )
+
     def test_chat_endpoint_returns_answer_and_hits(self) -> None:
         response = self.client.post(
             "/chat",
@@ -223,8 +393,10 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.json()["service"], "api-server")
         self.assertEqual(response.json()["checks"]["capturePipeline"], "ok")
         self.assertEqual(response.json()["checks"]["memoryQuery"], "ok")
+        self.assertEqual(response.json()["checks"]["mediaAccess"], "ok")
         self.assertTrue(self.fake_pipeline.health_checked)
         self.assertTrue(self.fake_memory_query_service.health_checked)
+        self.assertTrue(self.fake_media_access_service.health_checked)
 
 
 if __name__ == "__main__":

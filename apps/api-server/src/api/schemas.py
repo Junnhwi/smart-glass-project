@@ -139,6 +139,82 @@ class CaptureProcessingResponse(ApiSchema):
     memoryStore: CaptureMemoryStoreExecutionPayload | None = None
 
 
+class MediaAccessUrlRequest(ApiSchema):
+    userId: str = Field(min_length=1)
+    imageKey: str = Field(min_length=1)
+    expiresInSec: int = Field(default=300, ge=30, le=3600)
+
+    @validator("userId", "imageKey")
+    def validate_non_blank_media_access_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class MediaAccessUrlResponse(ApiSchema):
+    imageKey: str
+    accessUrl: str
+    expiresAt: str
+    expiresInSec: int
+
+
+class MediaBatchAccessUrlRequest(ApiSchema):
+    userId: str = Field(min_length=1)
+    imageKeys: list[str] = Field(min_items=1, max_items=100)
+    expiresInSec: int = Field(default=300, ge=30, le=3600)
+
+    @validator("userId")
+    def validate_non_blank_media_batch_user_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    @validator("imageKeys")
+    def validate_image_keys(cls, image_keys: list[str]) -> list[str]:
+        normalized_values = [
+            " ".join(value.split())
+            for value in image_keys
+            if " ".join(value.split())
+        ]
+        if not normalized_values:
+            raise ValueError("must include at least one non-blank imageKey")
+        return normalized_values
+
+
+class MediaBatchAccessUrlResponse(ApiSchema):
+    totalItems: int
+    items: list[MediaAccessUrlResponse]
+
+
+class MediaGalleryRequest(ApiSchema):
+    userId: str = Field(min_length=1)
+    limit: int = Field(default=50, ge=1, le=200)
+
+    @validator("userId")
+    def validate_non_blank_media_gallery_user_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class MediaGalleryItemPayload(ApiSchema):
+    memoryId: str
+    imageKey: str
+    imageUrl: str | None = None
+    capturedAt: str | None = None
+    caption: str | None = None
+    sceneSummary: str | None = None
+    positionHint: str | None = None
+
+
+class MediaGalleryResponse(ApiSchema):
+    totalItems: int
+    items: list[MediaGalleryItemPayload]
+
+
 class MemoryLocationPayload(ApiSchema):
     name: str | None = None
     address: str | None = None
