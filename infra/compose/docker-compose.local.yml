@@ -142,14 +142,12 @@ services:
       - ../../.env
     depends_on:
       - redis
-      - rag-service
       - inference-worker
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
-      - RAG_SERVICE_URL=http://rag-service:8000
+      - API_CAPTURE_ENABLE_RAG_INDEX=${API_CAPTURE_ENABLE_RAG_INDEX:-0}
       - API_CAPTURE_WORKER_TIMEOUT_SEC=180
-      - API_CAPTURE_RAG_TIMEOUT_SEC=30
     ports:
       - "8002:8000"
     healthcheck:

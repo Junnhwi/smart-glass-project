@@ -59,10 +59,10 @@ class FakeCapturePipeline:
             ),
             ragIndex=CaptureRagIndexExecutionPayload(
                 endpoint="/memories/index/vlm",
-                status="success",
-                indexedCount=1,
-                totalUserMemories={"user-1": 1},
-                response={"indexed_count": 1, "total_user_memories": {"user-1": 1}},
+                status="skipped",
+                indexedCount=None,
+                totalUserMemories={},
+                response=None,
                 error=None,
             ),
         )
@@ -102,8 +102,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(body["worker"]["taskId"], "task-123")
         self.assertEqual(body["worker"]["status"], "success")
         self.assertEqual(body["ragIndex"]["endpoint"], "/memories/index/vlm")
-        self.assertEqual(body["ragIndex"]["indexedCount"], 1)
-        self.assertEqual(body["ragIndex"]["totalUserMemories"]["user-1"], 1)
+        self.assertEqual(body["ragIndex"]["status"], "skipped")
         self.assertIsNotNone(self.fake_pipeline.last_payload)
         self.assertEqual(self.fake_pipeline.last_payload.userId, "user-1")
 

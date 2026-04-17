@@ -32,8 +32,8 @@ def create_app() -> FastAPI:
             ],
             "notes": (
                 "This service accepts capture registrations, dispatches the "
-                "inference worker, and forwards successful VLM results to "
-                "rag-service for indexing."
+                "inference worker, and can optionally forward successful "
+                "VLM results to downstream indexing services."
             ),
         }
 

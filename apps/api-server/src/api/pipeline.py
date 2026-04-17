@@ -19,7 +19,8 @@ from src.api.schemas import (
 class CapturePipelineSettings:
     broker_url: str
     result_backend_url: str
-    rag_service_base_url: str
+    enable_rag_index: bool = False
+    rag_service_base_url: str | None = None
     worker_timeout_sec: float = 180.0
     rag_timeout_sec: float = 30.0
     worker_task_name: str = "process_vision_inference"
@@ -131,6 +132,17 @@ def _default_float(name: str, fallback: float) -> float:
         return fallback
 
 
+def _default_bool(name: str, fallback: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return fallback
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return fallback
+
+
 def build_default_capture_pipeline() -> "CaptureProcessingPipeline":
     settings = CapturePipelineSettings(
         broker_url=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0").strip()
@@ -139,10 +151,8 @@ def build_default_capture_pipeline() -> "CaptureProcessingPipeline":
             "CELERY_RESULT_BACKEND", "redis://redis:6379/1"
         ).strip()
         or "redis://redis:6379/1",
-        rag_service_base_url=os.getenv(
-            "RAG_SERVICE_URL", "http://rag-service:8000"
-        ).strip()
-        or "http://rag-service:8000",
+        enable_rag_index=_default_bool("API_CAPTURE_ENABLE_RAG_INDEX", False),
+        rag_service_base_url=os.getenv("RAG_SERVICE_URL", "").strip() or None,
         worker_timeout_sec=_default_float("API_CAPTURE_WORKER_TIMEOUT_SEC", 180.0),
         rag_timeout_sec=_default_float("API_CAPTURE_RAG_TIMEOUT_SEC", 30.0),
         worker_task_name=os.getenv(
@@ -163,7 +173,7 @@ class CaptureProcessingPipeline:
         *,
         settings: CapturePipelineSettings,
         task_transport: TaskTransport,
-        rag_index_client: RagIndexClient,
+        rag_index_client: RagIndexClient | None = None,
     ) -> None:
         self.settings = settings
         self.task_transport = task_transport
@@ -176,11 +186,17 @@ class CaptureProcessingPipeline:
             result_backend_url=settings.result_backend_url,
             task_name=settings.worker_task_name,
         )
-        rag_index_client = HttpRagIndexClient(
-            base_url=settings.rag_service_base_url,
-            request_path=settings.rag_index_path,
-            timeout_sec=settings.rag_timeout_sec,
-        )
+        rag_index_client = None
+        if settings.enable_rag_index:
+            if not settings.rag_service_base_url:
+                raise CapturePipelineError(
+                    "RAG indexing is enabled but RAG_SERVICE_URL is not configured"
+                )
+            rag_index_client = HttpRagIndexClient(
+                base_url=settings.rag_service_base_url,
+                request_path=settings.rag_index_path,
+                timeout_sec=settings.rag_timeout_sec,
+            )
         return cls(
             settings=settings,
             task_transport=task_transport,
@@ -201,14 +217,46 @@ class CaptureProcessingPipeline:
             message = worker_result.get("message") or "Inference worker returned an error"
             raise CapturePipelineError(str(message))
 
-        rag_index_result = self.rag_index_client.index_vlm_result(worker_result)
-        indexed_count = rag_index_result.get("indexed_count")
-        total_user_memories = rag_index_result.get("total_user_memories") or {}
-        if not isinstance(total_user_memories, dict):
-            total_user_memories = {}
+        rag_index_payload = CaptureRagIndexExecutionPayload(
+            endpoint=self.settings.rag_index_path,
+            status="skipped",
+            indexedCount=None,
+            totalUserMemories={},
+            response=None,
+            error=None,
+        )
+        response_status = "completed"
+
+        if self.rag_index_client is not None:
+            try:
+                rag_index_result = self.rag_index_client.index_vlm_result(worker_result)
+                indexed_count = rag_index_result.get("indexed_count")
+                total_user_memories = rag_index_result.get("total_user_memories") or {}
+                if not isinstance(total_user_memories, dict):
+                    total_user_memories = {}
+                rag_index_payload = CaptureRagIndexExecutionPayload(
+                    endpoint=self.settings.rag_index_path,
+                    status="success",
+                    indexedCount=(
+                        indexed_count if isinstance(indexed_count, int) else None
+                    ),
+                    totalUserMemories=total_user_memories,
+                    response=rag_index_result,
+                    error=None,
+                )
+            except CapturePipelineError as exc:
+                response_status = "partial"
+                rag_index_payload = CaptureRagIndexExecutionPayload(
+                    endpoint=self.settings.rag_index_path,
+                    status="error",
+                    indexedCount=None,
+                    totalUserMemories={},
+                    response=None,
+                    error=str(exc),
+                )
 
         return CaptureProcessingResponse(
-            status="completed",
+            status=response_status,
             capture=capture_response,
             worker=CaptureWorkerExecutionPayload(
                 taskId=task_outcome.task_id,
@@ -216,12 +264,5 @@ class CaptureProcessingPipeline:
                 result=worker_result,
                 error=None,
             ),
-            ragIndex=CaptureRagIndexExecutionPayload(
-                endpoint=self.settings.rag_index_path,
-                status="success",
-                indexedCount=indexed_count if isinstance(indexed_count, int) else None,
-                totalUserMemories=total_user_memories,
-                response=rag_index_result,
-                error=None,
-            ),
+            ragIndex=rag_index_payload,
         )
