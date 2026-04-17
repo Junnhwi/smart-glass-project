@@ -13,7 +13,11 @@ from src.api.schemas import (
     CaptureWorkerExecutionPayload,
 )
 from src.database.memory_store import MemoryLocation, MemoryRecord
-from src.modules.media.service import GalleryItem, MediaAccessUrl
+from src.modules.media.service import (
+    GalleryItem,
+    MediaAccessUrl,
+    MediaUrlSignerConfigError,
+)
 from src.modules.search.service import GeneratedAnswer, SearchHit
 
 
@@ -127,6 +131,7 @@ class FakeMediaAccessService:
         self.last_issue_access_urls_args: tuple[str, tuple[str, ...], int] | None = None
         self.last_gallery_args: tuple[str, int] | None = None
         self.should_fail = False
+        self.should_configure_fail = False
         self.should_forbid = False
         self.health_checked = False
         self.gallery_item = GalleryItem(
@@ -146,6 +151,8 @@ class FakeMediaAccessService:
         image_key: str,
         expires_in_sec: int | None = None,
     ) -> MediaAccessUrl:
+        if self.should_configure_fail:
+            raise MediaUrlSignerConfigError("Missing required bucket configuration")
         if self.should_fail:
             raise RuntimeError("storage signer unavailable")
         if self.should_forbid:
@@ -166,6 +173,8 @@ class FakeMediaAccessService:
         image_keys: list[str],
         expires_in_sec: int | None = None,
     ) -> list[MediaAccessUrl]:
+        if self.should_configure_fail:
+            raise MediaUrlSignerConfigError("Missing required bucket configuration")
         if self.should_fail:
             raise RuntimeError("storage signer unavailable")
         if self.should_forbid:
@@ -290,6 +299,35 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("storage signer unavailable", response.json()["detail"])
 
+    def test_media_access_endpoints_treat_config_errors_as_server_errors(self) -> None:
+        self.fake_media_access_service.should_configure_fail = True
+
+        cases = [
+            (
+                "/media/access-url",
+                {
+                    "userId": "user-1",
+                    "imageKey": "captures/user-1/mem-wallet-01.jpg",
+                },
+            ),
+            (
+                "/media/access-urls",
+                {
+                    "userId": "user-1",
+                    "imageKeys": [
+                        "captures/user-1/mem-wallet-01.jpg",
+                        "captures/user-1/mem-wallet-02.jpg",
+                    ],
+                },
+            ),
+        ]
+
+        for path, payload in cases:
+            with self.subTest(path=path):
+                response = self.client.post(path, json=payload)
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("bucket", response.json()["detail"].lower())
+
     def test_media_access_url_endpoint_rejects_non_owned_image(self) -> None:
         self.fake_media_access_service.should_forbid = True
 
@@ -353,9 +391,9 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         response = self.client.post(
             "/chat",
             json={
-                "userId": "user-1",
+                "user_id": "user-1",
                 "query": "\uc9c0\uac11 \uc5b4\ub514 \uc788\uc5c8\uc5b4?",
-                "topK": 2,
+                "top_k": 2,
             },
         )
 

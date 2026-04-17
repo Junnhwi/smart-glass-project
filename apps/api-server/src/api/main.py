@@ -26,6 +26,7 @@ from src.api.schemas import (
 from src.modules.media.service import (
     GalleryItem,
     MediaAccessUrl,
+    MediaUrlSignerConfigError,
     build_default_media_access_service,
 )
 from src.modules.search.service import (
@@ -228,6 +229,8 @@ def create_app() -> FastAPI:
                 user_id=payload.userId,
                 limit=payload.limit,
             )
+        except MediaUrlSignerConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -249,6 +252,8 @@ def create_app() -> FastAPI:
                 image_key=payload.imageKey,
                 expires_in_sec=payload.expiresInSec,
             )
+        except MediaUrlSignerConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PermissionError as exc:
@@ -269,6 +274,8 @@ def create_app() -> FastAPI:
                 image_keys=payload.imageKeys,
                 expires_in_sec=payload.expiresInSec,
             )
+        except MediaUrlSignerConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PermissionError as exc:

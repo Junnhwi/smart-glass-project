@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from src.database.memory_store import MemoryLocation, MemoryRecord
-from src.modules.media.service import MediaAccessService, S3MediaUrlSigner
+from src.modules.media.service import (
+    MediaAccessService,
+    MediaUrlSignerConfigError,
+    S3MediaUrlSigner,
+)
 
 
 class FakeS3Client:
@@ -127,6 +132,16 @@ class MediaUrlSignerTests(unittest.TestCase):
             "expiresInSec must be between 30 and 3600",
         ):
             signer.sign_get_object("captures/user-1/photo.jpg", expires_in_sec=10)
+
+    def test_check_health_requires_bucket_configuration(self) -> None:
+        signer = S3MediaUrlSigner(
+            client=FakeS3Client(),
+            default_expiration_sec=300,
+        )
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(MediaUrlSignerConfigError):
+                signer.check_health()
 
     def test_media_access_service_lists_gallery_items(self) -> None:
         repository = FakeMediaRepository(

@@ -22,7 +22,7 @@ class MediaUrlSignerError(RuntimeError):
     pass
 
 
-class MediaUrlSignerConfigError(ValueError, MediaUrlSignerError):
+class MediaUrlSignerConfigError(MediaUrlSignerError):
     pass
 
 
@@ -217,6 +217,7 @@ class S3MediaUrlSigner:
         )
 
     def check_health(self) -> None:
+        self._resolve_bucket_name()
         self._get_client()
 
 
