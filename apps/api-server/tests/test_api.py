@@ -425,6 +425,49 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.inferenceRequest.sourceImage.imageKey, "captures/user-2/2026/04/07/capture-002-cafe-table.png")
         self.assertEqual(response.sourceImage.fileName, "cafe-table.png")
 
+    def test_capture_registration_normalizes_explicit_image_key(self) -> None:
+        payload = {
+            "captureId": "capture-003",
+            "requestId": "req-003",
+            "memoryId": "mem-003",
+            "userId": "user-3",
+            "capturedAt": "2026-04-07T11:00:00Z",
+            "sourceImage": {
+                "imageKey": " captures//user-3//2026/04/07//photo.jpg ",
+            },
+        }
+
+        response = self.client.post("/media/captures", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            body["capture"]["sourceImage"]["imageKey"],
+            "captures/user-3/2026/04/07/photo.jpg",
+        )
+        self.assertEqual(body["capture"]["sourceImage"]["fileName"], "photo.jpg")
+        self.assertEqual(
+            body["worker"]["result"]["sourceImage"]["imageKey"],
+            "captures/user-3/2026/04/07/photo.jpg",
+        )
+
+    def test_capture_registration_rejects_url_as_image_key(self) -> None:
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-004",
+                "requestId": "req-004",
+                "memoryId": "mem-004",
+                "userId": "user-4",
+                "sourceImage": {
+                    "imageKey": "https://storage.example.com/captures/user-4/photo.jpg",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("relative object key", response.json()["detail"])
+
     def test_health_ready(self) -> None:
         response = self.client.get("/health/ready")
         self.assertEqual(response.status_code, 200)

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from src.database.memory_store import MemoryRecord, PostgresMemoryStoreClient
+from src.modules.media.object_keys import normalize_storage_object_key
 
 try:  # pragma: no cover - optional runtime dependency
     import boto3
@@ -182,9 +183,7 @@ class S3MediaUrlSigner:
         expires_in_sec: int | None = None,
         bucket_name: str | None = None,
     ) -> MediaAccessUrl:
-        normalized_key = _normalize_text(image_key)
-        if not normalized_key:
-            raise ValueError("imageKey must not be blank")
+        normalized_key = normalize_storage_object_key(image_key)
 
         resolved_expiration = self._resolve_expiration(expires_in_sec)
         resolved_bucket_name = self._resolve_bucket_name(bucket_name)
@@ -247,9 +246,7 @@ class MediaAccessService:
         expires_in_sec: int | None = None,
     ) -> MediaAccessUrl:
         normalized_user_id = self._normalize_user_id(user_id)
-        normalized_image_key = _normalize_text(image_key)
-        if not normalized_image_key:
-            raise ValueError("imageKey must not be blank")
+        normalized_image_key = normalize_storage_object_key(image_key)
 
         record = self.repository.get_by_image_key(normalized_user_id, normalized_image_key)
         if record is None:
@@ -273,8 +270,10 @@ class MediaAccessService:
         ordered_keys: list[str] = []
         seen: set[str] = set()
         for image_key in image_keys:
-            normalized_image_key = _normalize_text(image_key)
-            if not normalized_image_key or normalized_image_key in seen:
+            if not _normalize_text(image_key):
+                continue
+            normalized_image_key = normalize_storage_object_key(image_key)
+            if normalized_image_key in seen:
                 continue
             ordered_keys.append(normalized_image_key)
             seen.add(normalized_image_key)

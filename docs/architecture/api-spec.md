@@ -144,6 +144,9 @@ Current reference files:
 ## Storage Notes
 
 - Original images stay in object storage.
+- Capture image object keys use the canonical `captures/{userId}/{yyyy}/{mm}/{dd}/{captureId}-{fileName}` shape.
+- Explicit `imageKey` values are normalized and validated before worker dispatch or signed URL generation.
 - Normalized memory documents are stored in PostgreSQL as JSONB.
 - Search is currently based on recent-history retrieval plus keyword/location matching.
 - A separate vector database is not part of the default architecture.
+- Detailed key policy: [object-storage-keys.md](./object-storage-keys.md)
