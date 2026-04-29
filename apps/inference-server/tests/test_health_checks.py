@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.health.checks import check_model_config, check_storage
+from src.health.checks import build_health_summary, check_model_config, check_storage
 from src.storage.s3 import StorageAccessError
 
 
@@ -152,6 +152,21 @@ class StorageHealthCheckTestCase(unittest.TestCase):
         self.assertEqual(
             detail["executionPolicy"]["fallbackModelKey"], "qwen2.5-vl-3b"
         )
+
+    def test_build_health_summary_treats_missing_status_as_failing(self) -> None:
+        summary = build_health_summary(
+            {
+                "api": {"status": "ok"},
+                "queue": {"message": "missing status"},
+                "storage": {"status": "error"},
+            }
+        )
+
+        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["passing"], 1)
+        self.assertEqual(summary["failing"], 2)
+        self.assertEqual(summary["failingChecks"], ["queue", "storage"])
+        self.assertEqual(summary["statuses"]["queue"], "unknown")
 
 
 if __name__ == "__main__":
