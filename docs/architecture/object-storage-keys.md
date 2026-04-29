@@ -32,6 +32,14 @@ The following values are rejected:
 - path traversal segments such as `.` or `..`
 - control characters
 
+Capture registration applies one additional boundary: explicit capture keys must stay under the requesting user's canonical prefix:
+
+```text
+captures/{userId}/...
+```
+
+For example, a request with `userId=user-1` may pass `captures/user-1/photo.jpg`, but it may not pass `captures/user-2/photo.jpg` or `private/photo.jpg`.
+
 ## Ownership Boundary
 
 Object keys identify storage objects, but they do not prove ownership by themselves.

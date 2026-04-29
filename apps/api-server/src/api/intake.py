@@ -17,7 +17,7 @@ from src.api.schemas import (
 )
 from src.modules.media.object_keys import (
     build_capture_object_key,
-    normalize_storage_object_key,
+    normalize_capture_object_key_for_user,
     object_key_file_name,
 )
 
@@ -81,7 +81,10 @@ def _resolve_source_image(payload: CaptureUploadRequest, capture_id: str, captur
     source_image = payload.sourceImage or CaptureSourceImagePayload()
     explicit_image_key = _normalize_text(source_image.imageKey) or _normalize_text(payload.imageKey)
     normalized_image_key = (
-        normalize_storage_object_key(explicit_image_key)
+        normalize_capture_object_key_for_user(
+            explicit_image_key,
+            user_id=payload.userId,
+        )
         if explicit_image_key
         else None
     )
