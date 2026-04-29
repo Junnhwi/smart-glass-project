@@ -79,6 +79,22 @@ def _resolve_bucket_name(bucket_name: str | None = None) -> str:
     return normalized
 
 
+def _normalize_object_key(key: str) -> str:
+    if key is None:
+        raise ValueError("storage object key must not be blank")
+
+    normalized = str(key).strip()
+    if not normalized:
+        raise ValueError("storage object key must not be blank")
+    if normalized.startswith("/"):
+        raise ValueError("storage object key must be relative")
+
+    segments = normalized.split("/")
+    if any(segment in {".", ".."} for segment in segments):
+        raise ValueError("storage object key must not contain path traversal segments")
+    return normalized
+
+
 def _build_s3_client():
     client_kwargs: dict[str, Any] = {
         "service_name": "s3",
@@ -185,23 +201,24 @@ class S3StorageService:
         *,
         bucket_name: str | None = None,
     ) -> StorageObject:
+        normalized_key = _normalize_object_key(key)
         resolved_bucket_name = self._resolve_bucket_name(bucket_name)
         try:
             response = self._get_client().get_object(
                 Bucket=resolved_bucket_name,
-                Key=key,
+                Key=normalized_key,
             )
         except (ClientError, BotoCoreError, StorageError) as exc:
             raise _translate_client_error(
                 action="read",
                 bucket_name=resolved_bucket_name,
-                key=key,
+                key=normalized_key,
                 error=exc,
             ) from exc
 
         return StorageObject(
             bucket_name=resolved_bucket_name,
-            key=key,
+            key=normalized_key,
             body=response["Body"].read(),
             content_type=response.get("ContentType"),
         )
@@ -214,10 +231,11 @@ class S3StorageService:
         content_type: str | None = None,
         bucket_name: str | None = None,
     ) -> None:
+        normalized_key = _normalize_object_key(key)
         resolved_bucket_name = self._resolve_bucket_name(bucket_name)
         put_kwargs = {
             "Bucket": resolved_bucket_name,
-            "Key": key,
+            "Key": normalized_key,
             "Body": body,
         }
         if content_type:
@@ -229,7 +247,7 @@ class S3StorageService:
             raise _translate_client_error(
                 action="write",
                 bucket_name=resolved_bucket_name,
-                key=key,
+                key=normalized_key,
                 error=exc,
             ) from exc
 

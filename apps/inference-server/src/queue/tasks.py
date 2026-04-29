@@ -2,7 +2,7 @@ import os
 import io
 from dataclasses import dataclass
 from celery import Celery
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from celery.signals import worker_init
 from PIL import Image, UnidentifiedImageError
 
@@ -32,6 +32,20 @@ result_backend = os.getenv("CELERY_RESULT_BACKEND", broker_url)
 app = Celery("inference_tasks", broker=broker_url, backend=result_backend)
 
 TASK_SOFT_TIME_LIMIT_SECONDS, TASK_TIME_LIMIT_SECONDS = resolve_task_time_limits()
+
+
+def _nonnegative_int_env(name: str, fallback: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return fallback
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return fallback
+
+
+TASK_MAX_RETRIES = _nonnegative_int_env("VISION_TASK_MAX_RETRIES", 2)
+TASK_RETRY_DELAY_SECONDS = _nonnegative_int_env("VISION_TASK_RETRY_DELAY_SEC", 10)
 
 app.conf.update(
     task_track_started=True,
@@ -103,12 +117,40 @@ def _build_error_details(
     }
 
 
+def _task_called_directly(task_request: object | None) -> bool:
+    return bool(getattr(task_request, "called_directly", False))
+
+
+def _task_retry_count(task_request: object | None) -> int:
+    try:
+        return max(0, int(getattr(task_request, "retries", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _should_retry_task(
+    *,
+    retryable: bool,
+    task_request: object | None,
+    max_retries: int = TASK_MAX_RETRIES,
+) -> bool:
+    if not retryable or max_retries <= 0:
+        return False
+    if _task_called_directly(task_request):
+        return False
+    return _task_retry_count(task_request) < max_retries
+
+
 @app.task(
+    bind=True,
     name="process_vision_inference",
     soft_time_limit=TASK_SOFT_TIME_LIMIT_SECONDS,
     time_limit=TASK_TIME_LIMIT_SECONDS,
+    max_retries=TASK_MAX_RETRIES,
+    default_retry_delay=TASK_RETRY_DELAY_SECONDS,
 )
 def process_vision_inference(
+    self,
     image_key,
     user_id,
     memory_id=None,
@@ -231,12 +273,38 @@ def process_vision_inference(
             pipeline_output=pipeline_output,
             execution_policy=execution_policy_payload,
         )
+    except Retry:
+        raise
     except Exception as e:
         failure_policy = _classify_inference_error(e)
         error_details = _build_error_details(
             error=e,
             failure_policy=failure_policy,
         )
+        task_request = getattr(self, "request", None)
+        retry_count = _task_retry_count(task_request)
+        
+        if _should_retry_task(retryable=failure_policy.retryable, task_request=task_request):
+            logger.warning(
+                "Inference task failed with retryable error, scheduling retry",
+                extra={
+                    "task_name": "process_vision_inference",
+                    "request_id": resolved_request_id,
+                    "image_key": image_key,
+                    "memory_id": memory_id,
+                    "user_id": user_id,
+                    "model_key": model_key,
+                    "model_mode": model_mode,
+                    "quantization": quantization,
+                    "settings_source": settings_source,
+                    "error_code": failure_policy.error_code,
+                    "retry_count": retry_count,
+                    "max_retries": TASK_MAX_RETRIES,
+                    "retry_delay_sec": TASK_RETRY_DELAY_SECONDS,
+                },
+            )
+            raise self.retry(exc=e, countdown=TASK_RETRY_DELAY_SECONDS)
+
         logger.exception(
             "Inference task failed",
             extra={
@@ -254,6 +322,8 @@ def process_vision_inference(
                 "error_code": failure_policy.error_code,
                 "retryable": failure_policy.retryable,
                 "failure_category": failure_policy.category,
+                "retry_count": retry_count,
+                "max_retries": TASK_MAX_RETRIES,
             },
         )
         return build_vlm_error_result(

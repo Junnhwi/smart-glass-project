@@ -1,12 +1,13 @@
 import io
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from celery.exceptions import SoftTimeLimitExceeded
 from PIL import Image
 
-from src.queue.tasks import process_vision_inference
+from src.queue.tasks import _should_retry_task, process_vision_inference
 from src.storage.s3 import StorageAccessError, StorageNotFoundError, StorageObject
 
 
@@ -205,6 +206,25 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["errorDetails"]["reason"], "invalid_source_image")
         self.assertFalse(result["errorDetails"]["retryable"])
 
+    def test_process_vision_inference_marks_invalid_object_key_as_non_retryable(
+        self,
+    ) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(
+                ValueError("storage object key must not be blank")
+            ),
+        ):
+            result = process_vision_inference(
+                image_key="   ",
+                user_id="user-1",
+                request_id="req-invalid-key-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "invalid_inference_request")
+        self.assertFalse(result["retryable"])
+
     def test_process_vision_inference_marks_timeout_as_retryable_timeout_error(self) -> None:
         with patch(
             "src.queue.tasks.get_storage_service",
@@ -234,6 +254,50 @@ class TaskContractTestCase(unittest.TestCase):
             result["errorDetails"]["taskTimeLimit"],
             {"softSec": 120, "hardSec": 150},
         )
+
+    def test_worker_retry_policy_skips_direct_calls(self) -> None:
+        task_request = SimpleNamespace(called_directly=True, retries=0)
+
+        should_retry = _should_retry_task(
+            retryable=True,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertFalse(should_retry)
+
+    def test_worker_retry_policy_allows_retryable_worker_attempt(self) -> None:
+        task_request = SimpleNamespace(called_directly=False, retries=1)
+
+        should_retry = _should_retry_task(
+            retryable=True,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertTrue(should_retry)
+
+    def test_worker_retry_policy_stops_at_max_retries(self) -> None:
+        task_request = SimpleNamespace(called_directly=False, retries=2)
+
+        should_retry = _should_retry_task(
+            retryable=True,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertFalse(should_retry)
+
+    def test_worker_retry_policy_skips_non_retryable_errors(self) -> None:
+        task_request = SimpleNamespace(called_directly=False, retries=0)
+
+        should_retry = _should_retry_task(
+            retryable=False,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertFalse(should_retry)
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"
