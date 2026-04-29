@@ -230,6 +230,53 @@ def _get_vram_usage() -> Dict[str, float]:
     }
 
 
+def _new_pipeline_profile() -> Dict[str, Dict[str, Any]]:
+    return {
+        "stage_timings_sec": {},
+        "stage_call_counts": {},
+    }
+
+
+def _record_profiled_stage(
+    profile: Dict[str, Dict[str, Any]],
+    stage_name: str,
+    started_at: float,
+) -> None:
+    elapsed_sec = max(0.0, time.perf_counter() - started_at)
+    timings = profile["stage_timings_sec"]
+    call_counts = profile["stage_call_counts"]
+    timings[stage_name] = round(float(timings.get(stage_name, 0.0)) + elapsed_sec, 4)
+    call_counts[stage_name] = int(call_counts.get(stage_name, 0)) + 1
+
+
+def _run_profiled_stage(
+    profile: Dict[str, Dict[str, Any]],
+    stage_name: str,
+    callback: Any,
+) -> Any:
+    stage_started_at = time.perf_counter()
+    try:
+        return callback()
+    finally:
+        _record_profiled_stage(profile, stage_name, stage_started_at)
+
+
+def _build_pipeline_diagnostics(
+    profile: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    timings = dict(profile["stage_timings_sec"])
+    slowest_stage = None
+    if timings:
+        slowest_stage = max(timings, key=timings.get)
+
+    return {
+        "stage_timings_sec": timings,
+        "stage_call_counts": dict(profile["stage_call_counts"]),
+        "stage_total_sec": round(sum(timings.values()), 4),
+        "slowest_stage": slowest_stage,
+    }
+
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -539,67 +586,97 @@ def generate_qwen_vlm_metadata(
         device=resolved_device,
         dtype_name=dtype_name,
     )
+    original_image = image.convert("RGB")
+    original_width, original_height = original_image.size
+    max_image_pixels = _resolve_max_image_pixels(spec)
     resolved_image = _downscale_image_if_needed(
-        image.convert("RGB"),
-        max_image_pixels=_resolve_max_image_pixels(spec),
+        original_image,
+        max_image_pixels=max_image_pixels,
     )
+    processed_width, processed_height = resolved_image.size
 
     if torch.cuda.is_available() and device_name.startswith("cuda"):
         torch.cuda.reset_peak_memory_stats()
 
     started_at = time.perf_counter()
-    object_list = _get_object_list(
-        image=resolved_image,
-        model=model,
-        processor=processor,
-        device_name=device_name,
-        process_vision_info=process_vision_info,
-    )
-    scene_info = _get_scene_summary(
-        image=resolved_image,
-        model=model,
-        processor=processor,
-        device_name=device_name,
-        process_vision_info=process_vision_info,
-    )
-
-    objects: List[Dict[str, Any]] = []
-    for index, object_name in enumerate(object_list, start=1):
-        detail = _get_object_detail(
+    pipeline_profile = _new_pipeline_profile()
+    object_list = _run_profiled_stage(
+        pipeline_profile,
+        "object_list",
+        lambda: _get_object_list(
             image=resolved_image,
-            object_name=object_name,
-            object_id=index,
             model=model,
             processor=processor,
             device_name=device_name,
             process_vision_info=process_vision_info,
+        ),
+    )
+    scene_info = _run_profiled_stage(
+        pipeline_profile,
+        "scene_summary",
+        lambda: _get_scene_summary(
+            image=resolved_image,
+            model=model,
+            processor=processor,
+            device_name=device_name,
+            process_vision_info=process_vision_info,
+        ),
+    )
+
+    objects: List[Dict[str, Any]] = []
+    for index, object_name in enumerate(object_list, start=1):
+        detail = _run_profiled_stage(
+            pipeline_profile,
+            "object_detail",
+            lambda object_name=object_name, index=index: _get_object_detail(
+                image=resolved_image,
+                object_name=object_name,
+                object_id=index,
+                model=model,
+                processor=processor,
+                device_name=device_name,
+                process_vision_info=process_vision_info,
+            ),
         )
         if detail is not None:
             objects.append(detail)
 
-    nearby_candidates = collect_nearby_candidate_names(objects)
+    initial_detail_count = len(objects)
+    nearby_candidates = _run_profiled_stage(
+        pipeline_profile,
+        "nearby_candidate_collection",
+        lambda: collect_nearby_candidate_names(objects),
+    )
     all_candidates = [item["name"] for item in objects] + nearby_candidates
-    deduped_list = _deduplicate_with_vlm(
-        image=resolved_image,
-        object_list=all_candidates,
-        model=model,
-        processor=processor,
-        device_name=device_name,
-        process_vision_info=process_vision_info,
+    deduped_list = _run_profiled_stage(
+        pipeline_profile,
+        "deduplicate",
+        lambda: _deduplicate_with_vlm(
+            image=resolved_image,
+            object_list=all_candidates,
+            model=model,
+            processor=processor,
+            device_name=device_name,
+            process_vision_info=process_vision_info,
+        ),
     )
 
     existing_names = {item["name"] for item in objects}
     for object_name in deduped_list:
         if object_name in existing_names:
             continue
-        detail = _get_object_detail(
-            image=resolved_image,
-            object_name=object_name,
-            object_id=len(objects) + 1,
-            model=model,
-            processor=processor,
-            device_name=device_name,
-            process_vision_info=process_vision_info,
+        detail = _run_profiled_stage(
+            pipeline_profile,
+            "object_detail",
+            lambda object_name=object_name: _get_object_detail(
+                image=resolved_image,
+                object_name=object_name,
+                object_id=len(objects) + 1,
+                model=model,
+                processor=processor,
+                device_name=device_name,
+                process_vision_info=process_vision_info,
+            ),
         )
         if detail is not None:
             objects.append(detail)
@@ -608,23 +685,31 @@ def generate_qwen_vlm_metadata(
     deduped_set = set(deduped_list)
     objects = [item for item in objects if item["name"] in deduped_set]
 
-    missing_objects = _check_missing_objects_with_vlm(
-        image=resolved_image,
-        current_names=[item["name"] for item in objects],
-        model=model,
-        processor=processor,
-        device_name=device_name,
-        process_vision_info=process_vision_info,
-    )
-    for object_name in missing_objects:
-        detail = _get_object_detail(
+    missing_objects = _run_profiled_stage(
+        pipeline_profile,
+        "missing_object_check",
+        lambda: _check_missing_objects_with_vlm(
             image=resolved_image,
-            object_name=object_name,
-            object_id=len(objects) + 1,
+            current_names=[item["name"] for item in objects],
             model=model,
             processor=processor,
             device_name=device_name,
             process_vision_info=process_vision_info,
+        ),
+    )
+    for object_name in missing_objects:
+        detail = _run_profiled_stage(
+            pipeline_profile,
+            "object_detail",
+            lambda object_name=object_name: _get_object_detail(
+                image=resolved_image,
+                object_name=object_name,
+                object_id=len(objects) + 1,
+                model=model,
+                processor=processor,
+                device_name=device_name,
+                process_vision_info=process_vision_info,
+            ),
         )
         if detail is not None:
             objects.append(detail)
@@ -637,6 +722,7 @@ def generate_qwen_vlm_metadata(
     location_context = scene_info.get("location_context") or "알 수 없음"
     sharpness_score = _calculate_sharpness(resolved_image)
     vram_info = _get_vram_usage()
+    pipeline_diagnostics = _build_pipeline_diagnostics(pipeline_profile)
     metadata = {
         "caption": scene_summary,
         "sceneSummary": scene_summary,
@@ -662,6 +748,25 @@ def generate_qwen_vlm_metadata(
             "vram_allocated_gb": vram_info.get("allocated_gb"),
             "vram_peak_gb": vram_info.get("max_allocated_gb"),
             "vram_total_gb": vram_info.get("total_gb"),
+            "stage_timings_sec": pipeline_diagnostics["stage_timings_sec"],
+            "stage_call_counts": pipeline_diagnostics["stage_call_counts"],
+            "stage_total_sec": pipeline_diagnostics["stage_total_sec"],
+            "slowest_stage": pipeline_diagnostics["slowest_stage"],
+            "candidate_counts": {
+                "initial_objects": len(object_list),
+                "initial_details": initial_detail_count,
+                "nearby_candidates": len(nearby_candidates),
+                "deduped_objects": len(deduped_list),
+                "missing_objects": len(missing_objects),
+                "final_objects": len(objects),
+            },
+            "image_pixels": {
+                "original": original_width * original_height,
+                "processed": processed_width * processed_height,
+                "max_allowed": max_image_pixels,
+                "downscaled": (original_width, original_height)
+                != (processed_width, processed_height),
+            },
         },
     }
 
