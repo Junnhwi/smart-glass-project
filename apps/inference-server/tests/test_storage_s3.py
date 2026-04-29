@@ -25,9 +25,11 @@ class _FakeS3Client:
     def __init__(self, *, payload: bytes = b"image-bytes", content_type: str = "image/jpeg"):
         self.payload = payload
         self.content_type = content_type
+        self.get_calls: list[dict[str, object]] = []
         self.put_calls: list[dict[str, object]] = []
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
+        self.get_calls.append({"Bucket": Bucket, "Key": Key})
         return {
             "Body": _FakeBody(self.payload),
             "ContentType": self.content_type,
@@ -119,6 +121,45 @@ class StorageServiceTestCase(unittest.TestCase):
         self.assertEqual(result.body, b"abc123")
         self.assertEqual(result.content_type, "image/png")
 
+    def test_read_object_normalizes_surrounding_whitespace(self) -> None:
+        client = _FakeS3Client(payload=b"abc123", content_type="image/png")
+        service = S3StorageService(
+            client=client,
+            default_bucket_name="smart-glass-test",
+        )
+
+        result = service.read_object("  captures/test.png  ")
+
+        self.assertEqual(result.key, "captures/test.png")
+        self.assertEqual(client.get_calls[0]["Key"], "captures/test.png")
+
+    def test_read_object_rejects_blank_object_key(self) -> None:
+        service = S3StorageService(
+            client=_FakeS3Client(),
+            default_bucket_name="smart-glass-test",
+        )
+
+        with self.assertRaisesRegex(ValueError, "must not be blank"):
+            service.read_object("   ")
+
+    def test_read_object_rejects_absolute_object_key(self) -> None:
+        service = S3StorageService(
+            client=_FakeS3Client(),
+            default_bucket_name="smart-glass-test",
+        )
+
+        with self.assertRaisesRegex(ValueError, "must be relative"):
+            service.read_object("/captures/test.png")
+
+    def test_read_object_rejects_path_traversal_object_key(self) -> None:
+        service = S3StorageService(
+            client=_FakeS3Client(),
+            default_bucket_name="smart-glass-test",
+        )
+
+        with self.assertRaisesRegex(ValueError, "path traversal"):
+            service.read_object("captures/../secrets.png")
+
     def test_write_object_passes_content_type_to_client(self) -> None:
         client = _FakeS3Client()
         service = S3StorageService(
@@ -137,6 +178,17 @@ class StorageServiceTestCase(unittest.TestCase):
         self.assertEqual(client.put_calls[0]["Key"], "captures/test.png")
         self.assertEqual(client.put_calls[0]["Body"], b"payload")
         self.assertEqual(client.put_calls[0]["ContentType"], "image/png")
+
+    def test_write_object_normalizes_object_key(self) -> None:
+        client = _FakeS3Client()
+        service = S3StorageService(
+            client=client,
+            default_bucket_name="smart-glass-test",
+        )
+
+        service.write_object("  captures/test.png  ", b"payload")
+
+        self.assertEqual(client.put_calls[0]["Key"], "captures/test.png")
 
     def test_read_object_raises_not_found_for_missing_key(self) -> None:
         service = S3StorageService(
