@@ -3,9 +3,12 @@
 1. API 서버가 추론 요청을 큐에 적재합니다.
 2. `apps/inference-server`의 Celery 워커가 작업을 가져옵니다.
 3. 워커는 raw boto3 client 대신 `src.storage.s3`의 `StorageService` 경계를 통해 이미지를 읽습니다.
-4. 로컬 업로드/스모크 스크립트도 같은 `StorageService`를 통해 이미지를 업로드합니다.
-5. `StorageService`가 object storage client 생성, 기본 bucket 해석, 예외 매핑을 담당합니다.
-6. 워커는 받은 이미지 바이트로 모델 추론을 수행하고 결과를 반환합니다.
+4. `api-server`는 `captures/{userId}/{yyyy}/{mm}/{dd}/{captureId}-{fileName}` 구조로 object key를 생성하거나 명시적 `imageKey`를 정규화합니다.
+5. 로컬 업로드/스모크 스크립트도 같은 `StorageService`를 통해 이미지를 업로드합니다.
+6. `StorageService`가 object storage client 생성, 기본 bucket 해석, 예외 매핑을 담당합니다.
+7. 워커는 받은 이미지 바이트로 모델 추론을 수행하고 결과를 반환합니다.
+
+Object key 세부 규칙은 [object-storage-keys.md](./object-storage-keys.md)에 정리되어 있습니다.
 
 ```mermaid
 flowchart LR

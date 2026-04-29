@@ -107,6 +107,32 @@ class MediaUrlSignerTests(unittest.TestCase):
             ],
         )
 
+    def test_sign_get_object_normalizes_object_key_before_signing(self) -> None:
+        client = FakeS3Client()
+        signer = S3MediaUrlSigner(
+            client=client,
+            default_bucket_name="smart-glass-test",
+            default_expiration_sec=300,
+        )
+
+        result = signer.sign_get_object(" captures//user-1//photo.jpg ")
+
+        self.assertEqual(result.image_key, "captures/user-1/photo.jpg")
+        self.assertEqual(
+            client.calls[0]["Params"]["Key"],
+            "captures/user-1/photo.jpg",
+        )
+
+    def test_sign_get_object_rejects_traversal_key(self) -> None:
+        signer = S3MediaUrlSigner(
+            client=FakeS3Client(),
+            default_bucket_name="smart-glass-test",
+            default_expiration_sec=300,
+        )
+
+        with self.assertRaisesRegex(ValueError, "path traversal"):
+            signer.sign_get_object("captures/user-1/../private.jpg")
+
     def test_sign_get_object_uses_default_expiration(self) -> None:
         client = FakeS3Client()
         signer = S3MediaUrlSigner(
@@ -227,7 +253,7 @@ class MediaUrlSignerTests(unittest.TestCase):
 
         result = service.issue_access_url(
             user_id="user-1",
-            image_key="captures/user-1/photo-1.jpg",
+            image_key=" captures//user-1//photo-1.jpg ",
             expires_in_sec=180,
         )
 
