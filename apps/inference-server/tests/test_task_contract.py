@@ -179,6 +179,25 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["errorCode"], "source_image_not_found")
         self.assertFalse(result["retryable"])
 
+    def test_process_vision_inference_marks_invalid_object_key_as_non_retryable(
+        self,
+    ) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(
+                ValueError("storage object key must not be blank")
+            ),
+        ):
+            result = process_vision_inference(
+                image_key="   ",
+                user_id="user-1",
+                request_id="req-invalid-key-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "invalid_inference_request")
+        self.assertFalse(result["retryable"])
+
     def test_process_vision_inference_marks_timeout_as_retryable_timeout_error(self) -> None:
         with patch(
             "src.queue.tasks.get_storage_service",
