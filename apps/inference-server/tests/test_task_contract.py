@@ -149,6 +149,11 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["errorCode"], "storage_access_error")
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "storage")
+        self.assertEqual(result["errorDetails"]["reason"], "storage_access_error")
+        self.assertEqual(result["errorDetails"]["exceptionType"], "StorageAccessError")
+        self.assertTrue(result["errorDetails"]["retryable"])
+        self.assertEqual(result["errorDetails"]["source"], "inference_worker")
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
         self.assertEqual(
             result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
@@ -179,6 +184,27 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorCode"], "source_image_not_found")
         self.assertFalse(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "source_image")
+        self.assertEqual(result["errorDetails"]["reason"], "source_image_not_found")
+        self.assertFalse(result["errorDetails"]["retryable"])
+
+    def test_process_vision_inference_marks_invalid_image_as_input_error(self) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(b"not-an-image"),
+        ):
+            result = process_vision_inference(
+                image_key="captures/broken.jpg",
+                user_id="user-1",
+                request_id="req-invalid-image-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "invalid_source_image")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "input")
+        self.assertEqual(result["errorDetails"]["reason"], "invalid_source_image")
+        self.assertFalse(result["errorDetails"]["retryable"])
 
     def test_process_vision_inference_marks_invalid_object_key_as_non_retryable(
         self,
@@ -217,6 +243,17 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorCode"], "inference_timeout")
         self.assertTrue(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "timeout")
+        self.assertEqual(result["errorDetails"]["reason"], "inference_timeout")
+        self.assertEqual(
+            result["errorDetails"]["exceptionType"],
+            "SoftTimeLimitExceeded",
+        )
+        self.assertTrue(result["errorDetails"]["retryable"])
+        self.assertEqual(
+            result["errorDetails"]["taskTimeLimit"],
+            {"softSec": 120, "hardSec": 150},
+        )
 
     def test_worker_retry_policy_skips_direct_calls(self) -> None:
         task_request = SimpleNamespace(called_directly=True, retries=0)

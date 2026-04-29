@@ -1,5 +1,6 @@
 import os
 import io
+from dataclasses import dataclass
 from celery import Celery
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from celery.signals import worker_init
@@ -56,6 +57,13 @@ configure_logging()
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class InferenceFailurePolicy:
+    error_code: str
+    retryable: bool
+    category: str
+
+
 @worker_init.connect
 def _preload_worker_model_on_startup(**_: object) -> None:
     maybe_preload_on_startup()
@@ -73,22 +81,40 @@ def _should_retry_with_qwen_fallback(error: Exception) -> bool:
     return any(marker in message for marker in retryable_markers)
 
 
-def _classify_inference_error(error: Exception) -> tuple[str, bool]:
+def _classify_inference_error(error: Exception) -> InferenceFailurePolicy:
     if isinstance(error, (SoftTimeLimitExceeded, TimeoutError)):
-        return "inference_timeout", True
+        return InferenceFailurePolicy("inference_timeout", True, "timeout")
     if isinstance(error, StorageNotFoundError):
-        return "source_image_not_found", False
+        return InferenceFailurePolicy("source_image_not_found", False, "source_image")
     if isinstance(error, StorageConfigError):
-        return "storage_config_error", False
+        return InferenceFailurePolicy("storage_config_error", False, "storage")
     if isinstance(error, StorageAccessError):
-        return "storage_access_error", True
+        return InferenceFailurePolicy("storage_access_error", True, "storage")
     if isinstance(error, UnidentifiedImageError):
-        return "invalid_source_image", False
+        return InferenceFailurePolicy("invalid_source_image", False, "input")
     if isinstance(error, ValueError):
-        return "invalid_inference_request", False
+        return InferenceFailurePolicy("invalid_inference_request", False, "input")
     if isinstance(error, RuntimeError):
-        return "model_runtime_error", True
-    return "inference_task_error", True
+        return InferenceFailurePolicy("model_runtime_error", True, "model")
+    return InferenceFailurePolicy("inference_task_error", True, "unknown")
+
+
+def _build_error_details(
+    *,
+    error: Exception,
+    failure_policy: InferenceFailurePolicy,
+) -> dict[str, object]:
+    return {
+        "category": failure_policy.category,
+        "reason": failure_policy.error_code,
+        "exceptionType": type(error).__name__,
+        "retryable": failure_policy.retryable,
+        "source": "inference_worker",
+        "taskTimeLimit": {
+            "softSec": TASK_SOFT_TIME_LIMIT_SECONDS,
+            "hardSec": TASK_TIME_LIMIT_SECONDS,
+        },
+    }
 
 
 def _task_called_directly(task_request: object | None) -> bool:
@@ -250,10 +276,15 @@ def process_vision_inference(
     except Retry:
         raise
     except Exception as e:
-        error_code, retryable = _classify_inference_error(e)
+        failure_policy = _classify_inference_error(e)
+        error_details = _build_error_details(
+            error=e,
+            failure_policy=failure_policy,
+        )
         task_request = getattr(self, "request", None)
         retry_count = _task_retry_count(task_request)
-        if _should_retry_task(retryable=retryable, task_request=task_request):
+        
+        if _should_retry_task(retryable=failure_policy.retryable, task_request=task_request):
             logger.warning(
                 "Inference task failed with retryable error, scheduling retry",
                 extra={
@@ -266,7 +297,7 @@ def process_vision_inference(
                     "model_mode": model_mode,
                     "quantization": quantization,
                     "settings_source": settings_source,
-                    "error_code": error_code,
+                    "error_code": failure_policy.error_code,
                     "retry_count": retry_count,
                     "max_retries": TASK_MAX_RETRIES,
                     "retry_delay_sec": TASK_RETRY_DELAY_SECONDS,
@@ -288,8 +319,9 @@ def process_vision_inference(
                 "settings_source": settings_source,
                 "soft_time_limit_sec": TASK_SOFT_TIME_LIMIT_SECONDS,
                 "hard_time_limit_sec": TASK_TIME_LIMIT_SECONDS,
-                "error_code": error_code,
-                "retryable": retryable,
+                "error_code": failure_policy.error_code,
+                "retryable": failure_policy.retryable,
+                "failure_category": failure_policy.category,
                 "retry_count": retry_count,
                 "max_retries": TASK_MAX_RETRIES,
             },
@@ -307,7 +339,8 @@ def process_vision_inference(
             captured_at=captured_at,
             task_type=task_type,
             content_type=content_type,
-            error_code=error_code,
-            retryable=retryable,
+            error_code=failure_policy.error_code,
+            retryable=failure_policy.retryable,
             execution_policy=execution_policy_payload,
+            error_details=error_details,
         )

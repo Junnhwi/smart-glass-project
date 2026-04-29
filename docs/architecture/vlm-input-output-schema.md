@@ -64,7 +64,17 @@ Error results contain:
 - `errorCode`
 - `message`
 - `retryable`
+- `errorDetails`
 - `providerMetadata`
+
+`errorDetails` is intended for diagnostics and operator decisions. It includes:
+
+- `category`: broad failure class such as `timeout`, `storage`, `source_image`, `input`, `model`, or `unknown`
+- `reason`: normalized machine-readable reason, usually matching `errorCode`
+- `exceptionType`: exception class name without stack trace
+- `retryable`: the same retry decision as the top-level field
+- `source`: component that produced the detail payload, when known
+- `taskTimeLimit`: `softSec` and `hardSec` values for worker timeout context, when available
 
 ## Memory Normalization
 

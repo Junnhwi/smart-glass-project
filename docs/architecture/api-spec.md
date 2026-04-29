@@ -134,6 +134,11 @@ The worker result is normalized around:
 - `providerMetadata`
 - `runtime`
 
+Error results keep `errorCode`, `message`, and `retryable` for backward
+compatibility, and also include `errorDetails` for diagnostics. The detail
+payload carries a stable failure category, normalized reason, exception type,
+retryability, source, and task time-limit values when available.
+
 Current reference files:
 
 - [apps/inference-server/src/contracts/vlm.py](/home/ghpark/projects/smart-glass-project/apps/inference-server/src/contracts/vlm.py)
