@@ -32,6 +32,11 @@ class WorkerHealthTestCase(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["service"], "inference-worker")
         self.assertEqual(payload["check_type"], "readiness")
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["summary"]["total"], 5)
+        self.assertEqual(payload["summary"]["passing"], 5)
+        self.assertEqual(payload["summary"]["failing"], 0)
+        self.assertEqual(payload["summary"]["failingChecks"], [])
 
     def test_worker_health_fails_when_ping_fails(self) -> None:
         with patch(
@@ -58,7 +63,10 @@ class WorkerHealthTestCase(unittest.TestCase):
 
         self.assertEqual(status_code, 1)
         self.assertEqual(payload["status"], "degraded")
+        self.assertFalse(payload["ready"])
         self.assertEqual(payload["checks"]["worker"]["status"], "error")
+        self.assertEqual(payload["summary"]["failingChecks"], ["worker"])
+        self.assertEqual(payload["summary"]["statuses"]["worker"], "error")
 
     def test_worker_health_fails_when_preload_is_not_ready(self) -> None:
         with patch(
@@ -88,7 +96,9 @@ class WorkerHealthTestCase(unittest.TestCase):
 
         self.assertEqual(status_code, 1)
         self.assertEqual(payload["status"], "degraded")
+        self.assertFalse(payload["ready"])
         self.assertEqual(payload["checks"]["preload"]["status"], "error")
+        self.assertEqual(payload["summary"]["failingChecks"], ["preload"])
 
     def test_worker_ping_uses_process_fallback(self) -> None:
         with patch("src.health.checks.Celery") as celery_cls:

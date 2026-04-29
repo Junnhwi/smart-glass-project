@@ -3,7 +3,7 @@ import socket
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Mapping, Tuple
 
 import redis
 from celery import Celery
@@ -12,6 +12,31 @@ from src.models.registry import resolve_inference_model
 from src.models.serving_profile import resolve_runtime_execution_policy
 from src.storage.s3 import StorageAccessError, StorageConfigError, get_storage_service
 from src.worker_preload import get_preload_status_path
+
+
+def _extract_check_status(detail: Mapping[str, Any]) -> str:
+    raw_status = detail.get("status")
+    normalized = str(raw_status or "").strip().lower()
+    return normalized or "unknown"
+
+
+def build_health_summary(checks: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    statuses = {
+        name: _extract_check_status(detail)
+        for name, detail in checks.items()
+    }
+    failing_checks = [
+        name
+        for name, status in statuses.items()
+        if status != "ok"
+    ]
+    return {
+        "total": len(statuses),
+        "passing": len(statuses) - len(failing_checks),
+        "failing": len(failing_checks),
+        "failingChecks": failing_checks,
+        "statuses": statuses,
+    }
 
 
 def check_queue() -> Tuple[str, Dict[str, Any]]:
@@ -262,11 +287,11 @@ def check_worker_ping(
 
 
 def build_worker_health_payload() -> Tuple[int, Dict[str, Any]]:
-    worker_status, worker_detail = check_worker_ping()
-    queue_status, queue_detail = check_queue()
-    storage_status, storage_detail = check_storage()
-    model_status, model_detail = check_model_config()
-    preload_status, preload_detail = check_model_preload()
+    _, worker_detail = check_worker_ping()
+    _, queue_detail = check_queue()
+    _, storage_detail = check_storage()
+    _, model_detail = check_model_config()
+    _, preload_detail = check_model_preload()
 
     checks = {
         "worker": worker_detail,
@@ -275,27 +300,18 @@ def build_worker_health_payload() -> Tuple[int, Dict[str, Any]]:
         "model": model_detail,
         "preload": preload_detail,
     }
-    overall_status = (
-        "ok"
-        if all(
-            status == "ok"
-            for status in (
-                worker_status,
-                queue_status,
-                storage_status,
-                model_status,
-                preload_status,
-            )
-        )
-        else "degraded"
-    )
-    status_code = 0 if overall_status == "ok" else 1
+    summary = build_health_summary(checks)
+    ready = summary["failing"] == 0
+    overall_status = "ok" if ready else "degraded"
+    status_code = 0 if ready else 1
 
     payload = {
         "status": overall_status,
         "service": "inference-worker",
         "check_type": "readiness",
+        "ready": ready,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "summary": summary,
         "checks": checks,
     }
     return status_code, payload

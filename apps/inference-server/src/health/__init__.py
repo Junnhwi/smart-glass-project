@@ -1,4 +1,5 @@
 from src.health.checks import (
+    build_health_summary,
     build_worker_health_payload,
     check_model_config,
     check_model_preload,
@@ -9,6 +10,7 @@ from src.health.checks import (
 )
 
 __all__ = [
+    "build_health_summary",
     "build_worker_health_payload",
     "check_model_config",
     "check_model_preload",

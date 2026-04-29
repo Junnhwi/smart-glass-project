@@ -13,6 +13,28 @@
   - Current checks: Redis broker connectivity, storage readiness, caption model config
   - Returns `503` when the service is not ready to accept traffic
 
+## Payload Shape
+
+Health payloads keep the existing top-level fields:
+
+- `status`: `ok` when every required check passes, otherwise `degraded`
+- `service`: producing component such as `inference-server` or `inference-worker`
+- `check_type`: `liveness` or `readiness`
+- `timestamp`: UTC timestamp for when the probe was evaluated
+- `checks`: per-component detail payloads
+
+Readiness payloads also include:
+
+- `ready`: boolean form of the readiness decision
+- `summary.total`: number of checks evaluated
+- `summary.passing`: number of checks with `status=ok`
+- `summary.failing`: number of checks that are not `ok`
+- `summary.failingChecks`: check names that are currently blocking readiness
+- `summary.statuses`: compact check-name to status map
+
+`GET /health/live` also includes `summary` for consistency, but does not use
+`ready` because it only answers whether the API process can respond.
+
 ## Storage Readiness Modes
 
 Storage readiness is controlled by `INFERENCE_STORAGE_READINESS_MODE`.
