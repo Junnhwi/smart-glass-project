@@ -36,6 +36,7 @@ def _run_single_inference(image_path: Path, model_key: str) -> dict[str, Any]:
         )
 
     metadata = result["metadata"]
+    pipeline_meta = result.get("pipeline_output", {}).get("pipeline_meta", {})
     return {
         "status": "success",
         "modelKey": model_key,
@@ -49,6 +50,14 @@ def _run_single_inference(image_path: Path, model_key: str) -> dict[str, Any]:
             "latencySec": result.get("elapsed_sec"),
             "peakMemoryMb": result.get("peak_memory_mb"),
             "loadTimeSec": result.get("load_time_sec"),
+        },
+        "pipelineDiagnostics": {
+            "stageTimingsSec": pipeline_meta.get("stage_timings_sec", {}),
+            "stageCallCounts": pipeline_meta.get("stage_call_counts", {}),
+            "stageTotalSec": pipeline_meta.get("stage_total_sec"),
+            "slowestStage": pipeline_meta.get("slowest_stage"),
+            "candidateCounts": pipeline_meta.get("candidate_counts", {}),
+            "imagePixels": pipeline_meta.get("image_pixels", {}),
         },
     }
 
@@ -67,6 +76,20 @@ def _run_single_case(image_path: Path, model_key: str) -> dict[str, Any]:
 
 def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     successes = [item for item in results if item["status"] == "success"]
+    stage_timings: dict[str, list[float]] = {}
+    slowest_stage_counts: dict[str, int] = {}
+    for item in successes:
+        diagnostics = item.get("pipelineDiagnostics", {})
+        for stage_name, elapsed_sec in diagnostics.get("stageTimingsSec", {}).items():
+            if isinstance(elapsed_sec, (int, float)):
+                stage_timings.setdefault(stage_name, []).append(float(elapsed_sec))
+
+        slowest_stage = diagnostics.get("slowestStage")
+        if isinstance(slowest_stage, str) and slowest_stage:
+            slowest_stage_counts[slowest_stage] = (
+                slowest_stage_counts.get(slowest_stage, 0) + 1
+            )
+
     return {
         "total": len(results),
         "successCount": len(successes),
@@ -82,6 +105,11 @@ def _build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "avgCaptionLength": round(mean(len(item["caption"] or "") for item in successes), 2)
         if successes
         else None,
+        "avgStageTimingsSec": {
+            stage_name: round(mean(values), 4)
+            for stage_name, values in sorted(stage_timings.items())
+        },
+        "slowestStageCounts": slowest_stage_counts,
     }
 
 
