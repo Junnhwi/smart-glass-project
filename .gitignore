@@ -191,12 +191,16 @@ AI/wearable_vlm_pipeline_plan.md
 
 # Experiment Outputs
 output/
+
+# Frontend / Expo (feat/app-interface)
 node_modules/
 pnpm-workspace.yaml
 
-# expo
 .expo/
 .expo-shared/
 apps/smart-glass-client/.expo/
 apps/smart-glass-client/android/
 apps/smart-glass-client/ios/
+
+# Backend (develop)
+apps/api-server/uploads/
