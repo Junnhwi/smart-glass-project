@@ -468,6 +468,40 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("relative object key", response.json()["detail"])
 
+    def test_capture_registration_rejects_cross_user_image_key(self) -> None:
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-005",
+                "requestId": "req-005",
+                "memoryId": "mem-005",
+                "userId": "user-5",
+                "sourceImage": {
+                    "imageKey": "captures/user-6/private-photo.jpg",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requesting user's captures prefix", response.json()["detail"])
+
+    def test_capture_registration_rejects_non_capture_image_key(self) -> None:
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-006",
+                "requestId": "req-006",
+                "memoryId": "mem-006",
+                "userId": "user-6",
+                "sourceImage": {
+                    "imageKey": "private/user-6/photo.jpg",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("requesting user's captures prefix", response.json()["detail"])
+
     def test_health_ready(self) -> None:
         response = self.client.get("/health/ready")
         self.assertEqual(response.status_code, 200)

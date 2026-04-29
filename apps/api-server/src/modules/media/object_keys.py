@@ -50,6 +50,21 @@ def build_capture_object_key(
     )
 
 
+def normalize_capture_object_key_for_user(
+    value: object | None,
+    *,
+    user_id: str,
+) -> str:
+    normalized = normalize_storage_object_key(value)
+    safe_user_id = sanitize_object_key_segment(user_id, "user")
+    expected_prefix = f"{CAPTURE_OBJECT_KEY_PREFIX}/{safe_user_id}/"
+    if not normalized.startswith(expected_prefix):
+        raise ValueError(
+            "imageKey must be under the requesting user's captures prefix"
+        )
+    return normalized
+
+
 def normalize_storage_object_key(value: object | None) -> str:
     raw_text = "" if value is None else str(value).strip()
     if not raw_text:
