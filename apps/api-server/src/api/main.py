@@ -8,6 +8,10 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.auth import (
+    require_internal_service_token,
+    resolve_authenticated_user,
+)
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
     CaptureProcessingResponse,
@@ -275,10 +279,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MediaGalleryRequest,
     ) -> MediaGalleryResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             media_access_service = _get_media_access_service(request)
             items = media_access_service.list_gallery_items(
-                user_id=payload.userId,
+                user_id=user_id,
                 limit=payload.limit,
             )
         except MediaUrlSignerConfigError as exc:
@@ -297,10 +302,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MediaAccessUrlRequest,
     ) -> MediaAccessUrlResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             media_access_service = _get_media_access_service(request)
             result = media_access_service.issue_access_url(
-                user_id=payload.userId,
+                user_id=user_id,
                 image_key=payload.imageKey,
                 expires_in_sec=payload.expiresInSec,
             )
@@ -319,10 +325,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MediaBatchAccessUrlRequest,
     ) -> MediaBatchAccessUrlResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             media_access_service = _get_media_access_service(request)
             items = media_access_service.issue_access_urls(
-                user_id=payload.userId,
+                user_id=user_id,
                 image_keys=payload.imageKeys,
                 expires_in_sec=payload.expiresInSec,
             )
@@ -348,6 +355,7 @@ def create_app() -> FastAPI:
         request: Request,
         payload: VlmInferenceResultPayload,
     ) -> MemoryInferenceResultIngestResponse:
+        require_internal_service_token(request)
         try:
             memory_store_client = _get_memory_store_client(request)
             outcome = memory_store_client.persist_vlm_result(
@@ -377,10 +385,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MemorySearchRequest,
     ) -> MemorySearchResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             memory_query_service = _get_memory_query_service(request)
             hits = memory_query_service.search(
-                user_id=payload.userId,
+                user_id=user_id,
                 query=payload.query,
                 top_k=payload.topK,
             )
@@ -405,10 +414,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MemoryChatRequest,
     ) -> MemoryChatResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             memory_query_service = _get_memory_query_service(request)
             answer_result, hits = memory_query_service.chat(
-                user_id=payload.userId,
+                user_id=user_id,
                 query=payload.query,
                 top_k=payload.topK,
             )

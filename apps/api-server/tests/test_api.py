@@ -4,6 +4,11 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+from src.api.auth import (
+    INTERNAL_SERVICE_TOKEN_HEADER,
+    build_bearer_authorization_header,
+    build_internal_service_token,
+)
 from src.api.intake import build_capture_upload_response
 from src.api.main import app
 from src.api.schemas import (
@@ -233,7 +238,12 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         app.state.memory_query_service = self.fake_memory_query_service
         app.state.media_access_service = self.fake_media_access_service
         app.state.memory_store_client = self.fake_memory_store_client
-        self.client = TestClient(app)
+        self.client = TestClient(
+            app,
+            headers={
+                "Authorization": build_bearer_authorization_header("user-1"),
+            },
+        )
 
     def tearDown(self) -> None:
         app.state.capture_pipeline = None
@@ -413,6 +423,9 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
     def test_inference_result_endpoint_stores_success_payload(self) -> None:
         response = self.client.post(
             "/memories/inference-results",
+            headers={
+                INTERNAL_SERVICE_TOKEN_HEADER: build_internal_service_token(),
+            },
             json={
                 "status": "success",
                 "requestId": "req-earbuds-001",
@@ -481,6 +494,9 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
     def test_inference_result_endpoint_rejects_error_payloads(self) -> None:
         response = self.client.post(
             "/memories/inference-results",
+            headers={
+                INTERNAL_SERVICE_TOKEN_HEADER: build_internal_service_token(),
+            },
             json={
                 "status": "error",
                 "requestId": "req-failed-001",

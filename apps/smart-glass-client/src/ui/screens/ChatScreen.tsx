@@ -138,6 +138,7 @@ export default function ChatScreen() {
 
     try {
       const chatResponse = await chatWithMemories({
+        authToken: currentUser.authToken,
         userId: currentUser.userId,
         query: trimmed,
         topK: 3,
@@ -148,6 +149,7 @@ export default function ChatScreen() {
       if (imageKeys.length > 0) {
         try {
           const accessUrls = await issueMediaAccessUrls({
+            authToken: currentUser.authToken,
             userId: currentUser.userId,
             imageKeys,
           });

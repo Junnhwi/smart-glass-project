@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState } from 'react';
 export type AuthUser = {
   userId: string;
   displayName: string;
+  authToken: string;
 };
 
 type AuthContextValue = {
@@ -20,6 +21,8 @@ const normalizeText = (value: string | null | undefined) =>
     .filter(Boolean)
     .join(' ');
 
+const buildDemoAuthToken = (userId: string) => `demo-user:${userId}`;
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
@@ -30,7 +33,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const displayName = normalizeText(input.displayName) || userId;
-    setCurrentUser({ userId, displayName });
+    setCurrentUser({
+      userId,
+      displayName,
+      authToken: buildDemoAuthToken(userId),
+    });
   };
 
   const signOut = () => {

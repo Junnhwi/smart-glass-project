@@ -49,13 +49,20 @@ type MediaBatchAccessUrlResponse = {
 
 const postJson = async <TResponse>(
   path: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  options?: { authToken?: string }
 ): Promise<TResponse> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (options?.authToken) {
+    headers.Authorization = `Bearer ${options.authToken}`;
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
@@ -68,33 +75,45 @@ const postJson = async <TResponse>(
 };
 
 export const chatWithMemories = async ({
+  authToken,
   userId,
   query,
   topK = 3,
 }: {
+  authToken: string;
   userId: string;
   query: string;
   topK?: number;
 }) => {
-  return postJson<MemoryChatResponse>('/chat', {
-    userId,
-    query,
-    topK,
-  });
+  return postJson<MemoryChatResponse>(
+    '/chat',
+    {
+      userId,
+      query,
+      topK,
+    },
+    { authToken }
+  );
 };
 
 export const issueMediaAccessUrls = async ({
+  authToken,
   userId,
   imageKeys,
   expiresInSec = 300,
 }: {
+  authToken: string;
   userId: string;
   imageKeys: string[];
   expiresInSec?: number;
 }) => {
-  return postJson<MediaBatchAccessUrlResponse>('/media/access-urls', {
-    userId,
-    imageKeys,
-    expiresInSec,
-  });
+  return postJson<MediaBatchAccessUrlResponse>(
+    '/media/access-urls',
+    {
+      userId,
+      imageKeys,
+      expiresInSec,
+    },
+    { authToken }
+  );
 };
