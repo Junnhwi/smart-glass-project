@@ -34,8 +34,17 @@ KOREAN_PARTICLE_SUFFIXES: tuple[str, ...] = (
 )
 
 SYNONYM_GROUPS: dict[str, set[str]] = {
-    "wallet": {"wallet", "wallets", "\uC9C0\uAC11"},
-    "key": {"key", "keys", "\uC5F4\uC1E0", "\uD0A4"},
+    "wallet": {"wallet", "wallets", "purse", "\uC9C0\uAC11", "\uCE74\uB4DC\uC9C0\uAC11"},
+    "key": {
+        "key",
+        "keys",
+        "keyring",
+        "\uC5F4\uC1E0",
+        "\uD0A4",
+        "\uCC28\uD0A4",
+        "\uC790\uB3D9\uCC28\uD0A4",
+        "\uD0A4\uB9C1",
+    },
     "phone": {
         "phone",
         "phones",
@@ -46,12 +55,62 @@ SYNONYM_GROUPS: dict[str, set[str]] = {
         "\uD578\uB4DC\uD3F0",
         "\uD3F0",
         "\uC2A4\uB9C8\uD2B8\uD3F0",
+        "\uC544\uC774\uD3F0",
+        "iphone",
     },
-    "glasses": {"glasses", "eyeglasses", "spectacles", "\uC548\uACBD"},
-    "bag": {"bag", "bags", "backpack", "\uAC00\uBC29", "\uBC31\uD329"},
-    "card": {"card", "cards", "\uCE74\uB4DC"},
-    "charger": {"charger", "\uCF00\uC774\uBE14", "\uCDA9\uC804\uAE30"},
-    "earbuds": {"earbuds", "earphones", "airpods", "\uC774\uC5B4\uD3F0"},
+    "glasses": {
+        "glasses",
+        "eyeglasses",
+        "spectacles",
+        "sunglasses",
+        "\uC548\uACBD",
+        "\uC120\uAE00\uB77C\uC2A4",
+    },
+    "bag": {
+        "bag",
+        "bags",
+        "backpack",
+        "handbag",
+        "\uAC00\uBC29",
+        "\uBC31\uD329",
+        "\uC5D0\uCF54\uBC31",
+        "\uD578\uB4DC\uBC31",
+    },
+    "card": {
+        "card",
+        "cards",
+        "\uCE74\uB4DC",
+        "\uC2E0\uC6A9\uCE74\uB4DC",
+        "\uCCB4\uD06C\uCE74\uB4DC",
+        "\uAD50\uD1B5\uCE74\uB4DC",
+    },
+    "charger": {
+        "charger",
+        "cable",
+        "adapter",
+        "powerbank",
+        "\uCF00\uC774\uBE14",
+        "\uCDA9\uC804\uAE30",
+        "\uCDA9\uC804\uCF00\uC774\uBE14",
+        "\uC5B4\uB311\uD130",
+        "\uBCF4\uC870\uBC30\uD130\uB9AC",
+    },
+    "earbuds": {
+        "earbuds",
+        "earbud",
+        "earphones",
+        "earphone",
+        "airpods",
+        "airpod",
+        "buds",
+        "galaxybuds",
+        "\uC774\uC5B4\uD3F0",
+        "\uC5D0\uC5B4\uD31F",
+        "\uBC84\uC988",
+        "\uAC24\uB7ED\uC2DC\uBC84\uC988",
+        "\uBB34\uC120\uC774\uC5B4\uD3F0",
+        "\uBE14\uB8E8\uD22C\uC2A4\uC774\uC5B4\uD3F0",
+    },
     "laptop": {"laptop", "notebook", "\uCEF4\uD4E8\uD130", "\uB178\uD2B8\uBD81"},
     "desk": {"desk", "table", "\uCC45\uC0C1", "\uD14C\uC774\uBE14"},
     "keyboard": {"keyboard", "\uD0A4\uBCF4\uB4DC"},
@@ -201,6 +260,81 @@ NEGATION_CUES: tuple[str, ...] = (
     "without",
 )
 
+QUERY_STOP_TERMS: set[str] = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "around",
+    "can",
+    "did",
+    "do",
+    "find",
+    "for",
+    "give",
+    "had",
+    "have",
+    "help",
+    "i",
+    "is",
+    "it",
+    "last",
+    "latest",
+    "look",
+    "me",
+    "mine",
+    "my",
+    "please",
+    "put",
+    "show",
+    "that",
+    "the",
+    "there",
+    "thing",
+    "was",
+    "were",
+    "where",
+    "\uAC70",
+    "\uAC83",
+    "\uAE30\uC5B5",
+    "\uB098",
+    "\uB098\uC758",
+    "\uB0B4",
+    "\uB193\uC740",
+    "\uB450\uC5C8\uC5B4",
+    "\uB454",
+    "\uB480\uB358",
+    "\uB480\uB354\uB77C",
+    "\uB480\uC5B4",
+    "\uB480\uC9C0",
+    "\uB1A8\uB354\uB77C",
+    "\uB1A8\uC5B4",
+    "\uB1A8\uC9C0",
+    "\uB9C8\uC9C0\uB9C9",
+    "\uB9C8\uC9C0\uB9C9\uC73C\uB85C",
+    "\uBB3C\uAC74",
+    "\uBCF4\uC5EC\uC918",
+    "\uC5B4\uB514",
+    "\uC5B4\uB514\uB2E4",
+    "\uC5B4\uB514\uC5D0",
+    "\uC5B4\uB514\uC788\uC5B4",
+    "\uC5B4\uB514\uC788\uC9C0",
+    "\uC5B4\uB528\uC5B4",
+    "\uC5B4\uB528\uC9C0",
+    "\uC788\uB358",
+    "\uC788\uC5B4",
+    "\uC788\uC5C8\uC5B4",
+    "\uC788\uC5C8\uC9C0",
+    "\uC788\uC9C0",
+    "\uC81C",
+    "\uC880",
+    "\uCD5C\uADFC",
+    "\uCC3E\uC544",
+    "\uCC3E\uC544\uBD10",
+    "\uCC3E\uC544\uC918",
+    "\uD639\uC2DC",
+}
+
 
 def normalize_whitespace(value: str | None) -> str:
     if not value:
@@ -269,6 +403,16 @@ def canonicalize_token(token: str) -> str:
     return ALIAS_TO_CANONICAL.get(normalized, normalized)
 
 
+def is_query_stop_token(token: str) -> bool:
+    normalized = strip_korean_particle(token)
+    canonical = canonicalize_token(normalized)
+    return (
+        token.lower() in QUERY_STOP_TERMS
+        or normalized in QUERY_STOP_TERMS
+        or canonical in QUERY_STOP_TERMS
+    )
+
+
 def expand_terms(values: Iterable[str]) -> list[str]:
     expanded: set[str] = set()
     for value in values:
@@ -280,6 +424,20 @@ def expand_terms(values: Iterable[str]) -> list[str]:
             expanded.add(canonical)
             expanded.update(SYNONYM_GROUPS.get(canonical, set()))
     return sorted(expanded)
+
+
+def search_terms_from_query(text: str | None) -> list[str]:
+    normalized_query = normalize_search_query(text)
+    tokens = tokenize_text(normalized_query)
+    if not tokens:
+        return []
+
+    meaningful_tokens = [
+        strip_korean_particle(token)
+        for token in tokens
+        if not is_query_stop_token(token)
+    ]
+    return expand_terms(meaningful_tokens or tokens)
 
 
 def humanize_term(value: str) -> str:
@@ -331,8 +489,6 @@ def format_timestamp(value: str | None) -> str | None:
     normalized = value.replace("Z", "+00:00")
     try:
         timestamp = datetime.fromisoformat(normalized)
-        if timestamp.tzinfo is not None:
-            return timestamp.isoformat(timespec="minutes")
         return timestamp.strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return value
