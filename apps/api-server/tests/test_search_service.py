@@ -4,6 +4,7 @@ import unittest
 
 from src.database.memory_store import MemoryLocation, MemoryRecord
 from src.modules.search.service import MemoryQueryService
+from src.modules.search.text import format_timestamp
 
 
 class FakeMemoryRepository:
@@ -23,6 +24,20 @@ class FakeMemoryRepository:
 
 
 class MemoryQueryServiceTests(unittest.TestCase):
+    def test_format_timestamp_uses_korean_ampm_time(self) -> None:
+        self.assertEqual(
+            format_timestamp("2026-04-30T09:00:00Z"),
+            "2026-04-30 \uc624\uc804 9\uc2dc",
+        )
+        self.assertEqual(
+            format_timestamp("2026-04-30T12:00:00Z"),
+            "2026-04-30 \uc624\ud6c4 12\uc2dc",
+        )
+        self.assertEqual(
+            format_timestamp("2026-04-30T15:30:00Z"),
+            "2026-04-30 \uc624\ud6c4 3\uc2dc 30\ubd84",
+        )
+
     def test_search_ranks_matching_record(self) -> None:
         repository = FakeMemoryRepository(
             [
@@ -225,7 +240,7 @@ class MemoryQueryServiceTests(unittest.TestCase):
         self.assertIn("\ucc3e\uc73c\uc2e0 \uc774\uc5b4\ud3f0\uc740", answer.text)
         self.assertIn("\ub178\ud2b8\ubd81 \uc606", answer.text)
         self.assertIn(
-            "\ub9c8\uc9c0\ub9c9 \ud655\uc778 \uc2dc\uac01\uc740 2026-04-30 09:00\uc785\ub2c8\ub2e4.",
+            "\ub9c8\uc9c0\ub9c9 \ud655\uc778 \uc2dc\uac01\uc740 2026-04-30 \uc624\uc804 9\uc2dc\uc785\ub2c8\ub2e4.",
             answer.text,
         )
 

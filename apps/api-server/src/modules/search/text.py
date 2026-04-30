@@ -489,6 +489,11 @@ def format_timestamp(value: str | None) -> str | None:
     normalized = value.replace("Z", "+00:00")
     try:
         timestamp = datetime.fromisoformat(normalized)
-        return timestamp.strftime("%Y-%m-%d %H:%M")
+        period = "\uC624\uC804" if timestamp.hour < 12 else "\uC624\uD6C4"
+        display_hour = timestamp.hour % 12 or 12
+        display_time = f"{period} {display_hour}\uC2DC"
+        if timestamp.minute:
+            display_time += f" {timestamp.minute}\uBD84"
+        return f"{timestamp.strftime('%Y-%m-%d')} {display_time}"
     except ValueError:
         return value
