@@ -16,6 +16,7 @@ import micIcon from '../icon/mic.png';
 
 import { commonStyles } from '../styles/commonStyles';
 
+import { useAuth } from '../context/AuthContext';
 import { useItemContext } from '../context/ItemContext';
 import {
   chatWithMemories,
@@ -39,8 +40,6 @@ type RelatedImage = {
   positionHint?: string | null;
 };
 
-const DEV_USER_ID = 'user-1';
-
 const uniqueImageKeysFromHits = (hits: MemorySearchHit[]) => {
   const seen = new Set<string>();
   const keys: string[] = [];
@@ -55,6 +54,7 @@ const uniqueImageKeysFromHits = (hits: MemorySearchHit[]) => {
 };
 
 export default function ChatScreen() {
+  const { currentUser } = useAuth();
   const { addItem } = useItemContext();
   const knownItems = ['지갑', '이어폰', '열쇠', '가방', '안경', '충전기', '텀블러'];
   //히스토리 확인을 위한 더미 데이터
@@ -114,7 +114,8 @@ export default function ChatScreen() {
   };
 
   const handleSend = async () => {
-    
+    if (!currentUser) return;
+
     const trimmed = inputText.trim();
     if (!trimmed) return;
 
@@ -137,7 +138,7 @@ export default function ChatScreen() {
 
     try {
       const chatResponse = await chatWithMemories({
-        userId: DEV_USER_ID,
+        userId: currentUser.userId,
         query: trimmed,
         topK: 3,
       });
@@ -147,7 +148,7 @@ export default function ChatScreen() {
       if (imageKeys.length > 0) {
         try {
           const accessUrls = await issueMediaAccessUrls({
-            userId: DEV_USER_ID,
+            userId: currentUser.userId,
             imageKeys,
           });
           accessUrlByImageKey = accessUrls.items.reduce<Record<string, string>>(
