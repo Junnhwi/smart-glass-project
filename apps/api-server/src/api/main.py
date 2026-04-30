@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
@@ -33,6 +35,28 @@ from src.modules.search.service import (
     SearchHit,
     build_default_memory_query_service,
 )
+
+
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:19006",
+    "http://127.0.0.1:19006",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+
+
+def _resolve_cors_origins() -> list[str]:
+    raw_value = os.getenv("API_CORS_ALLOW_ORIGINS", "").strip()
+    if not raw_value:
+        return list(DEFAULT_CORS_ORIGINS)
+    origins = [
+        origin.strip()
+        for origin in raw_value.split(",")
+        if origin.strip()
+    ]
+    return origins or list(DEFAULT_CORS_ORIGINS)
 
 
 def _map_hit(hit: SearchHit) -> MemorySearchHitPayload:
@@ -104,6 +128,13 @@ def create_app() -> FastAPI:
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_resolve_cors_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     @app.get("/")
