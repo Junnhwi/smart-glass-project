@@ -358,6 +358,17 @@ def create_app() -> FastAPI:
         require_internal_service_token(request)
         try:
             memory_store_client = _get_memory_store_client(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory store backend unavailable: {exc}",
+            ) from exc
+
+        try:
             outcome = memory_store_client.persist_vlm_result(
                 _schema_to_payload_dict(payload)
             )

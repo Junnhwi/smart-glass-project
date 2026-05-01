@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import unittest
 
 from fastapi.testclient import TestClient
 
 from src.api.auth import (
     INTERNAL_SERVICE_TOKEN_HEADER,
+    INTERNAL_SERVICE_TOKEN_ENV,
     build_bearer_authorization_header,
     build_internal_service_token,
 )
@@ -230,6 +232,10 @@ class FakeMemoryStoreClient:
 
 class ApiServerCaptureIntakeTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_internal_service_token = os.environ.get(
+            INTERNAL_SERVICE_TOKEN_ENV
+        )
+        os.environ[INTERNAL_SERVICE_TOKEN_ENV] = "test-internal-service-token"
         self.fake_pipeline = FakeCapturePipeline()
         self.fake_memory_query_service = FakeMemoryQueryService()
         self.fake_media_access_service = FakeMediaAccessService()
@@ -250,6 +256,12 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         app.state.memory_query_service = None
         app.state.media_access_service = None
         app.state.memory_store_client = None
+        if self.original_internal_service_token is None:
+            os.environ.pop(INTERNAL_SERVICE_TOKEN_ENV, None)
+        else:
+            os.environ[INTERNAL_SERVICE_TOKEN_ENV] = (
+                self.original_internal_service_token
+            )
 
     def test_capture_processing_endpoint_runs_pipeline(self) -> None:
         payload = {

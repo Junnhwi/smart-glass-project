@@ -9,7 +9,6 @@ from fastapi import HTTPException, Request, status
 DEMO_AUTH_TOKEN_PREFIX = "demo-user:"
 INTERNAL_SERVICE_TOKEN_HEADER = "X-Internal-Service-Token"
 INTERNAL_SERVICE_TOKEN_ENV = "API_INTERNAL_SERVICE_TOKEN"
-DEFAULT_INTERNAL_SERVICE_TOKEN = "smart-glass-internal-dev-token"
 
 
 def build_demo_auth_token(user_id: str) -> str:
@@ -24,14 +23,9 @@ def build_bearer_authorization_header(user_id: str) -> str:
 
 
 def build_internal_service_token() -> str:
-    token = os.getenv(
-        INTERNAL_SERVICE_TOKEN_ENV,
-        DEFAULT_INTERNAL_SERVICE_TOKEN,
-    ).strip()
+    token = os.getenv(INTERNAL_SERVICE_TOKEN_ENV, "").strip()
     if not token:
-        raise RuntimeError(
-            f"{INTERNAL_SERVICE_TOKEN_ENV} must not be blank"
-        )
+        raise RuntimeError(f"{INTERNAL_SERVICE_TOKEN_ENV} must be configured")
     return token
 
 
@@ -80,7 +74,13 @@ def resolve_authenticated_user(
 
 
 def require_internal_service_token(request: Request) -> None:
-    expected_token = build_internal_service_token()
+    try:
+        expected_token = build_internal_service_token()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     provided_token = request.headers.get(
         INTERNAL_SERVICE_TOKEN_HEADER,
         "",

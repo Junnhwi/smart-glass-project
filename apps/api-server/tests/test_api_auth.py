@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import unittest
 
 from fastapi.testclient import TestClient
 
 from src.api.auth import (
     INTERNAL_SERVICE_TOKEN_HEADER,
+    INTERNAL_SERVICE_TOKEN_ENV,
     build_bearer_authorization_header,
     build_internal_service_token,
 )
@@ -117,6 +119,13 @@ def build_valid_inference_payload() -> dict[str, object]:
 
 class ApiServerAuthTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_internal_service_token = os.environ.get(
+            INTERNAL_SERVICE_TOKEN_ENV
+        )
+        self.original_memory_store_client_factory = (
+            app.state.memory_store_client_factory
+        )
+        os.environ[INTERNAL_SERVICE_TOKEN_ENV] = "test-internal-service-token"
         app.state.capture_pipeline = FakeCapturePipeline()
         app.state.memory_query_service = FakeMemoryQueryService()
         app.state.media_access_service = FakeMediaAccessService()
@@ -128,6 +137,15 @@ class ApiServerAuthTests(unittest.TestCase):
         app.state.memory_query_service = None
         app.state.media_access_service = None
         app.state.memory_store_client = None
+        app.state.memory_store_client_factory = (
+            self.original_memory_store_client_factory
+        )
+        if self.original_internal_service_token is None:
+            os.environ.pop(INTERNAL_SERVICE_TOKEN_ENV, None)
+        else:
+            os.environ[INTERNAL_SERVICE_TOKEN_ENV] = (
+                self.original_internal_service_token
+            )
 
     def test_search_requires_authorization_header(self) -> None:
         response = self.client.post(
@@ -196,6 +214,46 @@ class ApiServerAuthTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["memoryId"], "mem-auth-001")
         self.assertIsNotNone(app.state.memory_store_client.last_worker_result)
+
+    def test_inference_results_return_503_when_internal_service_token_is_missing(
+        self,
+    ) -> None:
+        os.environ.pop(INTERNAL_SERVICE_TOKEN_ENV, None)
+
+        response = self.client.post(
+            "/memories/inference-results",
+            headers={
+                INTERNAL_SERVICE_TOKEN_HEADER: "test-internal-service-token",
+            },
+            json=build_valid_inference_payload(),
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(INTERNAL_SERVICE_TOKEN_ENV, response.json()["detail"])
+        self.assertIsNone(app.state.memory_store_client.last_worker_result)
+
+    def test_inference_results_return_503_when_memory_store_init_fails(
+        self,
+    ) -> None:
+        app.state.memory_store_client = None
+
+        def build_failing_memory_store_client() -> FakeMemoryStoreClient:
+            raise ValueError(
+                "API_CAPTURE_DATABASE_URL is required for memory storage"
+            )
+
+        app.state.memory_store_client_factory = build_failing_memory_store_client
+
+        response = self.client.post(
+            "/memories/inference-results",
+            headers={
+                INTERNAL_SERVICE_TOKEN_HEADER: build_internal_service_token(),
+            },
+            json=build_valid_inference_payload(),
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("API_CAPTURE_DATABASE_URL", response.json()["detail"])
 
 
 if __name__ == "__main__":
