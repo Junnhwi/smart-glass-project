@@ -268,6 +268,7 @@ def process_vision_inference(
     resolved_request_id = build_request_id(request_id)
     content_type = None
     model_mode = "unknown"
+    model_id = "unknown"
     fallback_triggered = False
 
     try:
@@ -280,6 +281,7 @@ def process_vision_inference(
         execution_policy_payload = execution_policy.to_payload()
         model_descriptor = resolve_inference_model(model_key)
         model_mode = model_descriptor.mode
+        model_id = model_descriptor.model_id
         storage_started_at = time.perf_counter()
         try:
             storage_object = get_storage_service().read_object(image_key)
@@ -331,6 +333,7 @@ def process_vision_inference(
                     )
                     model_key = fallback_model_key
                     model_descriptor = resolve_inference_model(model_key)
+                    model_id = model_descriptor.model_id  # 팀원분이 추가하신 로직 살림!
                     fallback_triggered = True
                     execution_policy_payload = execution_policy.to_payload(
                         fallback_triggered=True
@@ -347,7 +350,7 @@ def process_vision_inference(
                 metadata = None
                 pipeline_output = None
         finally:
-            model_inference_sec = _elapsed_sec(model_inference_started_at)
+            model_inference_sec = _elapsed_sec(model_inference_started_at) # 광록님의 시간 측정 로직 살림!
 
         runtime_metrics = _build_task_runtime_metrics(
             task_started_at=task_started_at,
@@ -366,8 +369,10 @@ def process_vision_inference(
                 "memory_id": memory_id,
                 "user_id": user_id,
                 "model_key": model_key,
+                "model_id": model_id,
                 "model_mode": model_mode,
                 "quantization": quantization,
+                "dtype_name": dtype_name,
                 "settings_source": settings_source,
                 "soft_time_limit_sec": execution_policy.soft_time_limit_sec,
                 "hard_time_limit_sec": execution_policy.hard_time_limit_sec,
@@ -427,10 +432,14 @@ def process_vision_inference(
                     "memory_id": memory_id,
                     "user_id": user_id,
                     "model_key": model_key,
+                    "model_id": model_id,
                     "model_mode": model_mode,
                     "quantization": quantization,
+                    "dtype_name": dtype_name,
                     "settings_source": settings_source,
                     "error_code": failure_policy.error_code,
+                    "retryable": failure_policy.retryable,
+                    "failure_category": failure_policy.category,
                     "retry_count": retry_count,
                     "next_retry_count": retry_count + 1,
                     "max_retries": TASK_MAX_RETRIES,
@@ -451,8 +460,10 @@ def process_vision_inference(
                 "memory_id": memory_id,
                 "user_id": user_id,
                 "model_key": model_key,
+                "model_id": model_id,
                 "model_mode": model_mode,
                 "quantization": quantization,
+                "dtype_name": dtype_name,
                 "settings_source": settings_source,
                 "soft_time_limit_sec": TASK_SOFT_TIME_LIMIT_SECONDS,
                 "hard_time_limit_sec": TASK_TIME_LIMIT_SECONDS,

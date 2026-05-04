@@ -37,6 +37,9 @@ class WorkerHealthTestCase(unittest.TestCase):
         self.assertEqual(payload["summary"]["passing"], 5)
         self.assertEqual(payload["summary"]["failing"], 0)
         self.assertEqual(payload["summary"]["failingChecks"], [])
+        self.assertIn("durationMs", payload["summary"])
+        for check_detail in payload["checks"].values():
+            self.assertIn("durationMs", check_detail)
 
     def test_worker_health_fails_when_ping_fails(self) -> None:
         with patch(
@@ -67,6 +70,8 @@ class WorkerHealthTestCase(unittest.TestCase):
         self.assertEqual(payload["checks"]["worker"]["status"], "error")
         self.assertEqual(payload["summary"]["failingChecks"], ["worker"])
         self.assertEqual(payload["summary"]["statuses"]["worker"], "error")
+        self.assertIn("durationMs", payload["checks"]["worker"])
+        self.assertIn("durationMs", payload["summary"])
 
     def test_worker_health_fails_when_preload_is_not_ready(self) -> None:
         with patch(

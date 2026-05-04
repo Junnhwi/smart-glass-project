@@ -6,6 +6,7 @@ from src.health.checks import (
     check_model_config as _check_model_config,
     check_queue as _check_queue,
     check_storage as _check_storage,
+    run_timed_health_check,
 )
 
 
@@ -24,9 +25,9 @@ def build_liveness_payload() -> Tuple[int, Dict[str, Any]]:
 
 
 def build_health_payload() -> Tuple[int, Dict[str, Any]]:
-    _, queue_detail = _check_queue()
-    _, storage_detail = _check_storage()
-    _, model_detail = _check_model_config()
+    _, queue_detail = run_timed_health_check(_check_queue)
+    _, storage_detail = run_timed_health_check(_check_storage)
+    _, model_detail = run_timed_health_check(_check_model_config)
 
     checks = {
         "api": {"status": "ok"},
