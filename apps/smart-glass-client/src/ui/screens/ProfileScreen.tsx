@@ -15,10 +15,10 @@ export default function ProfileScreen() {
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
         <Pressable onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>‹</Text>
+          <Text style={styles.backButton}>{'<'}</Text>
         </Pressable>
 
-        <Text style={commonStyles.headerTitle}>사용자 정보</Text>
+        <Text style={commonStyles.headerTitle}>Profile</Text>
 
         <View style={{ width: 24 }} />
       </View>
@@ -31,23 +31,33 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>표시 이름</Text>
+          <Text style={styles.label}>Display Name</Text>
           <View style={styles.inputBox}>
             <Text style={styles.value}>
-              {currentUser?.displayName || '미설정'}
+              {currentUser?.displayName || 'Not set'}
             </Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>사용자 ID</Text>
+          <Text style={styles.label}>User ID</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.userId || '미설정'}</Text>
+            <Text style={styles.value}>{currentUser?.userId || 'Not set'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Device ID</Text>
+          <View style={styles.inputBox}>
+            <Text style={styles.value}>
+              {currentUser?.deviceId || 'Not connected'}
+            </Text>
           </View>
         </View>
 
         <Text style={styles.syncText}>
-          현재 로그인된 사용자 기준으로 검색 기록과 관련 이미지가 조회됩니다.
+          Search and media requests now follow the signed-in user and the
+          registered smart-glass device.
         </Text>
       </View>
     </SafeAreaView>

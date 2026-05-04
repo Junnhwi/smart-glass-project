@@ -71,6 +71,35 @@ type MediaBatchAccessUrlResponse = {
   items: MediaAccessUrl[];
 };
 
+export type UserCreateResponse = {
+  status: 'created';
+  userId: string;
+  createdAt: string;
+};
+
+export type DeviceRegistrationResponse = {
+  status: 'registered';
+  userId: string;
+  deviceId: string;
+  registeredAt: string;
+};
+
+const buildErrorMessage = async (response: Response) => {
+  const rawText = await response.text();
+  if (!rawText) {
+    return `Request failed with ${response.status}`;
+  }
+
+  try {
+    const parsed = JSON.parse(rawText);
+    if (typeof parsed?.detail === 'string' && parsed.detail.trim()) {
+      return parsed.detail.trim();
+    }
+  } catch {}
+
+  return rawText;
+};
+
 const postJson = async <TResponse>(
   path: string,
   payload: Record<string, unknown>,
@@ -91,11 +120,49 @@ const postJson = async <TResponse>(
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || `Request failed with ${response.status}`);
+    throw new Error(await buildErrorMessage(response));
   }
 
   return response.json();
+};
+
+export const createUser = async ({ userId }: { userId: string }) => {
+  return postJson<UserCreateResponse>('/users', {
+    userId,
+  });
+};
+
+export const registerUserDevice = async ({
+  userId,
+  deviceId,
+}: {
+  userId: string;
+  deviceId: string;
+}) => {
+  return postJson<DeviceRegistrationResponse>(
+    `/users/${encodeURIComponent(userId)}/devices`,
+    {
+      deviceId,
+    }
+  );
+};
+
+export const ensureUserDeviceRegistration = async ({
+  userId,
+  deviceId,
+}: {
+  userId: string;
+  deviceId: string;
+}) => {
+  const user = await createUser({ userId });
+  const device = await registerUserDevice({
+    userId: user.userId,
+    deviceId,
+  });
+  return {
+    user,
+    device,
+  };
 };
 
 export const chatWithMemories = async ({
