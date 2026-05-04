@@ -224,7 +224,7 @@ export default function SettingsScreen() {
 
       setUploadAuthorization(authorization);
       setCapturePayload(payload);
-      setUploadMessage('Photo uploaded to object storage and ready for capture registration.');
+      setUploadMessage('Photo uploaded successfully. Ready to register the capture.');
     } catch (error) {
       const message =
         error instanceof Error && error.message
@@ -251,7 +251,7 @@ export default function SettingsScreen() {
       const response = await registerMediaCapture(capturePayload);
       setCaptureResponse(response);
       setCaptureTaskStatus(null);
-      setUploadMessage('Capture queued. Waiting for the inference worker to finish.');
+      setUploadMessage('Capture queued. Waiting for memory processing to finish.');
     } catch (error) {
       const message =
         error instanceof Error && error.message
@@ -279,7 +279,7 @@ export default function SettingsScreen() {
       setCaptureTaskStatus(response);
       if (response.memoryStore?.status === 'success') {
         setUploadMessage(
-          'Inference finished and the memory record was stored successfully.'
+          'Processing finished and the memory record was stored successfully.'
         );
       }
     } catch (error) {
@@ -342,10 +342,11 @@ export default function SettingsScreen() {
         </View>
 
         <View style={[commonStyles.card, styles.captureCard]}>
-          <Text style={styles.captureTitle}>Real Capture Upload Test</Text>
+          <Text style={styles.captureTitle}>Manual Capture Upload</Text>
           <Text style={styles.captureDescription}>
-            Choose a real image, request upload authorization from `deviceId`,
-            upload the bytes to object storage, and then queue `/media/captures`.
+            Choose an image, upload it through the signed device flow, and send
+            it into memory processing. This is useful as a manual fallback while
+            hardware capture is still being integrated.
           </Text>
 
           <View style={styles.fieldGroup}>
@@ -376,7 +377,8 @@ export default function SettingsScreen() {
               </View>
             ) : (
               <Text style={styles.emptyStateText}>
-                Choose an image first so we can upload real bytes to object storage.
+                Choose an image to send it through the same upload and capture
+                path used by the API.
               </Text>
             )}
           </View>
@@ -471,7 +473,9 @@ export default function SettingsScreen() {
                 <Text style={styles.secondaryButtonText}>Refreshing...</Text>
               </View>
             ) : (
-              <Text style={styles.secondaryButtonText}>Refresh Task Status</Text>
+              <Text style={styles.secondaryButtonText}>
+                Refresh Processing Status
+              </Text>
             )}
           </Pressable>
 
@@ -524,18 +528,18 @@ export default function SettingsScreen() {
                 workerStatus: {captureResponse.worker.status}
               </Text>
               <Text style={styles.resultText}>
-                polling: {captureIsFinished ? 'done' : 'watching for completion'}
+                processing: {captureIsFinished ? 'complete' : 'in progress'}
               </Text>
               <Text style={styles.resultHint}>
-                The source image is now uploaded, so the queued worker can read it
-                from object storage on the backend side.
+                The uploaded image is now available to the worker through object
+                storage.
               </Text>
             </View>
           ) : null}
 
           {captureTaskStatus ? (
             <View style={styles.resultBox}>
-              <Text style={styles.resultTitle}>Task Status</Text>
+              <Text style={styles.resultTitle}>Processing Status</Text>
               <Text style={styles.resultText}>
                 status: {captureTaskStatus.status}
               </Text>
@@ -597,7 +601,7 @@ export default function SettingsScreen() {
                   style={styles.inlineAction}
                   onPress={() => navigation.navigate('Chat')}
                 >
-                  <Text style={styles.inlineActionText}>Open Chat to Verify</Text>
+                  <Text style={styles.inlineActionText}>Open Chat</Text>
                 </Pressable>
               ) : null}
             </View>
