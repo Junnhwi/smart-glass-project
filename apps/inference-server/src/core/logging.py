@@ -23,12 +23,23 @@ class JsonFormatter(logging.Formatter):
             "client_ip",
             "task_name",
             "image_key",
+            "memory_id",
             "user_id",
             "model_key",
+            "model_mode",
             "quantization",
+            "settings_source",
             "latency_sec",
             "peak_memory_mb",
             "error_code",
+            "retryable",
+            "failure_category",
+            "retry_count",
+            "next_retry_count",
+            "max_retries",
+            "retry_delay_sec",
+            "retry_backoff_multiplier",
+            "retry_max_delay_sec",
         ):
             value = getattr(record, key, None)
             if value is not None:
