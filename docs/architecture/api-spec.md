@@ -15,8 +15,10 @@ There is no separate search service in the default application flow anymore.
 1. A client uploads the original image to object storage.
 2. The client registers the capture with `POST /media/captures`.
 3. `api-server` dispatches the inference worker.
-4. The worker returns a normalized VLM result.
-5. `api-server` stores the normalized memory document in PostgreSQL.
+4. `api-server` returns `202 Accepted` with the Celery `taskId`.
+5. The client polls `GET /media/captures/tasks/{taskId}`.
+6. When the worker result is ready, `api-server` reads the normalized VLM
+   result from the result backend and stores the memory document in PostgreSQL.
 
 When capture upload and inference are owned by another team, steps 1-4 can
 happen outside `api-server`. In that integration mode, the external pipeline
@@ -26,7 +28,8 @@ posts the final successful VLM result to `POST /memories/inference-results`.
 
 ### `POST /media/captures`
 
-Registers a captured image, runs the inference worker, and persists the result when memory storage is enabled.
+Registers a captured image, enqueues the inference worker, and returns
+immediately with `202 Accepted`.
 
 Relevant request fields:
 
@@ -45,7 +48,78 @@ Relevant request fields:
 
 Relevant response sections:
 
+- `taskId`
 - `capture`
+- `worker`
+
+Response example:
+
+```json
+{
+  "status": "accepted",
+  "service": "api-server",
+  "taskId": "4f2a6c0d-8d7e-4b35-9f5b-8a1b4d1f2c30",
+  "capture": {
+    "status": "accepted",
+    "service": "api-server",
+    "captureId": "capture-001",
+    "requestId": "req-001",
+    "memoryId": "mem-001",
+    "userId": "user-1",
+    "taskType": "metadata",
+    "capturedAt": "2026-04-30T09:00:00Z",
+    "sourceImage": {
+      "imageKey": "captures/user-1/2026/04/30/capture-001-photo.jpg",
+      "imageUrl": null,
+      "contentType": "image/jpeg",
+      "fileName": "photo.jpg"
+    },
+    "inferenceRequest": {
+      "requestId": "req-001",
+      "taskType": "metadata",
+      "memoryId": "mem-001",
+      "userId": "user-1",
+      "capturedAt": "2026-04-30T09:00:00Z",
+      "sourceImage": {
+        "imageKey": "captures/user-1/2026/04/30/capture-001-photo.jpg",
+        "imageUrl": null,
+        "contentType": "image/jpeg"
+      }
+    },
+    "dispatch": {
+      "transport": "celery-redis",
+      "taskName": "process_vision_inference",
+      "status": "prepared",
+      "brokerUrl": null,
+      "note": "Worker task payload is ready for queue dispatch."
+    }
+  },
+  "worker": {
+    "taskId": "4f2a6c0d-8d7e-4b35-9f5b-8a1b4d1f2c30",
+    "status": "queued",
+    "result": null,
+    "error": null
+  }
+}
+```
+
+### `GET /media/captures/tasks/{taskId}`
+
+Polls the inference task. While the worker is not finished, the endpoint returns
+one of:
+
+- `queued`
+- `running`
+- `retrying`
+
+When the worker succeeds, the endpoint persists the worker result through the
+same PostgreSQL memory store path used by `POST /memories/inference-results`.
+The memory write is an upsert by `(user_id, memory_id)`, so repeated polling
+after completion is safe.
+
+Completed response sections:
+
+- `taskId`
 - `worker`
 - `memoryStore`
 

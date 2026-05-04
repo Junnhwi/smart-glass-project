@@ -8,6 +8,7 @@ from src.api.intake import build_capture_upload_response, build_worker_task_kwar
 from src.api.schemas import (
     CaptureMemoryStoreExecutionPayload,
     CaptureProcessingResponse,
+    CaptureUploadResponse,
     CaptureUploadRequest,
     CaptureWorkerExecutionPayload,
 )
@@ -30,17 +31,33 @@ class CaptureTaskOutcome:
     result: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureTaskStatus:
+    task_id: str
+    state: str
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
+
 class CapturePipelineError(RuntimeError):
     pass
 
 
 class TaskTransport(Protocol):
+    def submit(
+        self,
+        *,
+        task_kwargs: dict[str, Any],
+    ) -> str: ...
+
     def submit_and_wait(
         self,
         *,
         task_kwargs: dict[str, Any],
         timeout_sec: float,
     ) -> CaptureTaskOutcome: ...
+
+    def get_status(self, task_id: str) -> CaptureTaskStatus: ...
 
     def check_health(self) -> None: ...
 
@@ -102,6 +119,51 @@ class CeleryTaskTransport:
         if not isinstance(result, dict):
             raise CapturePipelineError("Inference worker returned an invalid payload")
         return CaptureTaskOutcome(task_id=async_result.id, result=result)
+
+    def submit(
+        self,
+        *,
+        task_kwargs: dict[str, Any],
+    ) -> str:
+        celery_app = self._get_celery_app()
+        async_result = celery_app.send_task(self._task_name, kwargs=task_kwargs)
+        return str(async_result.id)
+
+    def get_status(self, task_id: str) -> CaptureTaskStatus:
+        normalized_task_id = " ".join(str(task_id).split()).strip()
+        if not normalized_task_id:
+            raise ValueError("taskId must not be blank")
+
+        celery_app = self._get_celery_app()
+        async_result = celery_app.AsyncResult(normalized_task_id)
+        state = str(async_result.state or "PENDING").upper()
+
+        if state == "SUCCESS":
+            result = async_result.result
+            if not isinstance(result, dict):
+                raise CapturePipelineError("Inference worker returned an invalid payload")
+            return CaptureTaskStatus(
+                task_id=normalized_task_id,
+                state=state,
+                result=result,
+                error=None,
+            )
+
+        if state in {"FAILURE", "REVOKED"}:
+            error = str(async_result.result or async_result.info or state)
+            return CaptureTaskStatus(
+                task_id=normalized_task_id,
+                state=state,
+                result=None,
+                error=error,
+            )
+
+        return CaptureTaskStatus(
+            task_id=normalized_task_id,
+            state=state,
+            result=None,
+            error=None,
+        )
 
     def check_health(self) -> None:
         celery_app = self._get_celery_app()
@@ -250,6 +312,72 @@ class CaptureProcessingPipeline:
             ),
             memoryStore=memory_store_payload,
         )
+
+    def submit(self, payload: CaptureUploadRequest) -> tuple[str, CaptureUploadResponse]:
+        capture_response = build_capture_upload_response(payload)
+        task_kwargs = build_worker_task_kwargs(capture_response)
+        task_id = self.task_transport.submit(task_kwargs=task_kwargs)
+        return task_id, capture_response
+
+    def get_task_status(self, task_id: str) -> CaptureTaskStatus:
+        return self.task_transport.get_status(task_id)
+
+    def build_memory_store_payload(
+        self,
+        worker_result: dict[str, Any],
+    ) -> tuple[str, CaptureMemoryStoreExecutionPayload]:
+        worker_status = _normalize_status(worker_result.get("status"))
+        if worker_status != "success":
+            message = worker_result.get("message") or "Inference worker returned an error"
+            return (
+                "failed",
+                CaptureMemoryStoreExecutionPayload(
+                    backend=(
+                        self.memory_store_client.backend_name
+                        if self.memory_store_client is not None
+                        else "disabled"
+                    ),
+                    status="skipped",
+                    storedCount=None,
+                    totalUserMemories={},
+                    error=str(message),
+                ),
+            )
+
+        memory_store_payload = CaptureMemoryStoreExecutionPayload(
+            backend=(
+                self.memory_store_client.backend_name
+                if self.memory_store_client is not None
+                else "disabled"
+            ),
+            status="skipped",
+            storedCount=None,
+            totalUserMemories={},
+            error=None,
+        )
+        response_status = "completed"
+
+        if self.memory_store_client is not None:
+            try:
+                store_outcome = self.memory_store_client.persist_vlm_result(worker_result)
+                memory_store_payload = CaptureMemoryStoreExecutionPayload(
+                    backend=self.memory_store_client.backend_name,
+                    status="success",
+                    storedCount=store_outcome.stored_count,
+                    totalUserMemories=store_outcome.total_user_memories,
+                    error=None,
+                )
+            except Exception as exc:
+                response_status = "partial"
+                memory_store_payload = CaptureMemoryStoreExecutionPayload(
+                    backend=self.memory_store_client.backend_name,
+                    status="error",
+                    storedCount=None,
+                    totalUserMemories={},
+                    error=f"memory store persistence failed: {exc}",
+                )
+
+        return response_status, memory_store_payload
 
     def check_health(self) -> None:
         self.task_transport.check_health()

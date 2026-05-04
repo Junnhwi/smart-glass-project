@@ -14,8 +14,11 @@ from src.api.auth import (
 )
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
-    CaptureProcessingResponse,
+    CaptureAcceptedResponse,
+    CaptureMemoryStoreExecutionPayload,
+    CaptureTaskStatusResponse,
     CaptureUploadRequest,
+    CaptureWorkerExecutionPayload,
     MediaBatchAccessUrlRequest,
     MediaBatchAccessUrlResponse,
     MediaAccessUrlRequest,
@@ -144,6 +147,19 @@ def _get_memory_store_client(request: Request):
     return memory_store_client
 
 
+def _map_celery_state_to_capture_status(state: str) -> str:
+    normalized = " ".join(str(state).split()).strip().upper()
+    if normalized in {"PENDING", "RECEIVED"}:
+        return "queued"
+    if normalized == "STARTED":
+        return "running"
+    if normalized == "RETRY":
+        return "retrying"
+    if normalized == "SUCCESS":
+        return "completed"
+    return "failed"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="smart-glass-api-server",
@@ -168,6 +184,7 @@ def create_app() -> FastAPI:
                 "GET /health/live",
                 "GET /health/ready",
                 "POST /media/captures",
+                "GET /media/captures/tasks/{taskId}",
                 "POST /media/gallery",
                 "POST /media/access-url",
                 "POST /media/access-urls",
@@ -259,20 +276,98 @@ def create_app() -> FastAPI:
 
     @app.post(
         "/media/captures",
-        status_code=status.HTTP_200_OK,
-        response_model=CaptureProcessingResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=CaptureAcceptedResponse,
     )
-    def register_capture(
+    async def register_capture(
         request: Request, payload: CaptureUploadRequest
-    ) -> CaptureProcessingResponse:
+    ) -> CaptureAcceptedResponse:
         try:
             pipeline = _get_capture_pipeline(request)
-            response = pipeline.process(payload)
+            task_id, capture = pipeline.submit(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except CapturePipelineError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return response
+        return CaptureAcceptedResponse(
+            status="accepted",
+            taskId=task_id,
+            capture=capture,
+            worker=CaptureWorkerExecutionPayload(
+                taskId=task_id,
+                status="queued",
+                result=None,
+                error=None,
+            ),
+        )
+
+    @app.get(
+        "/media/captures/tasks/{taskId}",
+        response_model=CaptureTaskStatusResponse,
+    )
+    async def get_capture_task_status(
+        request: Request,
+        taskId: str,
+    ) -> CaptureTaskStatusResponse:
+        try:
+            pipeline = _get_capture_pipeline(request)
+            task_status = pipeline.get_task_status(taskId)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except CapturePipelineError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        response_status = _map_celery_state_to_capture_status(task_status.state)
+        memory_store_payload = None
+        worker_status = response_status
+        if worker_status == "completed":
+            worker_status = "success"
+        elif worker_status == "failed":
+            worker_status = "error"
+        worker_payload = CaptureWorkerExecutionPayload(
+            taskId=task_status.task_id,
+            status=worker_status,
+            result=task_status.result,
+            error=task_status.error,
+        )
+
+        if response_status == "completed":
+            worker_result = task_status.result or {}
+            response_status, memory_store_payload = pipeline.build_memory_store_payload(
+                worker_result
+            )
+            if response_status == "failed":
+                worker_payload = CaptureWorkerExecutionPayload(
+                    taskId=task_status.task_id,
+                    status="error",
+                    result=worker_result,
+                    error=memory_store_payload.error if memory_store_payload else None,
+                )
+        elif response_status == "failed":
+            worker_payload = CaptureWorkerExecutionPayload(
+                taskId=task_status.task_id,
+                status="error",
+                result=None,
+                error=task_status.error or f"Inference task ended with state {task_status.state}",
+            )
+            memory_store_payload = CaptureMemoryStoreExecutionPayload(
+                backend=(
+                    pipeline.memory_store_client.backend_name
+                    if pipeline.memory_store_client is not None
+                    else "disabled"
+                ),
+                status="skipped",
+                storedCount=None,
+                totalUserMemories={},
+                error=worker_payload.error,
+            )
+
+        return CaptureTaskStatusResponse(
+            status=response_status,
+            taskId=task_status.task_id,
+            worker=worker_payload,
+            memoryStore=memory_store_payload,
+        )
 
     @app.post("/media/gallery", response_model=MediaGalleryResponse)
     def get_media_gallery(

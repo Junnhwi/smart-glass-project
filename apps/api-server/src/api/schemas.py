@@ -215,7 +215,7 @@ class CaptureUploadResponse(ApiSchema):
 
 class CaptureWorkerExecutionPayload(ApiSchema):
     taskId: str | None = None
-    status: Literal["success", "error", "timeout"]
+    status: Literal["queued", "running", "retrying", "success", "error", "timeout"]
     result: dict[str, Any] | None = None
     error: str | None = None
 
@@ -232,6 +232,22 @@ class CaptureProcessingResponse(ApiSchema):
     status: Literal["completed", "partial", "failed"]
     service: Literal["api-server"] = "api-server"
     capture: CaptureUploadResponse
+    worker: CaptureWorkerExecutionPayload
+    memoryStore: CaptureMemoryStoreExecutionPayload | None = None
+
+
+class CaptureAcceptedResponse(ApiSchema):
+    status: Literal["accepted"] = "accepted"
+    service: Literal["api-server"] = "api-server"
+    taskId: str
+    capture: CaptureUploadResponse
+    worker: CaptureWorkerExecutionPayload
+
+
+class CaptureTaskStatusResponse(ApiSchema):
+    status: Literal["queued", "running", "retrying", "completed", "partial", "failed"]
+    service: Literal["api-server"] = "api-server"
+    taskId: str
     worker: CaptureWorkerExecutionPayload
     memoryStore: CaptureMemoryStoreExecutionPayload | None = None
 

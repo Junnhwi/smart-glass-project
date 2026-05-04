@@ -19,6 +19,7 @@ from src.api.schemas import (
     CaptureUploadRequest,
     CaptureWorkerExecutionPayload,
 )
+from src.api.pipeline import CaptureTaskStatus
 from src.database.memory_store import MemoryLocation, MemoryRecord, MemoryStoreOutcome
 from src.modules.media.service import (
     GalleryItem,
@@ -31,6 +32,7 @@ from src.modules.search.service import GeneratedAnswer, SearchHit
 class FakeCapturePipeline:
     def __init__(self) -> None:
         self.last_payload: CaptureUploadRequest | None = None
+        self.last_task_id: str | None = None
         self.health_checked = False
 
     def process(self, payload: CaptureUploadRequest) -> CaptureProcessingResponse:
@@ -73,6 +75,69 @@ class FakeCapturePipeline:
                 error=None,
             ),
             memoryStore=CaptureMemoryStoreExecutionPayload(
+                backend="disabled",
+                status="skipped",
+                storedCount=None,
+                totalUserMemories={},
+                error=None,
+            ),
+        )
+
+    def submit(self, payload: CaptureUploadRequest):
+        self.last_payload = payload
+        capture = build_capture_upload_response(payload)
+        return "task-123", capture
+
+    def get_task_status(self, task_id: str) -> CaptureTaskStatus:
+        self.last_task_id = task_id
+        capture = build_capture_upload_response(
+            CaptureUploadRequest(
+                captureId="capture-001",
+                requestId="req-001",
+                memoryId="mem-001",
+                userId="user-1",
+                taskType="metadata",
+                capturedAt="2026-04-07T08:00:00Z",
+                fileName="smart-glass-photo.jpg",
+            )
+        )
+        return CaptureTaskStatus(
+            task_id=task_id,
+            state="SUCCESS",
+            result={
+                "status": "success",
+                "requestId": capture.requestId,
+                "taskType": capture.taskType,
+                "memoryId": capture.memoryId,
+                "userId": capture.userId,
+                "capturedAt": capture.capturedAt,
+                "sourceImage": {
+                    "imageKey": capture.sourceImage.imageKey,
+                    "imageUrl": capture.sourceImage.imageUrl,
+                    "contentType": capture.sourceImage.contentType,
+                },
+                "metadata": {
+                    "caption": "desk scene",
+                    "sceneSummary": "desk scene",
+                    "detectedObjects": ["laptop", "apple pencil"],
+                    "tags": ["desk"],
+                    "ocrText": "notes",
+                    "positionHint": "on the desk",
+                    "location": {"name": "cafe"},
+                },
+                "pipelineOutput": {
+                    "scene_summary": "desk scene",
+                    "location_context": "cafe desk",
+                    "objects": [],
+                },
+            },
+            error=None,
+        )
+
+    def build_memory_store_payload(self, worker_result: dict[str, object]):
+        return (
+            "completed",
+            CaptureMemoryStoreExecutionPayload(
                 backend="disabled",
                 status="skipped",
                 storedCount=None,
@@ -263,7 +328,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
                 self.original_internal_service_token
             )
 
-    def test_capture_processing_endpoint_runs_pipeline(self) -> None:
+    def test_capture_processing_endpoint_enqueues_pipeline(self) -> None:
         payload = {
             "captureId": "capture-001",
             "requestId": "req-001",
@@ -279,18 +344,30 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
 
         response = self.client.post("/media/captures", json=payload)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         body = response.json()
-        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["status"], "accepted")
+        self.assertEqual(body["taskId"], "task-123")
         self.assertEqual(body["capture"]["captureId"], "capture-001")
         self.assertEqual(body["capture"]["dispatch"]["status"], "prepared")
         self.assertEqual(body["capture"]["sourceImage"]["imageKey"], "captures/user-1/2026/04/07/capture-001-smart-glass-photo.jpg")
         self.assertEqual(body["worker"]["taskId"], "task-123")
-        self.assertEqual(body["worker"]["status"], "success")
-        self.assertEqual(body["memoryStore"]["backend"], "disabled")
-        self.assertEqual(body["memoryStore"]["status"], "skipped")
+        self.assertEqual(body["worker"]["status"], "queued")
         self.assertIsNotNone(self.fake_pipeline.last_payload)
         self.assertEqual(self.fake_pipeline.last_payload.userId, "user-1")
+
+    def test_capture_task_polling_returns_completed_result(self) -> None:
+        response = self.client.get("/media/captures/tasks/task-123")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        self.assertEqual(body["taskId"], "task-123")
+        self.assertEqual(body["worker"]["status"], "success")
+        self.assertEqual(body["worker"]["result"]["memoryId"], "mem-001")
+        self.assertEqual(body["memoryStore"]["backend"], "disabled")
+        self.assertEqual(body["memoryStore"]["status"], "skipped")
+        self.assertEqual(self.fake_pipeline.last_task_id, "task-123")
 
     def test_search_endpoint_returns_memory_hits(self) -> None:
         response = self.client.post(
@@ -577,17 +654,15 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
 
         response = self.client.post("/media/captures", json=payload)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         body = response.json()
         self.assertEqual(
             body["capture"]["sourceImage"]["imageKey"],
             "captures/user-3/2026/04/07/photo.jpg",
         )
         self.assertEqual(body["capture"]["sourceImage"]["fileName"], "photo.jpg")
-        self.assertEqual(
-            body["worker"]["result"]["sourceImage"]["imageKey"],
-            "captures/user-3/2026/04/07/photo.jpg",
-        )
+        self.assertEqual(body["taskId"], "task-123")
+        self.assertEqual(body["worker"]["status"], "queued")
 
     def test_capture_registration_rejects_url_as_image_key(self) -> None:
         response = self.client.post(
