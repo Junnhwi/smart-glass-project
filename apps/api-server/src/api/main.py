@@ -189,6 +189,51 @@ def _map_user_device_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail=str(exc))
 
 
+def _authorize_capture_payload(
+    request: Request,
+    payload: CaptureUploadRequest,
+) -> CaptureUploadRequest:
+    if not payload.deviceId:
+        raise HTTPException(
+            status_code=400,
+            detail="deviceId is required for capture registration",
+        )
+
+    try:
+        user_device_service = _get_user_device_service(request)
+        authorization = user_device_service.authorize_device(
+            device_id=payload.deviceId
+        )
+    except Exception as exc:
+        raise _map_user_device_error(exc) from exc
+
+    if authorization.status != "allowed" or not authorization.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="deviceId is not allowed to register captures",
+        )
+
+    if payload.userId != authorization.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="deviceId does not match requested userId",
+        )
+
+    if hasattr(payload, "model_copy"):
+        return payload.model_copy(
+            update={
+                "userId": authorization.user_id,
+                "deviceId": authorization.device_id,
+            }
+        )
+    return payload.copy(  # type: ignore[no-any-return]
+        update={
+            "userId": authorization.user_id,
+            "deviceId": authorization.device_id,
+        }
+    )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="smart-glass-api-server",
@@ -412,6 +457,7 @@ def create_app() -> FastAPI:
     async def register_capture(
         request: Request, payload: CaptureUploadRequest
     ) -> CaptureAcceptedResponse:
+        payload = _authorize_capture_payload(request, payload)
         try:
             pipeline = _get_capture_pipeline(request)
             task_id, capture = pipeline.submit(payload)

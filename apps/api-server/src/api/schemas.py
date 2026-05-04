@@ -45,6 +45,7 @@ class CaptureUploadRequest(ApiSchema):
     requestId: str | None = None
     memoryId: str | None = None
     userId: str = Field(min_length=1)
+    deviceId: str = Field(min_length=1)
     taskType: Literal["caption", "metadata"] = "metadata"
     capturedAt: str | None = None
     fileName: str | None = None
@@ -56,6 +57,13 @@ class CaptureUploadRequest(ApiSchema):
 
     @validator("userId")
     def validate_non_blank_user_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    @validator("deviceId")
+    def validate_non_blank_device_id(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("must not be blank")

@@ -79,6 +79,7 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
             requestId="req-10",
             memoryId="mem-10",
             userId="user-10",
+            deviceId="glass-10",
             taskType="metadata",
             capturedAt="2026-04-07T08:00:00Z",
             fileName="glass-photo.jpg",
