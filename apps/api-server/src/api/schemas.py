@@ -252,6 +252,72 @@ class CaptureTaskStatusResponse(ApiSchema):
     memoryStore: CaptureMemoryStoreExecutionPayload | None = None
 
 
+class UserCreateRequest(ApiSchema):
+    userId: str | None = None
+
+    @validator("userId")
+    def validate_optional_non_blank_user_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class UserCreateResponse(ApiSchema):
+    status: Literal["created"] = "created"
+    userId: str
+    createdAt: str
+
+
+class DeviceRegistrationRequest(ApiSchema):
+    userId: str = Field(min_length=1)
+    deviceId: str = Field(min_length=1)
+
+    @validator("userId", "deviceId")
+    def validate_non_blank_device_registration_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class UserDeviceRegistrationRequest(ApiSchema):
+    deviceId: str = Field(min_length=1)
+
+    @validator("deviceId")
+    def validate_non_blank_user_device_registration_device_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class DeviceRegistrationResponse(ApiSchema):
+    status: Literal["registered"] = "registered"
+    userId: str
+    deviceId: str
+    registeredAt: str
+
+
+class UploadAuthorizationRequest(ApiSchema):
+    deviceId: str = Field(min_length=1)
+
+    @validator("deviceId")
+    def validate_non_blank_upload_authorization_device_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class UploadAuthorizationResponse(ApiSchema):
+    status: Literal["allowed", "blocked"]
+    deviceId: str
+    userId: str | None = None
+
+
 class MediaAccessUrlRequest(ApiSchema):
     userId: str = Field(min_length=1)
     imageKey: str = Field(min_length=1)

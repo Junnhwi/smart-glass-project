@@ -19,6 +19,8 @@ from src.api.schemas import (
     CaptureTaskStatusResponse,
     CaptureUploadRequest,
     CaptureWorkerExecutionPayload,
+    DeviceRegistrationRequest,
+    DeviceRegistrationResponse,
     MediaBatchAccessUrlRequest,
     MediaBatchAccessUrlResponse,
     MediaAccessUrlRequest,
@@ -33,6 +35,11 @@ from src.api.schemas import (
     MemorySearchHitPayload,
     MemorySearchRequest,
     MemorySearchResponse,
+    UploadAuthorizationRequest,
+    UploadAuthorizationResponse,
+    UserCreateRequest,
+    UserCreateResponse,
+    UserDeviceRegistrationRequest,
     VlmInferenceResultPayload,
 )
 from src.database.memory_store import build_default_memory_store_client
@@ -46,6 +53,7 @@ from src.modules.search.service import (
     SearchHit,
     build_default_memory_query_service,
 )
+from src.modules.users.service import build_default_user_device_service
 
 
 DEFAULT_CORS_ORIGINS = (
@@ -147,6 +155,14 @@ def _get_memory_store_client(request: Request):
     return memory_store_client
 
 
+def _get_user_device_service(request: Request):
+    user_device_service = getattr(request.app.state, "user_device_service", None)
+    if user_device_service is None:
+        user_device_service = request.app.state.user_device_service_factory()
+        request.app.state.user_device_service = user_device_service
+    return user_device_service
+
+
 def _map_celery_state_to_capture_status(state: str) -> str:
     normalized = " ".join(str(state).split()).strip().upper()
     if normalized in {"PENDING", "RECEIVED"}:
@@ -158,6 +174,19 @@ def _map_celery_state_to_capture_status(state: str) -> str:
     if normalized == "SUCCESS":
         return "completed"
     return "failed"
+
+
+def _map_user_device_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ValueError):
+        detail = str(exc)
+        if "API_CAPTURE_DATABASE_URL" in detail or "database_url" in detail:
+            return HTTPException(status_code=503, detail=detail)
+        if "already registered" in detail:
+            return HTTPException(status_code=409, detail=detail)
+        return HTTPException(status_code=400, detail=detail)
+    return HTTPException(status_code=503, detail=str(exc))
 
 
 def create_app() -> FastAPI:
@@ -183,6 +212,10 @@ def create_app() -> FastAPI:
             "routes": [
                 "GET /health/live",
                 "GET /health/ready",
+                "POST /users",
+                "POST /users/{userId}/devices",
+                "POST /devices/register",
+                "POST /media/upload-authorizations",
                 "POST /media/captures",
                 "GET /media/captures/tasks/{taskId}",
                 "POST /media/gallery",
@@ -207,6 +240,8 @@ def create_app() -> FastAPI:
     app.state.media_access_service_factory = build_default_media_access_service
     app.state.memory_query_service = None
     app.state.memory_query_service_factory = build_default_memory_query_service
+    app.state.user_device_service = None
+    app.state.user_device_service_factory = build_default_user_device_service
 
     @app.get("/health/live")
     async def liveness_check() -> JSONResponse:
@@ -273,6 +308,101 @@ def create_app() -> FastAPI:
                 "checks": checks,
             },
         )
+
+    @app.post(
+        "/users",
+        status_code=status.HTTP_201_CREATED,
+        response_model=UserCreateResponse,
+    )
+    def create_user(
+        request: Request,
+        payload: UserCreateRequest | None = None,
+    ) -> UserCreateResponse:
+        payload = payload or UserCreateRequest()
+        try:
+            user_device_service = _get_user_device_service(request)
+            user = user_device_service.create_user(user_id=payload.userId)
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserCreateResponse(
+            userId=user.user_id,
+            createdAt=user.created_at,
+        )
+
+    @app.post(
+        "/devices/register",
+        status_code=status.HTTP_201_CREATED,
+        response_model=DeviceRegistrationResponse,
+    )
+    def register_device(
+        request: Request,
+        payload: DeviceRegistrationRequest,
+    ) -> DeviceRegistrationResponse:
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.register_device(
+                user_id=payload.userId,
+                device_id=payload.deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return DeviceRegistrationResponse(
+            userId=device.user_id,
+            deviceId=device.device_id,
+            registeredAt=device.registered_at,
+        )
+
+    @app.post(
+        "/users/{userId}/devices",
+        status_code=status.HTTP_201_CREATED,
+        response_model=DeviceRegistrationResponse,
+    )
+    def register_device_for_user(
+        request: Request,
+        userId: str,
+        payload: UserDeviceRegistrationRequest,
+    ) -> DeviceRegistrationResponse:
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.register_device(
+                user_id=userId,
+                device_id=payload.deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return DeviceRegistrationResponse(
+            userId=device.user_id,
+            deviceId=device.device_id,
+            registeredAt=device.registered_at,
+        )
+
+    @app.post(
+        "/media/upload-authorizations",
+        response_model=UploadAuthorizationResponse,
+    )
+    def authorize_media_upload(
+        request: Request,
+        payload: UploadAuthorizationRequest,
+    ) -> UploadAuthorizationResponse | JSONResponse:
+        try:
+            user_device_service = _get_user_device_service(request)
+            authorization = user_device_service.authorize_device(
+                device_id=payload.deviceId
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+
+        response = UploadAuthorizationResponse(
+            status=authorization.status,
+            deviceId=authorization.device_id,
+            userId=authorization.user_id,
+        )
+        if authorization.status == "blocked":
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content=_schema_to_payload_dict(response),
+            )
+        return response
 
     @app.post(
         "/media/captures",
