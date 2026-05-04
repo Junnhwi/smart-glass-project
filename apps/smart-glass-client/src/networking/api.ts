@@ -66,6 +66,36 @@ export type UploadAuthorizationResponse = {
   upload?: UploadAuthorizationPlan | null;
 };
 
+export type CaptureRegistrationPayload = {
+  captureId: string;
+  requestId: string;
+  memoryId: string;
+  userId: string;
+  deviceId: string;
+  taskType: 'caption' | 'metadata';
+  capturedAt: string;
+  sourceImage: CaptureSourceImageSnapshot;
+};
+
+export type CaptureAcceptedResponse = {
+  status: 'accepted';
+  service: 'api-server';
+  taskId: string;
+  capture: {
+    captureId: string;
+    requestId: string;
+    memoryId: string;
+    userId: string;
+    taskType: 'caption' | 'metadata';
+    capturedAt: string;
+    sourceImage: CaptureSourceImageSnapshot;
+  };
+  worker: {
+    taskId: string | null;
+    status: 'queued' | 'running' | 'retrying' | 'success' | 'error' | 'timeout';
+  };
+};
+
 type MediaBatchAccessUrlResponse = {
   totalItems: number;
   items: MediaAccessUrl[];
@@ -241,4 +271,31 @@ export const requestMediaUploadAuthorization = async ({
     imageKey,
     contentType,
   });
+};
+
+export const buildCaptureRegistrationPayload = ({
+  userId,
+  deviceId,
+  uploadPlan,
+}: {
+  userId: string;
+  deviceId: string;
+  uploadPlan: UploadAuthorizationPlan;
+}): CaptureRegistrationPayload => {
+  return {
+    captureId: uploadPlan.captureId,
+    requestId: uploadPlan.requestId,
+    memoryId: uploadPlan.memoryId,
+    userId,
+    deviceId,
+    taskType: uploadPlan.taskType,
+    capturedAt: uploadPlan.capturedAt,
+    sourceImage: uploadPlan.sourceImage,
+  };
+};
+
+export const registerMediaCapture = async (
+  payload: CaptureRegistrationPayload
+) => {
+  return postJson<CaptureAcceptedResponse>('/media/captures', payload);
 };
