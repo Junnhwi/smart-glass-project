@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -31,6 +31,13 @@ import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
 const DEFAULT_FILE_NAME = 'smart-glass-photo.jpg';
+const TASK_POLL_INTERVAL_MS = 2500;
+
+const isTerminalTaskStatus = (
+  status?: CaptureTaskStatusResponse['status'] | null
+) => {
+  return status === 'completed' || status === 'partial' || status === 'failed';
+};
 
 const inferMimeTypeFromFileName = (value: string) => {
   const normalized = value.trim().toLowerCase();
@@ -111,6 +118,12 @@ export default function SettingsScreen() {
       selectedAsset?.mimeType?.trim() || inferMimeTypeFromFileName(resolvedFileName)
     );
   }, [resolvedFileName, selectedAsset?.mimeType]);
+
+  const workerMetadata = captureTaskStatus?.worker.result?.metadata || null;
+  const captureIsFinished = isTerminalTaskStatus(captureTaskStatus?.status);
+  const canOpenChat =
+    captureTaskStatus?.memoryStore?.status === 'success' ||
+    captureTaskStatus?.status === 'completed';
 
   const choosePhoto = async () => {
     if (isPicking) {
@@ -238,6 +251,7 @@ export default function SettingsScreen() {
       const response = await registerMediaCapture(capturePayload);
       setCaptureResponse(response);
       setCaptureTaskStatus(null);
+      setUploadMessage('Capture queued. Waiting for the inference worker to finish.');
     } catch (error) {
       const message =
         error instanceof Error && error.message
@@ -250,17 +264,24 @@ export default function SettingsScreen() {
     }
   };
 
-  const refreshTaskStatus = async () => {
+  const refreshTaskStatus = async (options?: { silent?: boolean }) => {
     if (!captureResponse?.taskId || isPollingTask) {
       return;
     }
 
     setIsPollingTask(true);
-    setErrorMessage('');
+    if (!options?.silent) {
+      setErrorMessage('');
+    }
 
     try {
       const response = await getCaptureTaskStatus(captureResponse.taskId);
       setCaptureTaskStatus(response);
+      if (response.memoryStore?.status === 'success') {
+        setUploadMessage(
+          'Inference finished and the memory record was stored successfully.'
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error && error.message
@@ -271,6 +292,28 @@ export default function SettingsScreen() {
       setIsPollingTask(false);
     }
   };
+
+  useEffect(() => {
+    if (!captureResponse?.taskId) {
+      return;
+    }
+    if (isPollingTask || captureIsFinished) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void refreshTaskStatus({ silent: true });
+    }, captureTaskStatus ? TASK_POLL_INTERVAL_MS : 1000);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    captureIsFinished,
+    captureResponse?.taskId,
+    captureTaskStatus,
+    isPollingTask,
+  ]);
 
   return (
     <SafeAreaView style={commonStyles.screen}>
@@ -480,6 +523,9 @@ export default function SettingsScreen() {
               <Text style={styles.resultText}>
                 workerStatus: {captureResponse.worker.status}
               </Text>
+              <Text style={styles.resultText}>
+                polling: {captureIsFinished ? 'done' : 'watching for completion'}
+              </Text>
               <Text style={styles.resultHint}>
                 The source image is now uploaded, so the queued worker can read it
                 from object storage on the backend side.
@@ -499,10 +545,60 @@ export default function SettingsScreen() {
               <Text style={styles.resultText}>
                 memoryStore: {captureTaskStatus.memoryStore?.status || 'pending'}
               </Text>
+              {captureTaskStatus.memoryStore?.storedCount !== undefined ? (
+                <Text style={styles.resultText}>
+                  storedCount: {captureTaskStatus.memoryStore.storedCount ?? 0}
+                </Text>
+              ) : null}
+              {currentUser &&
+              captureTaskStatus.memoryStore?.totalUserMemories?.[currentUser.userId] !==
+                undefined ? (
+                <Text style={styles.resultText}>
+                  totalUserMemories:{' '}
+                  {
+                    captureTaskStatus.memoryStore.totalUserMemories[
+                      currentUser.userId
+                    ]
+                  }
+                </Text>
+              ) : null}
+              {workerMetadata?.caption ? (
+                <Text style={styles.resultText}>
+                  caption: {workerMetadata.caption}
+                </Text>
+              ) : null}
+              {workerMetadata?.sceneSummary ? (
+                <Text style={styles.resultText}>
+                  sceneSummary: {workerMetadata.sceneSummary}
+                </Text>
+              ) : null}
+              {workerMetadata?.detectedObjects?.length ? (
+                <Text style={styles.resultText}>
+                  objects: {workerMetadata.detectedObjects.join(', ')}
+                </Text>
+              ) : null}
+              {workerMetadata?.positionHint ? (
+                <Text style={styles.resultText}>
+                  positionHint: {workerMetadata.positionHint}
+                </Text>
+              ) : null}
               {captureTaskStatus.worker.error ? (
                 <Text style={styles.errorText}>
                   workerError: {captureTaskStatus.worker.error}
                 </Text>
+              ) : null}
+              {captureTaskStatus.memoryStore?.error ? (
+                <Text style={styles.errorText}>
+                  memoryStoreError: {captureTaskStatus.memoryStore.error}
+                </Text>
+              ) : null}
+              {canOpenChat ? (
+                <Pressable
+                  style={styles.inlineAction}
+                  onPress={() => navigation.navigate('Chat')}
+                >
+                  <Text style={styles.inlineActionText}>Open Chat to Verify</Text>
+                </Pressable>
               ) : null}
             </View>
           ) : null}
@@ -658,5 +754,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: colors.subText,
+  },
+  inlineAction: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#DBEAFE',
+  },
+  inlineActionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
   },
 });

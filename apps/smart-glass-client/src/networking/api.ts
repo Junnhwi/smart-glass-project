@@ -99,6 +99,29 @@ export type CaptureAcceptedResponse = {
   };
 };
 
+export type CaptureWorkerMetadata = {
+  caption?: string | null;
+  sceneSummary?: string | null;
+  detectedObjects?: string[];
+  tags?: string[];
+  positionHint?: string | null;
+  location?: MemoryLocation;
+};
+
+export type CaptureWorkerResult = {
+  requestId?: string;
+  taskType?: 'caption' | 'metadata';
+  memoryId?: string;
+  userId?: string;
+  capturedAt?: string;
+  sourceImage?: CaptureSourceImageSnapshot;
+  metadata?: CaptureWorkerMetadata;
+  pipelineOutput?: {
+    scene_summary?: string | null;
+    location_context?: string | null;
+  };
+};
+
 export type CaptureTaskStatusResponse = {
   status: 'queued' | 'running' | 'retrying' | 'completed' | 'partial' | 'failed';
   service: 'api-server';
@@ -106,13 +129,14 @@ export type CaptureTaskStatusResponse = {
   worker: {
     taskId: string | null;
     status: 'queued' | 'running' | 'retrying' | 'success' | 'error' | 'timeout';
-    result?: Record<string, unknown> | null;
+    result?: CaptureWorkerResult | null;
     error?: string | null;
   };
   memoryStore?: {
     backend: string;
     status: 'success' | 'error' | 'skipped';
     storedCount?: number | null;
+    totalUserMemories?: Record<string, number>;
     error?: string | null;
   } | null;
 };
