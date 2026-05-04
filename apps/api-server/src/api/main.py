@@ -348,6 +348,14 @@ def create_app() -> FastAPI:
             checks["mediaAccess"] = "error"
             errors["mediaAccess"] = str(exc)
 
+        try:
+            user_device_service = _get_user_device_service(request)
+            user_device_service.check_health()
+            checks["userDevice"] = "ok"
+        except Exception as exc:
+            checks["userDevice"] = "error"
+            errors["userDevice"] = str(exc)
+
         if errors:
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -200,13 +200,6 @@ class PostgresUserRegistry:
         if user is None:
             raise LookupError("userId is not registered")
 
-        existing_device = self.get_device(normalized_device_id)
-        if (
-            existing_device is not None
-            and existing_device.user_id != normalized_user_id
-        ):
-            raise ValueError("deviceId is already registered to another user")
-
         query = f"""
             INSERT INTO {self.devices_table_name} (
                 device_id,
@@ -216,6 +209,7 @@ class PostgresUserRegistry:
             ) VALUES (%s, %s, NOW(), NOW())
             ON CONFLICT (device_id) DO UPDATE
             SET updated_at = NOW()
+            WHERE {self.devices_table_name}.user_id = EXCLUDED.user_id
             RETURNING device_id, user_id, created_at
         """
         try:
@@ -235,7 +229,7 @@ class PostgresUserRegistry:
             ) from exc
 
         if not row:
-            raise UserRegistryUnavailableError("Postgres write failed: device row missing")
+            raise ValueError("deviceId is already registered to another user")
         return DeviceRecord(
             device_id=str(row[0]),
             user_id=str(row[1]),
