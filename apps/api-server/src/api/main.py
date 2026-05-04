@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from src.api.auth import (
+    require_internal_service_token,
+    resolve_authenticated_user,
+)
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
     CaptureProcessingResponse,
@@ -18,11 +25,14 @@ from src.api.schemas import (
     MediaGalleryResponse,
     MemoryChatRequest,
     MemoryChatResponse,
+    MemoryInferenceResultIngestResponse,
     MemoryLocationPayload,
     MemorySearchHitPayload,
     MemorySearchRequest,
     MemorySearchResponse,
+    VlmInferenceResultPayload,
 )
+from src.database.memory_store import build_default_memory_store_client
 from src.modules.media.service import (
     GalleryItem,
     MediaAccessUrl,
@@ -33,6 +43,28 @@ from src.modules.search.service import (
     SearchHit,
     build_default_memory_query_service,
 )
+
+
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:19006",
+    "http://127.0.0.1:19006",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+
+
+def _resolve_cors_origins() -> list[str]:
+    raw_value = os.getenv("API_CORS_ALLOW_ORIGINS", "").strip()
+    if not raw_value:
+        return list(DEFAULT_CORS_ORIGINS)
+    origins = [
+        origin.strip()
+        for origin in raw_value.split(",")
+        if origin.strip()
+    ]
+    return origins or list(DEFAULT_CORS_ORIGINS)
 
 
 def _map_hit(hit: SearchHit) -> MemorySearchHitPayload:
@@ -74,6 +106,12 @@ def _map_gallery_item(item: GalleryItem) -> MediaGalleryItemPayload:
     )
 
 
+def _schema_to_payload_dict(payload: Any) -> dict[str, Any]:
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(exclude_none=False)
+    return payload.dict(exclude_none=False)
+
+
 def _get_capture_pipeline(request: Request):
     pipeline = getattr(request.app.state, "capture_pipeline", None)
     if pipeline is None:
@@ -98,12 +136,27 @@ def _get_media_access_service(request: Request):
     return media_access_service
 
 
+def _get_memory_store_client(request: Request):
+    memory_store_client = getattr(request.app.state, "memory_store_client", None)
+    if memory_store_client is None:
+        memory_store_client = request.app.state.memory_store_client_factory()
+        request.app.state.memory_store_client = memory_store_client
+    return memory_store_client
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="smart-glass-api-server",
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_resolve_cors_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     @app.get("/")
@@ -118,6 +171,7 @@ def create_app() -> FastAPI:
                 "POST /media/gallery",
                 "POST /media/access-url",
                 "POST /media/access-urls",
+                "POST /memories/inference-results",
                 "POST /search",
                 "POST /chat",
             ],
@@ -130,6 +184,8 @@ def create_app() -> FastAPI:
 
     app.state.capture_pipeline = None
     app.state.capture_pipeline_factory = build_default_capture_pipeline
+    app.state.memory_store_client = None
+    app.state.memory_store_client_factory = build_default_memory_store_client
     app.state.media_access_service = None
     app.state.media_access_service_factory = build_default_media_access_service
     app.state.memory_query_service = None
@@ -223,10 +279,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MediaGalleryRequest,
     ) -> MediaGalleryResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             media_access_service = _get_media_access_service(request)
             items = media_access_service.list_gallery_items(
-                user_id=payload.userId,
+                user_id=user_id,
                 limit=payload.limit,
             )
         except MediaUrlSignerConfigError as exc:
@@ -245,10 +302,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MediaAccessUrlRequest,
     ) -> MediaAccessUrlResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             media_access_service = _get_media_access_service(request)
             result = media_access_service.issue_access_url(
-                user_id=payload.userId,
+                user_id=user_id,
                 image_key=payload.imageKey,
                 expires_in_sec=payload.expiresInSec,
             )
@@ -267,10 +325,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MediaBatchAccessUrlRequest,
     ) -> MediaBatchAccessUrlResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             media_access_service = _get_media_access_service(request)
             items = media_access_service.issue_access_urls(
-                user_id=payload.userId,
+                user_id=user_id,
                 image_keys=payload.imageKeys,
                 expires_in_sec=payload.expiresInSec,
             )
@@ -287,15 +346,61 @@ def create_app() -> FastAPI:
             items=[_map_media_access_url(item) for item in items],
         )
 
+    @app.post(
+        "/memories/inference-results",
+        status_code=status.HTTP_201_CREATED,
+        response_model=MemoryInferenceResultIngestResponse,
+    )
+    def store_inference_result(
+        request: Request,
+        payload: VlmInferenceResultPayload,
+    ) -> MemoryInferenceResultIngestResponse:
+        require_internal_service_token(request)
+        try:
+            memory_store_client = _get_memory_store_client(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory store backend unavailable: {exc}",
+            ) from exc
+
+        try:
+            outcome = memory_store_client.persist_vlm_result(
+                _schema_to_payload_dict(payload)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory store backend unavailable: {exc}",
+            ) from exc
+
+        return MemoryInferenceResultIngestResponse(
+            memoryId=payload.memoryId,
+            userId=payload.userId,
+            imageKey=payload.sourceImage.imageKey,
+            capturedAt=payload.capturedAt,
+            storedCount=outcome.stored_count,
+            totalUserMemories=outcome.total_user_memories,
+        )
+
     @app.post("/search", response_model=MemorySearchResponse)
     def search_memories(
         request: Request,
         payload: MemorySearchRequest,
     ) -> MemorySearchResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             memory_query_service = _get_memory_query_service(request)
             hits = memory_query_service.search(
-                user_id=payload.userId,
+                user_id=user_id,
                 query=payload.query,
                 top_k=payload.topK,
             )
@@ -320,10 +425,11 @@ def create_app() -> FastAPI:
         request: Request,
         payload: MemoryChatRequest,
     ) -> MemoryChatResponse:
+        user_id = resolve_authenticated_user(request, payload.userId)
         try:
             memory_query_service = _get_memory_query_service(request)
             answer_result, hits = memory_query_service.chat(
-                user_id=payload.userId,
+                user_id=user_id,
                 query=payload.query,
                 top_k=payload.topK,
             )

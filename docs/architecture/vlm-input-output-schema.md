@@ -26,7 +26,11 @@ Reference:
 
 ## Success Result Shape
 
-Successful worker results contain:
+Successful worker results contain the same shape whether they come from the
+local Celery worker or from an external device/storage/inference pipeline.
+This is also the request body accepted by `POST /memories/inference-results`.
+
+Required fields:
 
 - `status: "success"`
 - `requestId`
@@ -34,8 +38,11 @@ Successful worker results contain:
 - `memoryId`
 - `userId`
 - `capturedAt`
-- `sourceImage`
+- `sourceImage.imageKey`
 - `metadata`
+
+Optional but supported fields:
+
 - `pipelineOutput`
 - `providerMetadata`
 - `runtime`
@@ -49,6 +56,74 @@ Important `metadata` fields:
 - `ocrText`
 - `positionHint`
 - `location`
+
+Canonical success payload:
+
+```json
+{
+  "status": "success",
+  "requestId": "req-earbuds-001",
+  "taskType": "metadata",
+  "memoryId": "mem-earbuds-001",
+  "userId": "user-1",
+  "capturedAt": "2026-04-30T09:00:00Z",
+  "sourceImage": {
+    "imageKey": "captures/user-1/2026/04/30/cap-earbuds.jpg",
+    "imageUrl": null,
+    "contentType": "image/jpeg"
+  },
+  "metadata": {
+    "caption": "earbuds on the desk next to the laptop",
+    "sceneSummary": "desk scene with earbuds",
+    "detectedObjects": ["earbuds", "desk", "laptop"],
+    "tags": ["earbuds", "workspace"],
+    "ocrText": null,
+    "positionHint": "next to laptop",
+    "location": {
+      "name": "workspace",
+      "address": null,
+      "latitude": null,
+      "longitude": null
+    }
+  },
+  "pipelineOutput": {
+    "scene_summary": "desk scene with earbuds",
+    "location_context": "workspace",
+    "objects": [
+      {
+        "name": "earbuds",
+        "nearby_objects": ["laptop"],
+        "visual_features": {
+          "brand": null,
+          "color": null,
+          "text": null
+        }
+      }
+    ]
+  },
+  "providerMetadata": {
+    "modelKey": "qwen2.5-vl-7b",
+    "modelId": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "modelFamily": "qwen-vl",
+    "quantization": "4bit",
+    "dtype": "float16",
+    "provider": "huggingface-transformers",
+    "capabilities": {
+      "detectedObjects": true,
+      "tags": true,
+      "positionHint": true,
+      "sceneSummary": true,
+      "ocrText": true,
+      "location": true
+    }
+  },
+  "runtime": {
+    "latencySec": 1.25,
+    "peakMemoryMb": 512.0,
+    "loadTimeSec": 0.4
+  }
+}
+```
 
 ## Error Result Shape
 

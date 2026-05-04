@@ -16,20 +16,45 @@ import micIcon from '../icon/mic.png';
 
 import { commonStyles } from '../styles/commonStyles';
 
+import { useAuth } from '../context/AuthContext';
 import { useItemContext } from '../context/ItemContext';
+import {
+  chatWithMemories,
+  issueMediaAccessUrls,
+  type MemorySearchHit,
+} from '../../networking/api';
 
 type Message = {
   id: number;
   sender: 'bot' | 'user';
   text: string;
+  relatedImages?: RelatedImage[];
 };
 
-const getDummyReply = (input: string) => {
-  return `"${input}"에 대한 더미 응답입니다. 나중에 여기에 실제 AI 응답이 연결될 예정입니다.`;
-  //TODO: AI 응답과 연동하여 실제 답변이 나오도록 수정 필요
+type RelatedImage = {
+  imageKey: string;
+  accessUrl: string;
+  capturedAt?: string | null;
+  caption?: string | null;
+  sceneSummary?: string | null;
+  positionHint?: string | null;
+};
+
+const uniqueImageKeysFromHits = (hits: MemorySearchHit[]) => {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+
+  hits.forEach((hit) => {
+    if (!hit.imageKey || seen.has(hit.imageKey)) return;
+    seen.add(hit.imageKey);
+    keys.push(hit.imageKey);
+  });
+
+  return keys;
 };
 
 export default function ChatScreen() {
+  const { currentUser } = useAuth();
   const { addItem } = useItemContext();
   const knownItems = ['지갑', '이어폰', '열쇠', '가방', '안경', '충전기', '텀블러'];
   //히스토리 확인을 위한 더미 데이터
@@ -88,8 +113,9 @@ export default function ChatScreen() {
     }, 100);
   };
 
-  const handleSend = () => {
-    
+  const handleSend = async () => {
+    if (!currentUser) return;
+
     const trimmed = inputText.trim();
     if (!trimmed) return;
 
@@ -110,17 +136,73 @@ export default function ChatScreen() {
     setIsBotTyping(true);
     scrollToBottom();
 
-    setTimeout(() => {
+    try {
+      const chatResponse = await chatWithMemories({
+        authToken: currentUser.authToken,
+        userId: currentUser.userId,
+        query: trimmed,
+        topK: 3,
+      });
+      const imageKeys = uniqueImageKeysFromHits(chatResponse.hits);
+      let accessUrlByImageKey: Record<string, string> = {};
+
+      if (imageKeys.length > 0) {
+        try {
+          const accessUrls = await issueMediaAccessUrls({
+            authToken: currentUser.authToken,
+            userId: currentUser.userId,
+            imageKeys,
+          });
+          accessUrlByImageKey = accessUrls.items.reduce<Record<string, string>>(
+            (acc, item) => {
+              acc[item.imageKey] = item.accessUrl;
+              return acc;
+            },
+            {}
+          );
+        } catch {
+          accessUrlByImageKey = {};
+        }
+      }
+
+      const relatedImages = chatResponse.hits
+        .map((hit) => {
+          if (!hit.imageKey) return null;
+          const accessUrl = accessUrlByImageKey[hit.imageKey] || hit.imageUrl;
+          if (!accessUrl) return null;
+
+          return {
+            imageKey: hit.imageKey,
+            accessUrl,
+            capturedAt: hit.capturedAt,
+            caption: hit.caption,
+            sceneSummary: hit.sceneSummary,
+            positionHint: hit.positionHint,
+          };
+        })
+        .filter(Boolean) as RelatedImage[];
+
       const botMessage: Message = {
         id: Date.now() + 1,
         sender: 'bot',
-        text: getDummyReply(trimmed),
+        text: chatResponse.answer || '관련된 메모리를 찾지 못했습니다.',
+        relatedImages,
       };
 
       setMessages((prev) => [...prev, botMessage]);
+    } catch {
+      const botMessage: Message = {
+        id: Date.now() + 1,
+        sender: 'bot',
+        text:
+          '백엔드 응답을 가져오지 못했습니다. API 서버가 켜져 있는지 확인해 주세요.',
+      };
+
+      setMessages((prev) => [...prev, botMessage]);
+    } finally {
       setIsBotTyping(false);
       scrollToBottom();
-    }, 700);
+    }
   };
 
   const renderHighlightedText = (
@@ -283,6 +365,38 @@ export default function ChatScreen() {
               ]}
             >
               {renderHighlightedText(message.text, message.sender)}
+              {message.relatedImages?.length ? (
+                <View style={styles.relatedImagesBlock}>
+                  <Text style={styles.relatedImagesTitle}>관련 사진</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.relatedImagesList}
+                  >
+                    {message.relatedImages.map((image) => (
+                      <View
+                        key={image.imageKey}
+                        style={styles.relatedImageCard}
+                      >
+                        <Image
+                          source={{ uri: image.accessUrl }}
+                          style={styles.relatedImage}
+                        />
+                        <Text
+                          numberOfLines={2}
+                          style={styles.relatedImageCaption}
+                        >
+                          {image.positionHint ||
+                            image.sceneSummary ||
+                            image.caption ||
+                            image.capturedAt ||
+                            '관련 이미지'}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
             </View>
           );
         })}
@@ -483,6 +597,43 @@ const styles = StyleSheet.create({
     backgroundColor: '#FDE68A',
     color: '#111827',
     fontWeight: '700',
+  },
+
+  relatedImagesBlock: {
+    marginTop: 12,
+    gap: 8,
+  },
+
+  relatedImagesTitle: {
+    fontSize: 12,
+    color: '#4B5563',
+    fontWeight: '700',
+  },
+
+  relatedImagesList: {
+    gap: 10,
+  },
+
+  relatedImageCard: {
+    width: 132,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+  },
+
+  relatedImage: {
+    width: '100%',
+    height: 96,
+    backgroundColor: '#E5E7EB',
+  },
+
+  relatedImageCaption: {
+    padding: 8,
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#374151',
   },
 
   frequentQuestionsSection: {

@@ -3,17 +3,19 @@ import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 
+import { useAuth } from '../context/AuthContext';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
 export default function ProfileScreen() {
   const navigation = useNavigation<any>();
+  const { currentUser } = useAuth();
 
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
         <Pressable onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>←</Text>
+          <Text style={styles.backButton}>‹</Text>
         </Pressable>
 
         <Text style={commonStyles.headerTitle}>사용자 정보</Text>
@@ -23,28 +25,32 @@ export default function ProfileScreen() {
 
       <View style={styles.content}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarIcon}>👤</Text>
+          <Text style={styles.avatarIcon}>
+            {(currentUser?.displayName || 'U').slice(0, 1).toUpperCase()}
+          </Text>
         </View>
-        {/*TODO: 사용자 프로필 사진 연동 필요 */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>이메일</Text>
-          <View style={styles.inputBox}>
-            <Text style={styles.value}>smart1336@gmail.com</Text>
-          </View>
-        </View>
-        {/*TODO : 사용자 이메일 연동 필요 */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>연결된 스마트 글라스</Text>
-          <View style={styles.inputBox}>
-            <Text style={styles.value}>glass-1336</Text>
-          </View>
-        </View>
-        {/*TODO: 연결된 스마트 글라스 정보 연동 필요 */}
 
-        <Text style={styles.syncText}>최근 데이터 동기화: 2분 전</Text> 
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>표시 이름</Text>
+          <View style={styles.inputBox}>
+            <Text style={styles.value}>
+              {currentUser?.displayName || '미설정'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>사용자 ID</Text>
+          <View style={styles.inputBox}>
+            <Text style={styles.value}>{currentUser?.userId || '미설정'}</Text>
+          </View>
+        </View>
+
+        <Text style={styles.syncText}>
+          현재 로그인된 사용자 기준으로 검색 기록과 관련 이미지가 조회됩니다.
+        </Text>
       </View>
     </SafeAreaView>
-    //TODO: 실제 사용자 데이터 연동 필요
   );
 }
 
@@ -54,57 +60,55 @@ const styles = StyleSheet.create({
     paddingHorizontal: 36,
     paddingTop: 48,
   },
-
   avatar: {
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: '#D9D9D9',
+    backgroundColor: '#DCEAFE',
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 36,
   },
-
   avatarIcon: {
-    fontSize: 42,
+    fontSize: 36,
+    fontWeight: '700',
+    color: colors.primary,
   },
-
   fieldGroup: {
     marginBottom: 16,
   },
-
   label: {
     fontSize: 18,
     fontWeight: '700',
     color: colors.text,
     marginBottom: 8,
   },
-
   inputBox: {
-    height: 46,
-    borderRadius: 8,
-    backgroundColor: '#D1D1D1',
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
     justifyContent: 'center',
     paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-
   value: {
     fontSize: 15,
     color: colors.text,
-    textDecorationLine: 'underline',
   },
-
   syncText: {
     fontSize: 12,
     color: colors.subText,
     textAlign: 'right',
-    marginTop: -6,
+    marginTop: 8,
+    lineHeight: 18,
   },
-
   backButton: {
-    fontSize: 20,
+    fontSize: 24,
     color: colors.text,
     width: 24,
+    lineHeight: 24,
   },
 });
