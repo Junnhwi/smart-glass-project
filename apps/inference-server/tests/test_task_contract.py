@@ -4,10 +4,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from PIL import Image
 
-from src.queue.tasks import _should_retry_task, process_vision_inference
+from src.queue.tasks import (
+    _resolve_retry_delay_seconds,
+    _should_retry_task,
+    process_vision_inference,
+)
 from src.storage.s3 import StorageAccessError, StorageNotFoundError, StorageObject
 
 
@@ -298,6 +302,75 @@ class TaskContractTestCase(unittest.TestCase):
         )
 
         self.assertFalse(should_retry)
+
+    def test_worker_retry_delay_uses_bounded_backoff(self) -> None:
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                0,
+                base_delay_sec=10,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            10,
+        )
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                1,
+                base_delay_sec=10,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            20,
+        )
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                3,
+                base_delay_sec=10,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            60,
+        )
+
+    def test_worker_retry_delay_keeps_zero_delay_explicit(self) -> None:
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                3,
+                base_delay_sec=0,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            0,
+        )
+
+    def test_process_vision_inference_schedules_retry_for_worker_attempt(self) -> None:
+        process_vision_inference.request.called_directly = False
+        process_vision_inference.request.retries = 1
+        try:
+            with patch(
+                "src.queue.tasks.get_storage_service",
+                return_value=_FailingStorageService(StorageAccessError("s3 flaky")),
+            ):
+                with patch.object(
+                    process_vision_inference,
+                    "retry",
+                    side_effect=Retry(),
+                ) as mocked_retry:
+                    with self.assertRaises(Retry):
+                        process_vision_inference.run(
+                            image_key="captures/wallet-01.jpg",
+                            user_id="user-1",
+                            request_id="req-retry-1",
+                        )
+
+            self.assertEqual(mocked_retry.call_args.kwargs["countdown"], 20)
+            self.assertIsInstance(
+                mocked_retry.call_args.kwargs["exc"],
+                StorageAccessError,
+            )
+        finally:
+            process_vision_inference.request.called_directly = True
+            process_vision_inference.request.retries = 0
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"
