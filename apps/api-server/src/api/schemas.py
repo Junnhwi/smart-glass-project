@@ -63,9 +63,16 @@ class CaptureUploadRequest(ApiSchema):
 
 
 class VlmSourceImagePayload(ApiSchema):
-    imageKey: str
+    imageKey: str = Field(min_length=1)
     imageUrl: str | None = None
     contentType: str | None = None
+
+    @validator("imageKey")
+    def validate_non_blank_image_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
 
 
 class VlmGenerationConfigPayload(ApiSchema):
@@ -85,6 +92,96 @@ class VlmInferenceRequestPayload(ApiSchema):
     capturedAt: str | None = None
     sourceImage: VlmSourceImagePayload
     generation: VlmGenerationConfigPayload | None = None
+
+
+class VlmInferenceLocationPayload(ApiSchema):
+    name: str | None = None
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class VlmInferenceMetadataPayload(ApiSchema):
+    caption: str | None = None
+    sceneSummary: str | None = None
+    detectedObjects: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    ocrText: str | None = None
+    positionHint: str | None = None
+    location: VlmInferenceLocationPayload | None = None
+
+
+class VlmObjectVisualFeaturesPayload(ApiSchema):
+    brand: str | None = None
+    color: str | None = None
+    text: str | None = None
+
+
+class VlmStructuredObjectPayload(ApiSchema):
+    name: str = Field(min_length=1)
+    nearby_objects: list[str] = Field(default_factory=list)
+    visual_features: VlmObjectVisualFeaturesPayload | None = None
+
+    @validator("name")
+    def validate_non_blank_object_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class VlmPipelineOutputPayload(ApiSchema):
+    scene_summary: str | None = None
+    location_context: str | None = None
+    objects: list[VlmStructuredObjectPayload] = Field(default_factory=list)
+
+
+class VlmProviderCapabilitiesPayload(ApiSchema):
+    detectedObjects: bool = True
+    tags: bool = True
+    positionHint: bool = True
+    sceneSummary: bool = True
+    ocrText: bool = True
+    location: bool = True
+
+
+class VlmProviderMetadataPayload(ApiSchema):
+    modelKey: str | None = None
+    modelId: str | None = None
+    modelFamily: str | None = None
+    quantization: Literal["none", "8bit", "4bit"] | None = None
+    dtype: Literal["float16", "bfloat16", "float32"] | None = None
+    provider: str | None = None
+    capabilities: VlmProviderCapabilitiesPayload | None = None
+    executionPolicy: dict[str, Any] | None = None
+    raw: dict[str, Any] | None = None
+
+
+class VlmRuntimePayload(ApiSchema):
+    latencySec: float | None = Field(default=None, ge=0)
+    peakMemoryMb: float | None = Field(default=None, ge=0)
+    loadTimeSec: float | None = Field(default=None, ge=0)
+
+
+class VlmInferenceResultPayload(ApiSchema):
+    status: Literal["success"] = "success"
+    requestId: str = Field(min_length=1)
+    taskType: Literal["caption", "metadata"] = "metadata"
+    memoryId: str = Field(min_length=1)
+    userId: str = Field(min_length=1)
+    capturedAt: str = Field(min_length=1)
+    sourceImage: VlmSourceImagePayload
+    metadata: VlmInferenceMetadataPayload
+    pipelineOutput: VlmPipelineOutputPayload = Field(default_factory=VlmPipelineOutputPayload)
+    providerMetadata: VlmProviderMetadataPayload | None = None
+    runtime: VlmRuntimePayload | None = None
+
+    @validator("requestId", "memoryId", "userId", "capturedAt")
+    def validate_non_blank_result_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
 
 
 class CaptureSourceImageSnapshot(ApiSchema):
@@ -213,6 +310,16 @@ class MediaGalleryItemPayload(ApiSchema):
 class MediaGalleryResponse(ApiSchema):
     totalItems: int
     items: list[MediaGalleryItemPayload]
+
+
+class MemoryInferenceResultIngestResponse(ApiSchema):
+    status: Literal["stored"] = "stored"
+    memoryId: str
+    userId: str
+    imageKey: str
+    capturedAt: str
+    storedCount: int
+    totalUserMemories: dict[str, int] = Field(default_factory=dict)
 
 
 class MemoryLocationPayload(ApiSchema):

@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-
+# 광록님의 성능 측정 필드와 팀원분의 상세 정보 필드가 모두 통합된 리스트입니다!
 LOG_EXTRA_FIELDS = (
     "request_id",
     "method",
@@ -28,10 +28,18 @@ LOG_EXTRA_FIELDS = (
     "fallback_triggered",
     "latency_sec",
     "load_time_sec",
+    "queue_wait_sec",
+    "storage_read_sec",
+    "image_decode_sec",
+    "model_inference_sec",
+    "task_latency_sec",
     "peak_memory_mb",
     "retry_count",
+    "next_retry_count",
     "max_retries",
     "retry_delay_sec",
+    "retry_backoff_multiplier",
+    "retry_max_delay_sec",
     "retryable",
     "failure_category",
     "error_code",
@@ -47,6 +55,7 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
 
+        # 팀원분이 정리하신 깔끔한 반복문 구조를 사용합니다
         for key in LOG_EXTRA_FIELDS:
             value = getattr(record, key, None)
             if value is not None:

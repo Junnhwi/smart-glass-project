@@ -7,6 +7,7 @@
 5. 로컬 업로드/스모크 스크립트도 같은 `StorageService`를 통해 이미지를 업로드합니다.
 6. `StorageService`가 object storage client 생성, 기본 bucket 해석, 예외 매핑을 담당합니다.
 7. 워커는 받은 이미지 바이트로 모델 추론을 수행하고 결과를 반환합니다.
+8. retryable 오류는 Celery worker 실행 중 bounded backoff로 재시도합니다.
 
 Object key 세부 규칙은 [object-storage-keys.md](./object-storage-keys.md)에 정리되어 있습니다.
 
@@ -61,4 +62,50 @@ flowchart LR
   K["upload_local_image_to_s3.py"] --> L["StorageService.write_object(...)"]
   M["smoke_qwen_e2e.py"] --> L
   L --> N["Object storage client put_object(...)"]
+```
+
+## Retry / Backoff Policy
+
+`process_vision_inference` classifies worker failures before deciding whether to
+return an error payload or schedule a Celery retry.
+
+- Retryable errors:
+  - `StorageAccessError`
+  - `SoftTimeLimitExceeded`
+  - `TimeoutError`
+  - `RuntimeError`
+  - unknown worker exceptions
+- Non-retryable errors:
+  - missing source images
+  - storage configuration errors
+  - invalid image bytes
+  - invalid request values
+
+Direct Python calls do not schedule Celery retries. This keeps unit tests and
+local smoke helpers deterministic. When the task runs inside a Celery worker,
+retryable failures schedule retries until `VISION_TASK_MAX_RETRIES` is reached.
+After retry exhaustion, the worker returns the normalized VLM error contract with
+`errorCode`, `retryable`, and `errorDetails`.
+
+Retry settings:
+
+- `VISION_TASK_MAX_RETRIES`
+  - default: `2`
+- `VISION_TASK_RETRY_DELAY_SEC`
+  - default: `10`
+  - first retry delay
+- `VISION_TASK_RETRY_BACKOFF_MULTIPLIER`
+  - default: `2.0`
+  - multiplier applied per retry count
+- `VISION_TASK_RETRY_MAX_DELAY_SEC`
+  - default: max of `VISION_TASK_RETRY_DELAY_SEC` and `60`
+  - upper bound for retry countdown
+
+Delay calculation:
+
+```text
+delay = min(
+  VISION_TASK_RETRY_DELAY_SEC * VISION_TASK_RETRY_BACKOFF_MULTIPLIER ^ retry_count,
+  VISION_TASK_RETRY_MAX_DELAY_SEC
+)
 ```

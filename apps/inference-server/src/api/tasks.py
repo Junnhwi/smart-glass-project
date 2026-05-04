@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -11,6 +12,15 @@ from src.queue.tasks import app as celery_app
 from src.queue.tasks import process_vision_inference
 
 router = APIRouter()
+
+
+def _utc_now_isoformat() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _extract_result_status(result_payload: dict[str, Any] | None) -> str | None:
@@ -73,6 +83,7 @@ async def enqueue_vision_inference(
             "image_url": payload.image_url,
             "request_id": resolved_request_id,
             "task_type": payload.task_type,
+            "enqueued_at": _utc_now_isoformat(),
         }
     )
     return VisionInferenceEnqueueResponse(
