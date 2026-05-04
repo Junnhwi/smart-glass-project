@@ -47,6 +47,17 @@ Optional but supported fields:
 - `providerMetadata`
 - `runtime`
 
+`runtime` includes model and worker latency diagnostics:
+
+- `latencySec`: model function reported inference latency
+- `peakMemoryMb`: model function reported peak memory
+- `loadTimeSec`: model function reported load time, when available
+- `queueWaitSec`: time between API enqueue and worker start, when enqueue metadata is available
+- `storageReadSec`: object storage read duration measured by the worker
+- `imageDecodeSec`: source image decode duration measured by the worker
+- `modelInferenceSec`: worker-measured model invocation duration
+- `taskLatencySec`: total worker task duration
+
 Important `metadata` fields:
 
 - `caption`
@@ -141,6 +152,7 @@ Error results contain:
 - `retryable`
 - `errorDetails`
 - `providerMetadata`
+- `runtime`, when the worker recorded timing metrics before the failure
 
 `errorDetails` is intended for diagnostics and operator decisions. It includes:
 

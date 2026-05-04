@@ -191,6 +191,36 @@ def _normalize_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _normalize_nonnegative_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(parsed, 4) if parsed >= 0 else None
+
+
+def _normalize_runtime_metrics(
+    runtime_metrics: Mapping[str, Any] | None,
+) -> Dict[str, float]:
+    if not isinstance(runtime_metrics, Mapping):
+        return {}
+
+    normalized: Dict[str, float] = {}
+    for key in (
+        "queueWaitSec",
+        "storageReadSec",
+        "imageDecodeSec",
+        "modelInferenceSec",
+        "taskLatencySec",
+    ):
+        parsed = _normalize_nonnegative_float(runtime_metrics.get(key))
+        if parsed is not None:
+            normalized[key] = parsed
+    return normalized
+
+
 def _normalize_error_details(
     error_details: Mapping[str, Any] | None,
     *,
@@ -295,12 +325,20 @@ def build_vlm_success_result(
     inference_metadata: Dict[str, Any] | None = None,
     pipeline_output: Dict[str, Any] | None = None,
     execution_policy: Dict[str, Any] | None = None,
+    runtime_metrics: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     caption = _normalize_whitespace(generation_result.get("caption")) or None
     metadata = _normalize_metadata_payload(
         inference_metadata,
         fallback_caption=caption,
     )
+    runtime = {
+        "latencySec": generation_result.get("elapsed_sec"),
+        "peakMemoryMb": generation_result.get("peak_memory_mb"),
+        "loadTimeSec": generation_result.get("load_time_sec"),
+    }
+    runtime.update(_normalize_runtime_metrics(runtime_metrics))
+
     return {
         "status": "success",
         "requestId": request_id,
@@ -322,11 +360,7 @@ def build_vlm_success_result(
             generation_result=generation_result,
             execution_policy=execution_policy,
         ),
-        "runtime": {
-            "latencySec": generation_result.get("elapsed_sec"),
-            "peakMemoryMb": generation_result.get("peak_memory_mb"),
-            "loadTimeSec": generation_result.get("load_time_sec"),
-        },
+        "runtime": runtime,
     }
 
 
@@ -348,12 +382,13 @@ def build_vlm_error_result(
     retryable: bool | None = None,
     execution_policy: Dict[str, Any] | None = None,
     error_details: Dict[str, Any] | None = None,
+    runtime_metrics: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     resolved_error_code = error_code or "inference_task_error"
     resolved_retryable = (
         retryable if retryable is not None else not isinstance(error, ValueError)
     )
-    return {
+    payload = {
         "status": "error",
         "requestId": request_id,
         "taskType": task_type,
@@ -381,3 +416,7 @@ def build_vlm_error_result(
             execution_policy=execution_policy,
         ),
     }
+    runtime = _normalize_runtime_metrics(runtime_metrics)
+    if runtime:
+        payload["runtime"] = runtime
+    return payload

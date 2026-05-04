@@ -251,6 +251,10 @@ Error results keep `errorCode`, `message`, and `retryable` for backward
 compatibility, and also include `errorDetails` for diagnostics. The detail
 payload carries a stable failure category, normalized reason, exception type,
 retryability, source, and task time-limit values when available.
+Runtime diagnostics now keep the model-reported `latencySec` and may also
+include worker-measured `queueWaitSec`, `storageReadSec`, `imageDecodeSec`,
+`modelInferenceSec`, and `taskLatencySec`. Error results may include the same
+runtime object when the worker recorded partial timings before the failure.
 
 Current reference files:
 

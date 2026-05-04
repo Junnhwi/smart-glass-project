@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 
 from src.api.intake import build_capture_upload_response, build_worker_task_kwargs
 from src.api.pipeline import (
@@ -101,6 +102,22 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
         }
         return worker_result, expected_kwargs
 
+    def _assert_task_kwargs_match(
+        self,
+        actual: dict[str, object] | None,
+        expected: dict[str, object],
+    ) -> None:
+        self.assertIsNotNone(actual)
+        actual_static = dict(actual or {})
+        expected_static = dict(expected)
+        enqueued_at = actual_static.pop("enqueued_at", None)
+        expected_static.pop("enqueued_at", None)
+
+        self.assertEqual(actual_static, expected_static)
+        self.assertIsInstance(enqueued_at, str)
+        parsed = datetime.fromisoformat(enqueued_at.replace("Z", "+00:00"))
+        self.assertIsNotNone(parsed.tzinfo)
+
     def test_pipeline_dispatches_worker_and_skips_memory_storage_when_disabled(self) -> None:
         payload = self._build_payload()
         worker_result, expected_kwargs = self._build_worker_result(payload)
@@ -120,7 +137,7 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
 
         response = pipeline.process(payload)
 
-        self.assertEqual(task_transport.last_kwargs, expected_kwargs)
+        self._assert_task_kwargs_match(task_transport.last_kwargs, expected_kwargs)
         self.assertEqual(task_transport.last_timeout_sec, 15.0)
         self.assertEqual(response.status, "completed")
         self.assertEqual(response.capture.captureId, "capture-10")
@@ -152,7 +169,7 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
 
         response = pipeline.process(payload)
 
-        self.assertEqual(task_transport.last_kwargs, expected_kwargs)
+        self._assert_task_kwargs_match(task_transport.last_kwargs, expected_kwargs)
         self.assertEqual(task_transport.last_timeout_sec, 15.0)
         self.assertEqual(memory_store.last_worker_result, worker_result)
         self.assertEqual(response.status, "completed")

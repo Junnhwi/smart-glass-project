@@ -1,6 +1,7 @@
 import io
 import os
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -48,6 +49,15 @@ def _build_test_image_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _utc_now_isoformat() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
 class TaskContractTestCase(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["STORAGE_BUCKET_NAME"] = "smart-glass-test"
@@ -67,6 +77,11 @@ class TaskContractTestCase(unittest.TestCase):
             "VISION_QWEN_FALLBACK_MODEL",
         ):
             os.environ.pop(name, None)
+
+    def _assert_runtime_metric(self, runtime: dict[str, object], key: str) -> None:
+        self.assertIn(key, runtime)
+        self.assertIsInstance(runtime[key], (int, float))
+        self.assertGreaterEqual(runtime[key], 0)
 
     def test_process_vision_inference_returns_vlm_success_contract(self) -> None:
         with patch(
@@ -94,6 +109,7 @@ class TaskContractTestCase(unittest.TestCase):
                     captured_at="2026-04-04T10:00:00Z",
                     image_url="https://example.com/captures/wallet-01.jpg",
                     request_id="req-123",
+                    enqueued_at=_utc_now_isoformat(),
                 )
 
         self.assertEqual(result["status"], "success")
@@ -133,6 +149,14 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["providerMetadata"]["raw"], None)
         self.assertEqual(result["runtime"]["latencySec"], 0.42)
         self.assertEqual(result["runtime"]["peakMemoryMb"], 512.5)
+        for key in (
+            "queueWaitSec",
+            "storageReadSec",
+            "imageDecodeSec",
+            "modelInferenceSec",
+            "taskLatencySec",
+        ):
+            self._assert_runtime_metric(result["runtime"], key)
 
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
@@ -169,6 +193,10 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(
             result["providerMetadata"]["capabilities"]["sceneSummary"], False
         )
+        self._assert_runtime_metric(result["runtime"], "storageReadSec")
+        self._assert_runtime_metric(result["runtime"], "taskLatencySec")
+        self.assertNotIn("imageDecodeSec", result["runtime"])
+        self.assertNotIn("modelInferenceSec", result["runtime"])
 
     def test_process_vision_inference_marks_missing_source_image_as_non_retryable(
         self,
