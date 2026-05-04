@@ -5,6 +5,38 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 
+LOG_EXTRA_FIELDS = (
+    "request_id",
+    "method",
+    "path",
+    "status_code",
+    "duration_ms",
+    "client_ip",
+    "task_name",
+    "image_key",
+    "memory_id",
+    "user_id",
+    "model_key",
+    "model_id",
+    "model_mode",
+    "quantization",
+    "settings_source",
+    "soft_time_limit_sec",
+    "hard_time_limit_sec",
+    "fallback_model_key",
+    "fallback_triggered",
+    "latency_sec",
+    "load_time_sec",
+    "peak_memory_mb",
+    "retry_count",
+    "max_retries",
+    "retry_delay_sec",
+    "retryable",
+    "failure_category",
+    "error_code",
+)
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: Dict[str, Any] = {
@@ -14,22 +46,7 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
 
-        for key in (
-            "request_id",
-            "method",
-            "path",
-            "status_code",
-            "duration_ms",
-            "client_ip",
-            "task_name",
-            "image_key",
-            "user_id",
-            "model_key",
-            "quantization",
-            "latency_sec",
-            "peak_memory_mb",
-            "error_code",
-        ):
+        for key in LOG_EXTRA_FIELDS:
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value

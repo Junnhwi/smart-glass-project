@@ -1,9 +1,10 @@
 import os
 import socket
+import time
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Callable, Dict, Mapping, Tuple
 
 import redis
 from celery import Celery
@@ -30,13 +31,34 @@ def build_health_summary(checks: Mapping[str, Mapping[str, Any]]) -> Dict[str, A
         for name, status in statuses.items()
         if status != "ok"
     ]
-    return {
+    summary: Dict[str, Any] = {
         "total": len(statuses),
         "passing": len(statuses) - len(failing_checks),
         "failing": len(failing_checks),
         "failingChecks": failing_checks,
         "statuses": statuses,
     }
+    durations = [
+        float(detail["durationMs"])
+        for detail in checks.values()
+        if isinstance(detail.get("durationMs"), (int, float))
+    ]
+    if durations:
+        summary["durationMs"] = round(sum(durations), 2)
+    return summary
+
+
+def run_timed_health_check(
+    check: Callable[[], Tuple[str, Dict[str, Any]]],
+) -> Tuple[str, Dict[str, Any]]:
+    started_at = time.perf_counter()
+    status, detail = check()
+    measured_detail = dict(detail)
+    measured_detail["durationMs"] = round(
+        max(0.0, (time.perf_counter() - started_at) * 1000),
+        2,
+    )
+    return status, measured_detail
 
 
 def check_queue() -> Tuple[str, Dict[str, Any]]:
@@ -287,11 +309,11 @@ def check_worker_ping(
 
 
 def build_worker_health_payload() -> Tuple[int, Dict[str, Any]]:
-    _, worker_detail = check_worker_ping()
-    _, queue_detail = check_queue()
-    _, storage_detail = check_storage()
-    _, model_detail = check_model_config()
-    _, preload_detail = check_model_preload()
+    _, worker_detail = run_timed_health_check(check_worker_ping)
+    _, queue_detail = run_timed_health_check(check_queue)
+    _, storage_detail = run_timed_health_check(check_storage)
+    _, model_detail = run_timed_health_check(check_model_config)
+    _, preload_detail = run_timed_health_check(check_model_preload)
 
     checks = {
         "worker": worker_detail,

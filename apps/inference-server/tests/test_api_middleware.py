@@ -50,6 +50,10 @@ class MiddlewareTestCase(unittest.TestCase):
         self.assertEqual(response.json()["summary"]["passing"], 4)
         self.assertEqual(response.json()["summary"]["failing"], 0)
         self.assertEqual(response.json()["summary"]["failingChecks"], [])
+        self.assertIn("durationMs", response.json()["summary"])
+        self.assertIn("durationMs", response.json()["checks"]["queue"])
+        self.assertIn("durationMs", response.json()["checks"]["storage"])
+        self.assertIn("durationMs", response.json()["checks"]["model"])
 
     def test_readiness_returns_503_when_dependency_is_unhealthy(self) -> None:
         with patch(
@@ -76,6 +80,8 @@ class MiddlewareTestCase(unittest.TestCase):
         self.assertEqual(response.json()["summary"]["failing"], 1)
         self.assertEqual(response.json()["summary"]["failingChecks"], ["queue"])
         self.assertEqual(response.json()["summary"]["statuses"]["queue"], "error")
+        self.assertIn("durationMs", response.json()["summary"])
+        self.assertIn("durationMs", response.json()["checks"]["queue"])
 
     def test_health_alias_points_to_readiness(self) -> None:
         with patch("src.api.health._check_queue", return_value=("ok", {"status": "ok"})):

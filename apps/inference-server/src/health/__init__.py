@@ -7,6 +7,7 @@ from src.health.checks import (
     check_storage_config,
     check_worker_ping,
     default_worker_name,
+    run_timed_health_check,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "check_storage_config",
     "check_worker_ping",
     "default_worker_name",
+    "run_timed_health_check",
 ]

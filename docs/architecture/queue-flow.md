@@ -10,6 +10,40 @@
 
 Object key 세부 규칙은 [object-storage-keys.md](./object-storage-keys.md)에 정리되어 있습니다.
 
+## Operational Logs
+
+`process_vision_inference` emits structured JSON logs through
+`apps/inference-server/src/core/logging.py`.
+
+Successful task logs include request and model context such as:
+
+- `request_id`
+- `image_key`
+- `memory_id`
+- `user_id`
+- `model_key`
+- `model_mode`
+- `quantization`
+- `settings_source`
+- `soft_time_limit_sec`
+- `hard_time_limit_sec`
+- `fallback_model_key`
+- `fallback_triggered`
+- `latency_sec`
+- `peak_memory_mb`
+
+Failure and retry logs add operational decision fields:
+
+- `error_code`
+- `retryable`
+- `failure_category`
+- `retry_count`
+- `max_retries`
+- `retry_delay_sec`
+
+Logs intentionally avoid storage credentials, raw image bytes, prompts, and
+access URLs.
+
 ```mermaid
 flowchart LR
   A["POST /tasks/vision"] --> B["Celery queue"]
