@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import os
 import unittest
 
 from fastapi.testclient import TestClient
 
+from src.api.auth import (
+    INTERNAL_SERVICE_TOKEN_HEADER,
+    INTERNAL_SERVICE_TOKEN_ENV,
+    build_bearer_authorization_header,
+    build_internal_service_token,
+)
 from src.api.intake import build_capture_upload_response
 from src.api.main import app
 from src.api.schemas import (
@@ -12,7 +19,7 @@ from src.api.schemas import (
     CaptureUploadRequest,
     CaptureWorkerExecutionPayload,
 )
-from src.database.memory_store import MemoryLocation, MemoryRecord
+from src.database.memory_store import MemoryLocation, MemoryRecord, MemoryStoreOutcome
 from src.modules.media.service import (
     GalleryItem,
     MediaAccessUrl,
@@ -203,20 +210,58 @@ class FakeMediaAccessService:
         self.health_checked = True
 
 
+class FakeMemoryStoreClient:
+    backend_name = "postgres"
+
+    def __init__(self) -> None:
+        self.last_worker_result: dict[str, object] | None = None
+        self.should_fail = False
+
+    def persist_vlm_result(self, worker_result: dict[str, object]) -> MemoryStoreOutcome:
+        if self.should_fail:
+            raise RuntimeError("memory database unavailable")
+        self.last_worker_result = worker_result
+        return MemoryStoreOutcome(
+            stored_count=1,
+            total_user_memories={str(worker_result["userId"]): 3},
+        )
+
+    def check_health(self) -> None:
+        pass
+
+
 class ApiServerCaptureIntakeTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_internal_service_token = os.environ.get(
+            INTERNAL_SERVICE_TOKEN_ENV
+        )
+        os.environ[INTERNAL_SERVICE_TOKEN_ENV] = "test-internal-service-token"
         self.fake_pipeline = FakeCapturePipeline()
         self.fake_memory_query_service = FakeMemoryQueryService()
         self.fake_media_access_service = FakeMediaAccessService()
+        self.fake_memory_store_client = FakeMemoryStoreClient()
         app.state.capture_pipeline = self.fake_pipeline
         app.state.memory_query_service = self.fake_memory_query_service
         app.state.media_access_service = self.fake_media_access_service
-        self.client = TestClient(app)
+        app.state.memory_store_client = self.fake_memory_store_client
+        self.client = TestClient(
+            app,
+            headers={
+                "Authorization": build_bearer_authorization_header("user-1"),
+            },
+        )
 
     def tearDown(self) -> None:
         app.state.capture_pipeline = None
         app.state.memory_query_service = None
         app.state.media_access_service = None
+        app.state.memory_store_client = None
+        if self.original_internal_service_token is None:
+            os.environ.pop(INTERNAL_SERVICE_TOKEN_ENV, None)
+        else:
+            os.environ[INTERNAL_SERVICE_TOKEN_ENV] = (
+                self.original_internal_service_token
+            )
 
     def test_capture_processing_endpoint_runs_pipeline(self) -> None:
         payload = {
@@ -386,6 +431,99 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
                 240,
             ),
         )
+
+    def test_inference_result_endpoint_stores_success_payload(self) -> None:
+        response = self.client.post(
+            "/memories/inference-results",
+            headers={
+                INTERNAL_SERVICE_TOKEN_HEADER: build_internal_service_token(),
+            },
+            json={
+                "status": "success",
+                "requestId": "req-earbuds-001",
+                "taskType": "metadata",
+                "memoryId": "mem-earbuds-001",
+                "userId": "user-1",
+                "capturedAt": "2026-04-30T09:00:00Z",
+                "sourceImage": {
+                    "imageKey": "captures/user-1/2026/04/30/cap-earbuds.jpg",
+                    "imageUrl": "https://example.com/cap-earbuds.jpg",
+                    "contentType": "image/jpeg",
+                },
+                "metadata": {
+                    "caption": "earbuds on the desk next to the laptop",
+                    "sceneSummary": "desk scene with earbuds",
+                    "detectedObjects": ["earbuds", "desk", "laptop"],
+                    "tags": ["earbuds", "workspace"],
+                    "ocrText": None,
+                    "positionHint": "next to laptop",
+                    "location": {"name": "workspace"},
+                },
+                "pipelineOutput": {
+                    "scene_summary": "desk scene with earbuds",
+                    "location_context": "workspace",
+                    "objects": [
+                        {
+                            "name": "earbuds",
+                            "nearby_objects": ["laptop"],
+                            "visual_features": {"brand": None},
+                        }
+                    ],
+                },
+                "providerMetadata": {
+                    "modelKey": "qwen2.5-vl-7b",
+                    "modelId": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "modelFamily": "qwen-vl",
+                    "quantization": "4bit",
+                    "dtype": "float16",
+                    "provider": "huggingface-transformers",
+                    "capabilities": {
+                        "detectedObjects": True,
+                        "tags": True,
+                        "positionHint": True,
+                        "sceneSummary": True,
+                        "ocrText": True,
+                        "location": True,
+                    },
+                },
+                "runtime": {"latencySec": 1.25, "peakMemoryMb": 512.0},
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body["status"], "stored")
+        self.assertEqual(body["memoryId"], "mem-earbuds-001")
+        self.assertEqual(body["userId"], "user-1")
+        self.assertEqual(body["storedCount"], 1)
+        self.assertEqual(body["totalUserMemories"], {"user-1": 3})
+        self.assertIsNotNone(self.fake_memory_store_client.last_worker_result)
+        self.assertEqual(
+            self.fake_memory_store_client.last_worker_result["metadata"]["caption"],
+            "earbuds on the desk next to the laptop",
+        )
+
+    def test_inference_result_endpoint_rejects_error_payloads(self) -> None:
+        response = self.client.post(
+            "/memories/inference-results",
+            headers={
+                INTERNAL_SERVICE_TOKEN_HEADER: build_internal_service_token(),
+            },
+            json={
+                "status": "error",
+                "requestId": "req-failed-001",
+                "taskType": "metadata",
+                "memoryId": "mem-failed-001",
+                "userId": "user-1",
+                "capturedAt": "2026-04-30T09:00:00Z",
+                "sourceImage": {
+                    "imageKey": "captures/user-1/2026/04/30/cap-failed.jpg",
+                },
+                "metadata": {"caption": "failed image"},
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_chat_endpoint_returns_answer_and_hits(self) -> None:
         response = self.client.post(

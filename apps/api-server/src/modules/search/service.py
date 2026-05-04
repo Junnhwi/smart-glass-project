@@ -7,9 +7,10 @@ from typing import Protocol
 from src.database.memory_store import MemoryRecord, PostgresMemoryStoreClient
 from src.modules.search.text import (
     expand_terms,
+    extract_spatial_hint,
     format_timestamp,
-    normalize_search_query,
-    tokenize_text,
+    humanize_term,
+    search_terms_from_query,
 )
 
 
@@ -45,35 +46,67 @@ class MemorySearchRepository(Protocol):
 
 
 class TemplateAnswerGenerator:
+    def _describe_subject(self, hit: SearchHit) -> str:
+        candidates = [
+            *hit.matched_terms,
+            *hit.memory.detected_objects,
+            *hit.memory.tags,
+        ]
+        for candidate in candidates:
+            label = humanize_term(candidate)
+            if label:
+                return label
+        return "\uCC3E\uC73C\uC2DC\uB294 \uBB3C\uAC74"
+
     def _describe_location(self, hit: SearchHit) -> str:
         memory = hit.memory
-        details: list[str] = []
-
-        if memory.location.name:
-            details.append(f"\uC704\uCE58: {memory.location.name}")
-        elif memory.location.address:
-            details.append(f"\uC704\uCE58: {memory.location.address}")
-
-        if memory.position_hint:
-            details.append(f"\uC0C1\uB300 \uC704\uCE58: {memory.position_hint}")
-        elif memory.caption:
-            details.append(f"\uC124\uBA85: {memory.caption}")
-
+        place = memory.location.name or memory.location.address
+        position_hint = (
+            extract_spatial_hint(
+                memory.position_hint,
+                memory.caption,
+                memory.scene_summary,
+            )
+            or memory.position_hint
+        )
         formatted_time = format_timestamp(memory.captured_at)
+
+        if place and position_hint:
+            summary = (
+                f"{place}\uC5D0\uC11C {position_hint}\uC5D0 "
+                "\uC788\uC5C8\uB358 \uAC83\uC73C\uB85C \uBCF4\uC5EC\uC694."
+            )
+        elif position_hint:
+            summary = (
+                f"{position_hint}\uC5D0 "
+                "\uC788\uC5C8\uB358 \uAC83\uC73C\uB85C \uBCF4\uC5EC\uC694."
+            )
+        elif place:
+            summary = f"{place}\uC5D0\uC11C \uD655\uC778\uB410\uC5B4\uC694."
+        elif memory.caption:
+            summary = (
+                "\uC0AC\uC9C4 \uC124\uBA85\uC73C\uB85C\uB294 "
+                f"{memory.caption}\uB85C \uAE30\uB85D\uB418\uC5B4 \uC788\uC5B4\uC694."
+            )
+        else:
+            summary = "\uC704\uCE58 \uB2E8\uC11C\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC5B4\uC694."
+
         if formatted_time:
-            details.append(f"\uCD2C\uC601 \uC2DC\uAC01: {formatted_time}")
-
-        if not details:
-            return "\uC704\uCE58 \uB2E8\uC11C\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
-
-        return ", ".join(details)
+            summary += (
+                f" \uB9C8\uC9C0\uB9C9 \uD655\uC778 \uC2DC\uAC01\uC740 "
+                f"{formatted_time}\uC785\uB2C8\uB2E4."
+            )
+        return summary
 
     def generate(self, query: str, hits: list[SearchHit]) -> GeneratedAnswer:
         if not hits:
             return GeneratedAnswer(
                 text=(
-                    "\uAD00\uB828 \uBA54\uBAA8\uB9AC\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. "
-                    "\uC9C8\uBB38\uC744 \uB354 \uAD6C\uCCB4\uC801\uC73C\uB85C \uB9D0\uD574 \uC8FC\uC138\uC694."
+                    "\uAD00\uB828 \uBA54\uBAA8\uB9AC \uAE30\uB85D\uC744 "
+                    "\uCC3E\uC9C0 \uBABB\uD588\uC5B4\uC694. "
+                    "\uBB3C\uAC74 \uC774\uB984\uC774\uB098 \uC7A5\uC18C "
+                    "\uB2E8\uC11C\uB97C \uC870\uAE08 \uB354 \uAD6C\uCCB4\uC801\uC73C\uB85C "
+                    "\uB9D0\uD574 \uC8FC\uC138\uC694."
                 ),
                 mode="template",
                 cited_memory_ids=[],
@@ -82,17 +115,17 @@ class TemplateAnswerGenerator:
             )
 
         top_hit = hits[0]
-        top_memory = top_hit.memory
+        subject = self._describe_subject(top_hit)
         answer_parts = [
-            f"\uAC00\uC7A5 \uAD00\uB828 \uC788\uB294 \uBA54\uBAA8\uB9AC\uB294 {top_memory.memory_id}\uC785\uB2C8\uB2E4.",
+            f"\uCC3E\uC73C\uC2E0 {subject}\uC740",
             self._describe_location(top_hit),
         ]
 
         if len(hits) > 1:
-            alternative_ids = ", ".join(
-                hit.memory.memory_id for hit in hits[1:MAX_CONTEXT_HITS]
+            answer_parts.append(
+                f"\uBE44\uC2B7\uD55C \uD6C4\uBCF4\uB3C4 "
+                f"{min(len(hits) - 1, MAX_CONTEXT_HITS - 1)}\uAC1C \uB354 \uCC3E\uC558\uC5B4\uC694."
             )
-            answer_parts.append(f"\uCD94\uAC00 \uD6C4\uBCF4: {alternative_ids}")
 
         return GeneratedAnswer(
             text=" ".join(answer_parts),
@@ -154,8 +187,7 @@ class MemoryQueryService:
         if not documents:
             return []
 
-        normalized_query = normalize_search_query(query)
-        query_terms = set(expand_terms(tokenize_text(normalized_query)))
+        query_terms = set(search_terms_from_query(query))
         if not query_terms:
             return []
 

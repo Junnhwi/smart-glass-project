@@ -46,8 +46,26 @@ def _nonnegative_int_env(name: str, fallback: int) -> int:
         return fallback
 
 
+def _positive_float_env(name: str, fallback: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return fallback
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return fallback
+
+
 TASK_MAX_RETRIES = _nonnegative_int_env("VISION_TASK_MAX_RETRIES", 2)
 TASK_RETRY_DELAY_SECONDS = _nonnegative_int_env("VISION_TASK_RETRY_DELAY_SEC", 10)
+TASK_RETRY_BACKOFF_MULTIPLIER = _positive_float_env(
+    "VISION_TASK_RETRY_BACKOFF_MULTIPLIER",
+    2.0,
+)
+TASK_RETRY_MAX_DELAY_SECONDS = _nonnegative_int_env(
+    "VISION_TASK_RETRY_MAX_DELAY_SEC",
+    max(TASK_RETRY_DELAY_SECONDS, 60),
+)
 
 app.conf.update(
     task_track_started=True,
@@ -188,6 +206,21 @@ def _task_retry_count(task_request: object | None) -> int:
         return max(0, int(getattr(task_request, "retries", 0) or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _resolve_retry_delay_seconds(
+    retry_count: int,
+    *,
+    base_delay_sec: int = TASK_RETRY_DELAY_SECONDS,
+    backoff_multiplier: float = TASK_RETRY_BACKOFF_MULTIPLIER,
+    max_delay_sec: int = TASK_RETRY_MAX_DELAY_SECONDS,
+) -> int:
+    safe_base = max(0, int(base_delay_sec))
+    safe_retry_count = max(0, int(retry_count))
+    safe_multiplier = max(1.0, float(backoff_multiplier))
+    calculated_delay = int(round(safe_base * (safe_multiplier ** safe_retry_count)))
+    safe_max_delay = max(safe_base, int(max_delay_sec))
+    return min(calculated_delay, safe_max_delay)
 
 
 def _should_retry_task(
@@ -382,10 +415,9 @@ def process_vision_inference(
             model_inference_sec=model_inference_sec,
         )
 
-        if _should_retry_task(
-            retryable=failure_policy.retryable,
-            task_request=task_request,
-        ):
+        retry_delay_sec = _resolve_retry_delay_seconds(retry_count)
+
+        if _should_retry_task(retryable=failure_policy.retryable, task_request=task_request):
             logger.warning(
                 "Inference task failed with retryable error, scheduling retry",
                 extra={
@@ -400,12 +432,15 @@ def process_vision_inference(
                     "settings_source": settings_source,
                     "error_code": failure_policy.error_code,
                     "retry_count": retry_count,
+                    "next_retry_count": retry_count + 1,
                     "max_retries": TASK_MAX_RETRIES,
-                    "retry_delay_sec": TASK_RETRY_DELAY_SECONDS,
+                    "retry_delay_sec": retry_delay_sec,
+                    "retry_backoff_multiplier": TASK_RETRY_BACKOFF_MULTIPLIER,
+                    "retry_max_delay_sec": TASK_RETRY_MAX_DELAY_SECONDS,
                     **_log_runtime_metrics(runtime_metrics),
                 },
             )
-            raise self.retry(exc=e, countdown=TASK_RETRY_DELAY_SECONDS)
+            raise self.retry(exc=e, countdown=retry_delay_sec)
 
         logger.exception(
             "Inference task failed",
@@ -427,6 +462,9 @@ def process_vision_inference(
                 "retry_count": retry_count,
                 "max_retries": TASK_MAX_RETRIES,
                 **_log_runtime_metrics(runtime_metrics),
+                "retry_delay_sec": retry_delay_sec,
+                "retry_backoff_multiplier": TASK_RETRY_BACKOFF_MULTIPLIER,
+                "retry_max_delay_sec": TASK_RETRY_MAX_DELAY_SECONDS,
             },
         )
         return build_vlm_error_result(

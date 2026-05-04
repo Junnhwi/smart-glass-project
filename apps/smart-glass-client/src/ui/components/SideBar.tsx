@@ -1,13 +1,14 @@
 import React from 'react';
-import { Modal, View, Text, StyleSheet, Pressable } from 'react-native';
+import { Modal, View, Text, StyleSheet, Pressable, Image } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../../../App';
 
-import { Image } from 'react-native';
-import userIcon from '../icon/user.png';
+import type { RootStackParamList } from '../../../App';
+import { useAuth } from '../context/AuthContext';
 import historyIcon from '../icon/history.png';
 import settingsIcon from '../icon/setting.png';
+import userIcon from '../icon/user.png';
+import { colors } from '../styles/colors';
 
 type SidebarProps = {
   visible: boolean;
@@ -17,10 +18,16 @@ type SidebarProps = {
 export default function Sidebar({ visible, onClose }: SidebarProps) {
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { currentUser, signOut } = useAuth();
 
-  const handleMove = (screen: keyof RootStackParamList) => {
+  const handleMove = (screen: 'History' | 'Profile' | 'Settings') => {
     onClose();
     navigation.navigate(screen);
+  };
+
+  const handleLogout = () => {
+    onClose();
+    signOut();
   };
 
   return (
@@ -34,6 +41,16 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
         <View style={styles.sidebarWrapper}>
           <View style={styles.sidebar}>
             <Text style={styles.title}>메뉴</Text>
+
+            <View style={styles.accountCard}>
+              <Text style={styles.accountName}>
+                {currentUser?.displayName || '사용자'}
+              </Text>
+              <Text style={styles.accountId}>
+                {currentUser?.userId || '로그인 정보 없음'}
+              </Text>
+            </View>
+
             <Pressable
               style={styles.menuItem}
               onPress={() => handleMove('History')}
@@ -59,8 +76,8 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
             </Pressable>
 
             <View style={styles.logoutArea}>
-              <Pressable style={styles.logoutButton}>
-                <Text style={styles.logoutText}>↪ 로그아웃</Text>
+              <Pressable style={styles.logoutButton} onPress={handleLogout}>
+                <Text style={styles.logoutText}>로그아웃</Text>
               </Pressable>
             </View>
           </View>
@@ -96,14 +113,26 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#111827',
-    marginBottom: 28,
+    color: colors.text,
+    marginBottom: 20,
   },
-
-  menuText: {
+  accountCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F8FAFC',
+    padding: 14,
+    marginBottom: 14,
+    gap: 4,
+  },
+  accountName: {
     fontSize: 16,
-    color: '#111827',
-    fontWeight: '500',
+    fontWeight: '700',
+    color: colors.text,
+  },
+  accountId: {
+    fontSize: 13,
+    color: colors.subText,
   },
   menuItem: {
     paddingVertical: 16,
@@ -113,22 +142,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-
+  menuText: {
+    fontSize: 16,
+    color: colors.text,
+    fontWeight: '500',
+  },
   menuIconImage: {
     width: 20,
     height: 20,
     resizeMode: 'contain',
   },
-
   logoutArea: {
     marginTop: 'auto',
     paddingBottom: 24,
   },
-
   logoutButton: {
     paddingVertical: 12,
   },
-
   logoutText: {
     fontSize: 14,
     color: '#333333',
