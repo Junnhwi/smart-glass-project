@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from PIL import Image
 
 from src.queue.tasks import _should_retry_task, process_vision_inference
@@ -83,14 +83,15 @@ class TaskContractTestCase(unittest.TestCase):
                     "prompt": "a photography of",
                 },
             ):
-                result = process_vision_inference(
-                    image_key="captures/wallet-01.jpg",
-                    user_id="user-1",
-                    memory_id="mem-1",
-                    captured_at="2026-04-04T10:00:00Z",
-                    image_url="https://example.com/captures/wallet-01.jpg",
-                    request_id="req-123",
-                )
+                with patch("src.queue.tasks.logger.info") as mocked_logger_info:
+                    result = process_vision_inference(
+                        image_key="captures/wallet-01.jpg",
+                        user_id="user-1",
+                        memory_id="mem-1",
+                        captured_at="2026-04-04T10:00:00Z",
+                        image_url="https://example.com/captures/wallet-01.jpg",
+                        request_id="req-123",
+                    )
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["requestId"], "req-123")
@@ -129,6 +130,12 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["providerMetadata"]["raw"], None)
         self.assertEqual(result["runtime"]["latencySec"], 0.42)
         self.assertEqual(result["runtime"]["peakMemoryMb"], 512.5)
+        log_extra = mocked_logger_info.call_args.kwargs["extra"]
+        self.assertEqual(
+            log_extra["model_id"],
+            "Salesforce/blip-image-captioning-base",
+        )
+        self.assertEqual(log_extra["dtype_name"], "float16")
 
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
@@ -298,6 +305,34 @@ class TaskContractTestCase(unittest.TestCase):
         )
 
         self.assertFalse(should_retry)
+
+    def test_process_vision_inference_retry_log_includes_decision_fields(self) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(StorageAccessError("s3 unavailable")),
+        ):
+            with patch("src.queue.tasks._should_retry_task", return_value=True):
+                with patch.object(
+                    process_vision_inference,
+                    "retry",
+                    side_effect=Retry("retry scheduled"),
+                ):
+                    with patch("src.queue.tasks.logger.warning") as mocked_warning:
+                        with self.assertRaises(Retry):
+                            process_vision_inference(
+                                image_key="captures/wallet-01.jpg",
+                                user_id="user-1",
+                                request_id="req-retry-log-1",
+                            )
+
+        log_extra = mocked_warning.call_args.kwargs["extra"]
+        self.assertEqual(log_extra["model_id"], "Salesforce/blip-image-captioning-base")
+        self.assertEqual(log_extra["dtype_name"], "float16")
+        self.assertTrue(log_extra["retryable"])
+        self.assertEqual(log_extra["failure_category"], "storage")
+        self.assertEqual(log_extra["retry_count"], 0)
+        self.assertEqual(log_extra["max_retries"], 2)
+        self.assertEqual(log_extra["retry_delay_sec"], 10)
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"

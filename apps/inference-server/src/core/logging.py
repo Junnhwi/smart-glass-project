@@ -20,6 +20,7 @@ LOG_EXTRA_FIELDS = (
     "model_id",
     "model_mode",
     "quantization",
+    "dtype_name",
     "settings_source",
     "soft_time_limit_sec",
     "hard_time_limit_sec",

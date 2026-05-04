@@ -22,8 +22,10 @@ Successful task logs include request and model context such as:
 - `memory_id`
 - `user_id`
 - `model_key`
+- `model_id`
 - `model_mode`
 - `quantization`
+- `dtype_name`
 - `settings_source`
 - `soft_time_limit_sec`
 - `hard_time_limit_sec`

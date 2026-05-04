@@ -167,6 +167,7 @@ def process_vision_inference(
     resolved_request_id = build_request_id(request_id)
     content_type = None
     model_mode = "unknown"
+    model_id = "unknown"
     fallback_triggered = False
 
     try:
@@ -179,6 +180,7 @@ def process_vision_inference(
         execution_policy_payload = execution_policy.to_payload()
         model_descriptor = resolve_inference_model(model_key)
         model_mode = model_descriptor.mode
+        model_id = model_descriptor.model_id
         storage_object = get_storage_service().read_object(image_key)
         content_type = storage_object.content_type
         image_data = storage_object.body
@@ -219,6 +221,7 @@ def process_vision_inference(
                 )
                 model_key = fallback_model_key
                 model_descriptor = resolve_inference_model(model_key)
+                model_id = model_descriptor.model_id
                 fallback_triggered = True
                 execution_policy_payload = execution_policy.to_payload(
                     fallback_triggered=True
@@ -244,8 +247,10 @@ def process_vision_inference(
                 "memory_id": memory_id,
                 "user_id": user_id,
                 "model_key": model_key,
+                "model_id": model_id,
                 "model_mode": model_mode,
                 "quantization": quantization,
+                "dtype_name": dtype_name,
                 "settings_source": settings_source,
                 "soft_time_limit_sec": execution_policy.soft_time_limit_sec,
                 "hard_time_limit_sec": execution_policy.hard_time_limit_sec,
@@ -294,10 +299,14 @@ def process_vision_inference(
                     "memory_id": memory_id,
                     "user_id": user_id,
                     "model_key": model_key,
+                    "model_id": model_id,
                     "model_mode": model_mode,
                     "quantization": quantization,
+                    "dtype_name": dtype_name,
                     "settings_source": settings_source,
                     "error_code": failure_policy.error_code,
+                    "retryable": failure_policy.retryable,
+                    "failure_category": failure_policy.category,
                     "retry_count": retry_count,
                     "max_retries": TASK_MAX_RETRIES,
                     "retry_delay_sec": TASK_RETRY_DELAY_SECONDS,
@@ -314,8 +323,10 @@ def process_vision_inference(
                 "memory_id": memory_id,
                 "user_id": user_id,
                 "model_key": model_key,
+                "model_id": model_id,
                 "model_mode": model_mode,
                 "quantization": quantization,
+                "dtype_name": dtype_name,
                 "settings_source": settings_source,
                 "soft_time_limit_sec": TASK_SOFT_TIME_LIMIT_SECONDS,
                 "hard_time_limit_sec": TASK_TIME_LIMIT_SECONDS,

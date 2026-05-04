@@ -23,8 +23,10 @@ class JsonFormatterTestCase(unittest.TestCase):
             "memory_id": "mem-1",
             "user_id": "user-1",
             "model_key": "qwen2.5-vl-7b",
+            "model_id": "Qwen/Qwen2.5-VL-7B-Instruct",
             "model_mode": "vlm",
             "quantization": "4bit",
+            "dtype_name": "float16",
             "settings_source": "env",
             "soft_time_limit_sec": 120,
             "hard_time_limit_sec": 150,
@@ -39,7 +41,9 @@ class JsonFormatterTestCase(unittest.TestCase):
 
         self.assertEqual(payload["request_id"], "req-1")
         self.assertEqual(payload["memory_id"], "mem-1")
+        self.assertEqual(payload["model_id"], "Qwen/Qwen2.5-VL-7B-Instruct")
         self.assertEqual(payload["model_mode"], "vlm")
+        self.assertEqual(payload["dtype_name"], "float16")
         self.assertEqual(payload["settings_source"], "env")
         self.assertEqual(payload["soft_time_limit_sec"], 120)
         self.assertEqual(payload["hard_time_limit_sec"], 150)
@@ -88,6 +92,7 @@ class JsonFormatterTestCase(unittest.TestCase):
         record.task_name = "worker_preload"
         record.model_key = "blip-base"
         record.model_id = "Salesforce/blip-image-captioning-base"
+        record.dtype_name = "float16"
         record.load_time_sec = 1.75
 
         payload = json.loads(JsonFormatter().format(record))
@@ -95,6 +100,7 @@ class JsonFormatterTestCase(unittest.TestCase):
         self.assertEqual(payload["task_name"], "worker_preload")
         self.assertEqual(payload["model_key"], "blip-base")
         self.assertEqual(payload["model_id"], "Salesforce/blip-image-captioning-base")
+        self.assertEqual(payload["dtype_name"], "float16")
         self.assertEqual(payload["load_time_sec"], 1.75)
 
 
