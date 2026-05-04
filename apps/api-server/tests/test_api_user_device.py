@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.database.user_registry import DeviceRecord, UserRecord
+from src.modules.media.service import MediaAccessUrl
 from src.modules.users.service import DeviceAuthorization
 
 
@@ -62,16 +63,45 @@ class FakeUserDeviceService:
         pass
 
 
+class FakeMediaAccessService:
+    def __init__(self) -> None:
+        self.last_issue_upload_url_args: tuple[str, str | None, int | None] | None = None
+        self.should_fail = False
+
+    def issue_upload_url(
+        self,
+        *,
+        image_key: str,
+        content_type: str | None = None,
+        expires_in_sec: int | None = None,
+    ) -> MediaAccessUrl:
+        if self.should_fail:
+            raise RuntimeError("storage signer unavailable")
+        self.last_issue_upload_url_args = (image_key, content_type, expires_in_sec)
+        resolved_expiration = 300 if expires_in_sec is None else expires_in_sec
+        return MediaAccessUrl(
+            image_key=image_key,
+            access_url=f"https://upload.example.com/{image_key}?expires={resolved_expiration}",
+            expires_at="2026-05-05T02:05:00Z",
+            expires_in_sec=resolved_expiration,
+        )
+
+
 class ApiServerUserDeviceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_user_device_service_factory = app.state.user_device_service_factory
+        self.original_media_access_service_factory = app.state.media_access_service_factory
         self.fake_user_device_service = FakeUserDeviceService()
+        self.fake_media_access_service = FakeMediaAccessService()
         app.state.user_device_service = self.fake_user_device_service
+        app.state.media_access_service = self.fake_media_access_service
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
         app.state.user_device_service = None
+        app.state.media_access_service = None
         app.state.user_device_service_factory = self.original_user_device_service_factory
+        app.state.media_access_service_factory = self.original_media_access_service_factory
 
     def test_create_user_endpoint_accepts_explicit_identifier(self) -> None:
         response = self.client.post(
@@ -168,12 +198,26 @@ class ApiServerUserDeviceTests(unittest.TestCase):
         self.assertEqual(body["upload"]["memoryId"], "mem-001")
         self.assertEqual(body["upload"]["capturedAt"], "2026-05-05T02:00:00Z")
         self.assertEqual(
+            body["upload"]["uploadUrl"],
+            "https://upload.example.com/captures/user-1/2026/05/05/capture-001-photo.png?expires=300",
+        )
+        self.assertEqual(body["upload"]["expiresAt"], "2026-05-05T02:05:00Z")
+        self.assertEqual(body["upload"]["expiresInSec"], 300)
+        self.assertEqual(
             body["upload"]["sourceImage"]["imageKey"],
             "captures/user-1/2026/05/05/capture-001-photo.png",
         )
         self.assertEqual(body["upload"]["sourceImage"]["contentType"], "image/png")
         self.assertEqual(body["upload"]["sourceImage"]["fileName"], "photo.png")
         self.assertEqual(self.fake_user_device_service.authorized_devices, ["glass-001"])
+        self.assertEqual(
+            self.fake_media_access_service.last_issue_upload_url_args,
+            (
+                "captures/user-1/2026/05/05/capture-001-photo.png",
+                "image/png",
+                None,
+            ),
+        )
 
     def test_upload_authorization_returns_blocked_response_for_unknown_device(self) -> None:
         self.fake_user_device_service.authorization_status = "blocked"
@@ -215,6 +259,17 @@ class ApiServerUserDeviceTests(unittest.TestCase):
                 response = self.client.post(path, json=payload)
                 self.assertEqual(response.status_code, 503)
                 self.assertIn("unavailable", response.json()["detail"])
+
+    def test_upload_authorization_returns_503_when_upload_signer_fails(self) -> None:
+        self.fake_media_access_service.should_fail = True
+
+        response = self.client.post(
+            "/media/upload-authorizations",
+            json={"deviceId": "glass-001", "fileName": "photo.jpg"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("storage signer unavailable", response.json()["detail"])
 
     def test_user_device_endpoints_return_503_when_factory_configuration_is_missing(self) -> None:
         app.state.user_device_service = None

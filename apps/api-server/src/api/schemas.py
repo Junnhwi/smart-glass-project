@@ -355,6 +355,9 @@ class UploadAuthorizationPlan(ApiSchema):
     memoryId: str
     taskType: Literal["caption", "metadata"]
     capturedAt: str
+    uploadUrl: str
+    expiresAt: str
+    expiresInSec: int = Field(ge=30, le=3600)
     sourceImage: CaptureSourceImageSnapshot
 
 

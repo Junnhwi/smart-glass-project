@@ -56,6 +56,9 @@ export type UploadAuthorizationPlan = {
   memoryId: string;
   taskType: 'caption' | 'metadata';
   capturedAt: string;
+  uploadUrl: string;
+  expiresAt: string;
+  expiresInSec: number;
   sourceImage: CaptureSourceImageSnapshot;
 };
 
@@ -94,6 +97,24 @@ export type CaptureAcceptedResponse = {
     taskId: string | null;
     status: 'queued' | 'running' | 'retrying' | 'success' | 'error' | 'timeout';
   };
+};
+
+export type CaptureTaskStatusResponse = {
+  status: 'queued' | 'running' | 'retrying' | 'completed' | 'partial' | 'failed';
+  service: 'api-server';
+  taskId: string;
+  worker: {
+    taskId: string | null;
+    status: 'queued' | 'running' | 'retrying' | 'success' | 'error' | 'timeout';
+    result?: Record<string, unknown> | null;
+    error?: string | null;
+  };
+  memoryStore?: {
+    backend: string;
+    status: 'success' | 'error' | 'skipped';
+    storedCount?: number | null;
+    error?: string | null;
+  } | null;
 };
 
 type MediaBatchAccessUrlResponse = {
@@ -298,4 +319,51 @@ export const registerMediaCapture = async (
   payload: CaptureRegistrationPayload
 ) => {
   return postJson<CaptureAcceptedResponse>('/media/captures', payload);
+};
+
+export const getCaptureTaskStatus = async (taskId: string) => {
+  const response = await fetch(
+    `${API_BASE_URL}/media/captures/tasks/${encodeURIComponent(taskId)}`
+  );
+
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<CaptureTaskStatusResponse>;
+};
+
+export const uploadAuthorizedCaptureSource = async ({
+  uploadPlan,
+  body,
+  contentType,
+}: {
+  uploadPlan: UploadAuthorizationPlan;
+  body: Blob;
+  contentType?: string;
+}) => {
+  const resolvedContentType = (
+    contentType ||
+    uploadPlan.sourceImage.contentType ||
+    ''
+  ).trim();
+  const headers: Record<string, string> = {};
+  if (resolvedContentType) {
+    headers['Content-Type'] = resolvedContentType;
+  }
+
+  const response = await fetch(uploadPlan.uploadUrl, {
+    method: 'PUT',
+    headers,
+    body,
+  });
+
+  if (!response.ok) {
+    const rawText = await response.text();
+    throw new Error(rawText || `Upload failed with ${response.status}`);
+  }
+
+  return {
+    imageKey: uploadPlan.sourceImage.imageKey,
+  };
 };

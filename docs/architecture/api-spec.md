@@ -13,8 +13,8 @@ There is no separate search service in the default application flow anymore.
 ## Capture Flow
 
 1. A client requests `POST /media/upload-authorizations` with `deviceId` and upload metadata.
-2. `api-server` validates `deviceId`, resolves `userId`, and returns a direct-upload plan with canonical `imageKey`.
-3. The client uploads the original image to object storage using the returned `imageKey`.
+2. `api-server` validates `deviceId`, resolves `userId`, and returns a direct-upload plan with a canonical `imageKey` plus a presigned PUT `uploadUrl`.
+3. The client uploads the original image to object storage using the returned `uploadUrl`.
 4. The client registers the capture with `POST /media/captures` using the same `deviceId`, `userId`, and `imageKey`.
 5. `api-server` dispatches the inference worker.
 6. `api-server` returns `202 Accepted` with the Celery `taskId`.
@@ -30,8 +30,8 @@ posts the final successful VLM result to `POST /memories/inference-results`.
 
 ### `POST /media/upload-authorizations`
 
-Validates a registered `deviceId` and prepares the direct-upload object key that
-the client should use for object storage upload.
+Validates a registered `deviceId` and prepares the direct-upload object key and
+presigned PUT URL that the client should use for object storage upload.
 
 Relevant request fields:
 
@@ -66,6 +66,9 @@ Allowed response example:
     "memoryId": "mem-001",
     "taskType": "metadata",
     "capturedAt": "2026-05-05T02:00:00Z",
+    "uploadUrl": "https://storage.example.com/signed-put/captures/user-1/2026/05/05/capture-001-photo.png",
+    "expiresAt": "2026-05-05T02:05:00Z",
+    "expiresInSec": 300,
     "sourceImage": {
       "imageKey": "captures/user-1/2026/05/05/capture-001-photo.png",
       "imageUrl": null,

@@ -465,6 +465,18 @@ def create_app() -> FastAPI:
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            try:
+                media_access_service = _get_media_access_service(request)
+                upload_url = media_access_service.issue_upload_url(
+                    image_key=capture.sourceImage.imageKey,
+                    content_type=capture.sourceImage.contentType,
+                )
+            except MediaUrlSignerConfigError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
 
             upload_plan = UploadAuthorizationPlan(
                 captureId=capture.captureId,
@@ -472,6 +484,9 @@ def create_app() -> FastAPI:
                 memoryId=capture.memoryId,
                 taskType=capture.taskType,
                 capturedAt=capture.capturedAt,
+                uploadUrl=upload_url.access_url,
+                expiresAt=upload_url.expires_at,
+                expiresInSec=upload_url.expires_in_sec,
                 sourceImage=capture.sourceImage,
             )
 

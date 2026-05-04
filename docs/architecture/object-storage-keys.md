@@ -48,7 +48,7 @@ Object keys identify storage objects, but they do not prove ownership by themsel
 
 ## Related Flow
 
-- Upload authorization can pre-generate the canonical `sourceImage.imageKey`.
+- Upload authorization can pre-generate the canonical `sourceImage.imageKey` and a presigned PUT `uploadUrl`.
 - Capture registration builds or normalizes `sourceImage.imageKey`.
 - The worker payload uses the same `imageKey`.
 - The worker reads the object from object storage.
