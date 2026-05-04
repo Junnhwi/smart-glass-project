@@ -12,12 +12,14 @@ There is no separate search service in the default application flow anymore.
 
 ## Capture Flow
 
-1. A client uploads the original image to object storage.
-2. The client registers the capture with `POST /media/captures`.
-3. `api-server` dispatches the inference worker.
-4. `api-server` returns `202 Accepted` with the Celery `taskId`.
-5. The client polls `GET /media/captures/tasks/{taskId}`.
-6. When the worker result is ready, `api-server` reads the normalized VLM
+1. A client requests `POST /media/upload-authorizations` with `deviceId` and upload metadata.
+2. `api-server` validates `deviceId`, resolves `userId`, and returns a direct-upload plan with canonical `imageKey`.
+3. The client uploads the original image to object storage using the returned `imageKey`.
+4. The client registers the capture with `POST /media/captures` using the same `deviceId`, `userId`, and `imageKey`.
+5. `api-server` dispatches the inference worker.
+6. `api-server` returns `202 Accepted` with the Celery `taskId`.
+7. The client polls `GET /media/captures/tasks/{taskId}`.
+8. When the worker result is ready, `api-server` reads the normalized VLM
    result from the result backend and stores the memory document in PostgreSQL.
 
 When capture upload and inference are owned by another team, steps 1-4 can
@@ -25,6 +27,65 @@ happen outside `api-server`. In that integration mode, the external pipeline
 posts the final successful VLM result to `POST /memories/inference-results`.
 
 ## Main Endpoints
+
+### `POST /media/upload-authorizations`
+
+Validates a registered `deviceId` and prepares the direct-upload object key that
+the client should use for object storage upload.
+
+Relevant request fields:
+
+- `deviceId`
+- `captureId`
+- `requestId`
+- `memoryId`
+- `taskType`
+- `capturedAt`
+- `fileName`
+- `imageKey`
+- `contentType`
+
+Allowed response sections:
+
+- `status`
+- `deviceId`
+- `userId`
+- `upload`
+
+Allowed response example:
+
+```json
+{
+  "status": "allowed",
+  "deviceId": "glass-001",
+  "userId": "user-1",
+  "upload": {
+    "method": "direct",
+    "captureId": "capture-001",
+    "requestId": "req-001",
+    "memoryId": "mem-001",
+    "taskType": "metadata",
+    "capturedAt": "2026-05-05T02:00:00Z",
+    "sourceImage": {
+      "imageKey": "captures/user-1/2026/05/05/capture-001-photo.png",
+      "imageUrl": null,
+      "contentType": "image/png",
+      "fileName": "photo.png"
+    }
+  }
+}
+```
+
+Blocked response example:
+
+```json
+{
+  "status": "blocked",
+  "deviceId": "glass-999",
+  "userId": null,
+  "upload": null
+}
+```
 
 ### `POST /media/captures`
 
@@ -37,6 +98,7 @@ Relevant request fields:
 - `requestId`
 - `memoryId`
 - `userId`
+- `deviceId`
 - `taskType`
 - `capturedAt`
 - `fileName`

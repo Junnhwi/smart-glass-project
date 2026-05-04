@@ -42,6 +42,30 @@ export type MediaAccessUrl = {
   expiresInSec: number;
 };
 
+export type CaptureSourceImageSnapshot = {
+  imageKey: string;
+  imageUrl?: string | null;
+  contentType?: string | null;
+  fileName?: string | null;
+};
+
+export type UploadAuthorizationPlan = {
+  method: 'direct';
+  captureId: string;
+  requestId: string;
+  memoryId: string;
+  taskType: 'caption' | 'metadata';
+  capturedAt: string;
+  sourceImage: CaptureSourceImageSnapshot;
+};
+
+export type UploadAuthorizationResponse = {
+  status: 'allowed' | 'blocked';
+  deviceId: string;
+  userId?: string | null;
+  upload?: UploadAuthorizationPlan | null;
+};
+
 type MediaBatchAccessUrlResponse = {
   totalItems: number;
   items: MediaAccessUrl[];
@@ -116,4 +140,38 @@ export const issueMediaAccessUrls = async ({
     },
     { authToken }
   );
+};
+
+export const requestMediaUploadAuthorization = async ({
+  deviceId,
+  captureId,
+  requestId,
+  memoryId,
+  taskType = 'metadata',
+  capturedAt,
+  fileName,
+  imageKey,
+  contentType,
+}: {
+  deviceId: string;
+  captureId?: string;
+  requestId?: string;
+  memoryId?: string;
+  taskType?: 'caption' | 'metadata';
+  capturedAt?: string;
+  fileName?: string;
+  imageKey?: string;
+  contentType?: string;
+}) => {
+  return postJson<UploadAuthorizationResponse>('/media/upload-authorizations', {
+    deviceId,
+    captureId,
+    requestId,
+    memoryId,
+    taskType,
+    capturedAt,
+    fileName,
+    imageKey,
+    contentType,
+  });
 };

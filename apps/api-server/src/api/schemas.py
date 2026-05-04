@@ -311,6 +311,14 @@ class DeviceRegistrationResponse(ApiSchema):
 
 class UploadAuthorizationRequest(ApiSchema):
     deviceId: str = Field(min_length=1)
+    captureId: str | None = None
+    requestId: str | None = None
+    memoryId: str | None = None
+    taskType: Literal["caption", "metadata"] = "metadata"
+    capturedAt: str | None = None
+    fileName: str | None = None
+    imageKey: str | None = None
+    contentType: str | None = None
 
     @validator("deviceId")
     def validate_non_blank_upload_authorization_device_id(cls, value: str) -> str:
@@ -319,11 +327,42 @@ class UploadAuthorizationRequest(ApiSchema):
             raise ValueError("must not be blank")
         return normalized
 
+    @validator(
+        "captureId",
+        "requestId",
+        "memoryId",
+        "capturedAt",
+        "fileName",
+        "imageKey",
+        "contentType",
+    )
+    def validate_optional_upload_authorization_strings(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class UploadAuthorizationPlan(ApiSchema):
+    method: Literal["direct"] = "direct"
+    captureId: str
+    requestId: str
+    memoryId: str
+    taskType: Literal["caption", "metadata"]
+    capturedAt: str
+    sourceImage: CaptureSourceImageSnapshot
+
 
 class UploadAuthorizationResponse(ApiSchema):
     status: Literal["allowed", "blocked"]
     deviceId: str
     userId: str | None = None
+    upload: UploadAuthorizationPlan | None = None
 
 
 class MediaAccessUrlRequest(ApiSchema):

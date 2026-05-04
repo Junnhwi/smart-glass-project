@@ -14,7 +14,7 @@ Example:
 captures/user-1/2026/04/07/capture-001-smart-glass-photo.jpg
 ```
 
-`api-server` generates this key when a capture request does not provide an explicit `imageKey`. The generation path is centralized in `apps/api-server/src/modules/media/object_keys.py`.
+`api-server` generates this key during `POST /media/upload-authorizations` and also when a capture request does not provide an explicit `imageKey`. The generation path is centralized in `apps/api-server/src/modules/media/object_keys.py`.
 
 ## Normalization
 
@@ -48,6 +48,7 @@ Object keys identify storage objects, but they do not prove ownership by themsel
 
 ## Related Flow
 
+- Upload authorization can pre-generate the canonical `sourceImage.imageKey`.
 - Capture registration builds or normalizes `sourceImage.imageKey`.
 - The worker payload uses the same `imageKey`.
 - The worker reads the object from object storage.

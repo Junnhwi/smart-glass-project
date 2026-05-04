@@ -12,10 +12,12 @@ from src.api.auth import (
     require_internal_service_token,
     resolve_authenticated_user,
 )
+from src.api.intake import build_capture_upload_response
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
     CaptureAcceptedResponse,
     CaptureMemoryStoreExecutionPayload,
+    CaptureUploadResponse,
     CaptureTaskStatusResponse,
     CaptureUploadRequest,
     CaptureWorkerExecutionPayload,
@@ -35,6 +37,7 @@ from src.api.schemas import (
     MemorySearchHitPayload,
     MemorySearchRequest,
     MemorySearchResponse,
+    UploadAuthorizationPlan,
     UploadAuthorizationRequest,
     UploadAuthorizationResponse,
     UserCreateRequest,
@@ -193,12 +196,6 @@ def _authorize_capture_payload(
     request: Request,
     payload: CaptureUploadRequest,
 ) -> CaptureUploadRequest:
-    if not payload.deviceId:
-        raise HTTPException(
-            status_code=400,
-            detail="deviceId is required for capture registration",
-        )
-
     try:
         user_device_service = _get_user_device_service(request)
         authorization = user_device_service.authorize_device(
@@ -232,6 +229,27 @@ def _authorize_capture_payload(
             "deviceId": authorization.device_id,
         }
     )
+
+
+def _build_upload_authorization_capture(
+    *,
+    user_id: str,
+    device_id: str,
+    payload: UploadAuthorizationRequest,
+) -> CaptureUploadResponse:
+    capture_request = CaptureUploadRequest(
+        captureId=payload.captureId,
+        requestId=payload.requestId,
+        memoryId=payload.memoryId,
+        userId=user_id,
+        deviceId=device_id,
+        taskType=payload.taskType,
+        capturedAt=payload.capturedAt,
+        fileName=payload.fileName,
+        imageKey=payload.imageKey,
+        contentType=payload.contentType,
+    )
+    return build_capture_upload_response(capture_request)
 
 
 def create_app() -> FastAPI:
@@ -437,10 +455,31 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise _map_user_device_error(exc) from exc
 
+        upload_plan = None
+        if authorization.status == "allowed" and authorization.user_id:
+            try:
+                capture = _build_upload_authorization_capture(
+                    user_id=authorization.user_id,
+                    device_id=authorization.device_id,
+                    payload=payload,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            upload_plan = UploadAuthorizationPlan(
+                captureId=capture.captureId,
+                requestId=capture.requestId,
+                memoryId=capture.memoryId,
+                taskType=capture.taskType,
+                capturedAt=capture.capturedAt,
+                sourceImage=capture.sourceImage,
+            )
+
         response = UploadAuthorizationResponse(
             status=authorization.status,
             deviceId=authorization.device_id,
             userId=authorization.user_id,
+            upload=upload_plan,
         )
         if authorization.status == "blocked":
             return JSONResponse(

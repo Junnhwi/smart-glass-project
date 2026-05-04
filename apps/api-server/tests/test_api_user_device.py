@@ -147,12 +147,32 @@ class ApiServerUserDeviceTests(unittest.TestCase):
     def test_upload_authorization_returns_allowed_user(self) -> None:
         response = self.client.post(
             "/media/upload-authorizations",
-            json={"deviceId": "glass-001"},
+            json={
+                "deviceId": "glass-001",
+                "captureId": "capture-001",
+                "requestId": "req-001",
+                "memoryId": "mem-001",
+                "capturedAt": "2026-05-05T11:00:00+09:00",
+                "fileName": "photo.png",
+                "contentType": "image/png",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "allowed")
-        self.assertEqual(response.json()["userId"], "user-1")
+        body = response.json()
+        self.assertEqual(body["status"], "allowed")
+        self.assertEqual(body["userId"], "user-1")
+        self.assertEqual(body["upload"]["method"], "direct")
+        self.assertEqual(body["upload"]["captureId"], "capture-001")
+        self.assertEqual(body["upload"]["requestId"], "req-001")
+        self.assertEqual(body["upload"]["memoryId"], "mem-001")
+        self.assertEqual(body["upload"]["capturedAt"], "2026-05-05T02:00:00Z")
+        self.assertEqual(
+            body["upload"]["sourceImage"]["imageKey"],
+            "captures/user-1/2026/05/05/capture-001-photo.png",
+        )
+        self.assertEqual(body["upload"]["sourceImage"]["contentType"], "image/png")
+        self.assertEqual(body["upload"]["sourceImage"]["fileName"], "photo.png")
         self.assertEqual(self.fake_user_device_service.authorized_devices, ["glass-001"])
 
     def test_upload_authorization_returns_blocked_response_for_unknown_device(self) -> None:
@@ -166,7 +186,20 @@ class ApiServerUserDeviceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["status"], "blocked")
         self.assertIsNone(response.json()["userId"])
+        self.assertIsNone(response.json()["upload"])
         self.assertEqual(self.fake_user_device_service.authorized_devices, ["glass-999"])
+
+    def test_upload_authorization_rejects_invalid_explicit_image_key(self) -> None:
+        response = self.client.post(
+            "/media/upload-authorizations",
+            json={
+                "deviceId": "glass-001",
+                "imageKey": "captures/user-2/private-photo.jpg",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("captures prefix", response.json()["detail"])
 
     def test_user_device_endpoints_surface_service_unavailability(self) -> None:
         self.fake_user_device_service.should_fail = True
