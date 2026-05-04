@@ -39,12 +39,7 @@ def _ensure_identifier(prefix: str, explicit: str | None) -> str:
 def _capture_timestamp(captured_at: str | None) -> str:
     normalized = _normalize_text(captured_at)
     if not normalized:
-        return (
-            datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        return _utc_now_isoformat()
 
     candidate = normalized.replace("Z", "+00:00")
     try:
@@ -57,6 +52,15 @@ def _capture_timestamp(captured_at: str | None) -> str:
 
     return (
         parsed.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _utc_now_isoformat() -> str:
+    return (
+        datetime.now(timezone.utc)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
@@ -164,6 +168,8 @@ def build_capture_upload_response(
 
 def build_worker_task_kwargs(
     response: CaptureUploadResponse,
+    *,
+    enqueued_at: str | None = None,
 ) -> dict[str, object]:
     return {
         "image_key": response.sourceImage.imageKey,
@@ -173,4 +179,5 @@ def build_worker_task_kwargs(
         "image_url": response.sourceImage.imageUrl,
         "request_id": response.requestId,
         "task_type": response.taskType,
+        "enqueued_at": _normalize_text(enqueued_at) or _utc_now_isoformat(),
     }

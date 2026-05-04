@@ -27,6 +27,11 @@ class JsonFormatter(logging.Formatter):
             "model_key",
             "quantization",
             "latency_sec",
+            "queue_wait_sec",
+            "storage_read_sec",
+            "image_decode_sec",
+            "model_inference_sec",
+            "task_latency_sec",
             "peak_memory_mb",
             "error_code",
         ):

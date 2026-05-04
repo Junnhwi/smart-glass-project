@@ -1,6 +1,8 @@
-import os
 import io
+import os
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from celery import Celery
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from celery.signals import worker_init
@@ -117,6 +119,66 @@ def _build_error_details(
     }
 
 
+def _elapsed_sec(started_at: float) -> float:
+    return round(max(0.0, time.perf_counter() - started_at), 4)
+
+
+def _parse_enqueued_at(value: object | None) -> datetime | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _queue_wait_sec(enqueued_at: object | None) -> float | None:
+    parsed = _parse_enqueued_at(enqueued_at)
+    if parsed is None:
+        return None
+    elapsed = (datetime.now(timezone.utc) - parsed).total_seconds()
+    return round(max(0.0, elapsed), 4)
+
+
+def _build_task_runtime_metrics(
+    *,
+    task_started_at: float,
+    queue_wait_sec: float | None,
+    storage_read_sec: float | None,
+    image_decode_sec: float | None,
+    model_inference_sec: float | None,
+) -> dict[str, float]:
+    metrics = {
+        "taskLatencySec": _elapsed_sec(task_started_at),
+    }
+    optional_metrics = {
+        "queueWaitSec": queue_wait_sec,
+        "storageReadSec": storage_read_sec,
+        "imageDecodeSec": image_decode_sec,
+        "modelInferenceSec": model_inference_sec,
+    }
+    for key, value in optional_metrics.items():
+        if value is not None:
+            metrics[key] = value
+    return metrics
+
+
+def _log_runtime_metrics(runtime_metrics: dict[str, float]) -> dict[str, float | None]:
+    return {
+        "queue_wait_sec": runtime_metrics.get("queueWaitSec"),
+        "storage_read_sec": runtime_metrics.get("storageReadSec"),
+        "image_decode_sec": runtime_metrics.get("imageDecodeSec"),
+        "model_inference_sec": runtime_metrics.get("modelInferenceSec"),
+        "task_latency_sec": runtime_metrics["taskLatencySec"],
+    }
+
+
 def _task_called_directly(task_request: object | None) -> bool:
     return bool(getattr(task_request, "called_directly", False))
 
@@ -158,7 +220,13 @@ def process_vision_inference(
     image_url=None,
     request_id=None,
     task_type="caption",
+    enqueued_at=None,
 ):
+    task_started_at = time.perf_counter()
+    queue_wait_sec = _queue_wait_sec(enqueued_at)
+    storage_read_sec = None
+    image_decode_sec = None
+    model_inference_sec = None
     model_key = "blip-base"
     quantization = "none"
     dtype_name = "float16"
@@ -179,61 +247,82 @@ def process_vision_inference(
         execution_policy_payload = execution_policy.to_payload()
         model_descriptor = resolve_inference_model(model_key)
         model_mode = model_descriptor.mode
-        storage_object = get_storage_service().read_object(image_key)
+        storage_started_at = time.perf_counter()
+        try:
+            storage_object = get_storage_service().read_object(image_key)
+        finally:
+            storage_read_sec = _elapsed_sec(storage_started_at)
         content_type = storage_object.content_type
         image_data = storage_object.body
-        raw_image = Image.open(io.BytesIO(image_data)).convert("RGB")
-        if model_descriptor.mode == "vlm":
-            try:
-                result = generate_qwen_vlm_metadata(
+        image_decode_started_at = time.perf_counter()
+        try:
+            raw_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+        finally:
+            image_decode_sec = _elapsed_sec(image_decode_started_at)
+
+        model_inference_started_at = time.perf_counter()
+        try:
+            if model_descriptor.mode == "vlm":
+                try:
+                    result = generate_qwen_vlm_metadata(
+                        image=raw_image,
+                        model_key=model_key,
+                        quantization=quantization,
+                        dtype_name=dtype_name,
+                    )
+                except Exception as primary_error:
+                    fallback_model_key = None
+                    if _should_retry_with_qwen_fallback(primary_error):
+                        fallback_model_key = execution_policy.fallback_model_key
+                    if fallback_model_key is None:
+                        raise
+
+                    logger.warning(
+                        "Primary VLM inference failed, retrying with fallback model",
+                        extra={
+                            "task_name": "process_vision_inference",
+                            "request_id": resolved_request_id,
+                            "image_key": image_key,
+                            "user_id": user_id,
+                            "model_key": model_key,
+                            "fallback_model_key": fallback_model_key,
+                            "settings_source": settings_source,
+                            "error_code": "vlm_primary_model_failed",
+                        },
+                    )
+                    result = generate_qwen_vlm_metadata(
+                        image=raw_image,
+                        model_key=fallback_model_key,
+                        quantization=quantization,
+                        dtype_name=dtype_name,
+                    )
+                    model_key = fallback_model_key
+                    model_descriptor = resolve_inference_model(model_key)
+                    fallback_triggered = True
+                    execution_policy_payload = execution_policy.to_payload(
+                        fallback_triggered=True
+                    )
+                metadata = result["metadata"]
+                pipeline_output = result.get("pipeline_output")
+            else:
+                result = generate_caption(
                     image=raw_image,
                     model_key=model_key,
                     quantization=quantization,
                     dtype_name=dtype_name,
                 )
-            except Exception as primary_error:
-                fallback_model_key = None
-                if _should_retry_with_qwen_fallback(primary_error):
-                    fallback_model_key = execution_policy.fallback_model_key
-                if fallback_model_key is None:
-                    raise
+                metadata = None
+                pipeline_output = None
+        finally:
+            model_inference_sec = _elapsed_sec(model_inference_started_at)
 
-                logger.warning(
-                    "Primary VLM inference failed, retrying with fallback model",
-                    extra={
-                        "task_name": "process_vision_inference",
-                        "request_id": resolved_request_id,
-                        "image_key": image_key,
-                        "user_id": user_id,
-                        "model_key": model_key,
-                        "fallback_model_key": fallback_model_key,
-                        "settings_source": settings_source,
-                        "error_code": "vlm_primary_model_failed",
-                    },
-                )
-                result = generate_qwen_vlm_metadata(
-                    image=raw_image,
-                    model_key=fallback_model_key,
-                    quantization=quantization,
-                    dtype_name=dtype_name,
-                )
-                model_key = fallback_model_key
-                model_descriptor = resolve_inference_model(model_key)
-                fallback_triggered = True
-                execution_policy_payload = execution_policy.to_payload(
-                    fallback_triggered=True
-                )
-            metadata = result["metadata"]
-            pipeline_output = result.get("pipeline_output")
-        else:
-            result = generate_caption(
-                image=raw_image,
-                model_key=model_key,
-                quantization=quantization,
-                dtype_name=dtype_name,
-            )
-            metadata = None
-            pipeline_output = None
+        runtime_metrics = _build_task_runtime_metrics(
+            task_started_at=task_started_at,
+            queue_wait_sec=queue_wait_sec,
+            storage_read_sec=storage_read_sec,
+            image_decode_sec=image_decode_sec,
+            model_inference_sec=model_inference_sec,
+        )
 
         logger.info(
             "Inference task completed",
@@ -253,6 +342,7 @@ def process_vision_inference(
                 "fallback_triggered": fallback_triggered,
                 "latency_sec": round(result["elapsed_sec"], 4),
                 "peak_memory_mb": result["peak_memory_mb"],
+                **_log_runtime_metrics(runtime_metrics),
             },
         )
 
@@ -272,6 +362,7 @@ def process_vision_inference(
             inference_metadata=metadata,
             pipeline_output=pipeline_output,
             execution_policy=execution_policy_payload,
+            runtime_metrics=runtime_metrics,
         )
     except Retry:
         raise
@@ -283,8 +374,18 @@ def process_vision_inference(
         )
         task_request = getattr(self, "request", None)
         retry_count = _task_retry_count(task_request)
-        
-        if _should_retry_task(retryable=failure_policy.retryable, task_request=task_request):
+        runtime_metrics = _build_task_runtime_metrics(
+            task_started_at=task_started_at,
+            queue_wait_sec=queue_wait_sec,
+            storage_read_sec=storage_read_sec,
+            image_decode_sec=image_decode_sec,
+            model_inference_sec=model_inference_sec,
+        )
+
+        if _should_retry_task(
+            retryable=failure_policy.retryable,
+            task_request=task_request,
+        ):
             logger.warning(
                 "Inference task failed with retryable error, scheduling retry",
                 extra={
@@ -301,6 +402,7 @@ def process_vision_inference(
                     "retry_count": retry_count,
                     "max_retries": TASK_MAX_RETRIES,
                     "retry_delay_sec": TASK_RETRY_DELAY_SECONDS,
+                    **_log_runtime_metrics(runtime_metrics),
                 },
             )
             raise self.retry(exc=e, countdown=TASK_RETRY_DELAY_SECONDS)
@@ -324,6 +426,7 @@ def process_vision_inference(
                 "failure_category": failure_policy.category,
                 "retry_count": retry_count,
                 "max_retries": TASK_MAX_RETRIES,
+                **_log_runtime_metrics(runtime_metrics),
             },
         )
         return build_vlm_error_result(
@@ -343,4 +446,5 @@ def process_vision_inference(
             retryable=failure_policy.retryable,
             execution_policy=execution_policy_payload,
             error_details=error_details,
+            runtime_metrics=runtime_metrics,
         )
