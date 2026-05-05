@@ -9,6 +9,11 @@ try:
 except ImportError:  # pragma: no cover - pydantic v1 fallback
     ConfigDict = None
 
+try:
+    from pydantic import root_validator
+except ImportError:  # pragma: no cover - pydantic v2 fallback
+    root_validator = None
+
 
 class ApiSchema(BaseModel):
     if ConfigDict is not None:
@@ -309,6 +314,108 @@ class DeviceRegistrationResponse(ApiSchema):
     registeredAt: str
 
 
+class AuthUserPayload(ApiSchema):
+    userId: str
+    email: str
+    displayName: str
+    role: Literal["user", "admin"]
+    status: Literal["active", "disabled"]
+    createdAt: str
+    lastLoginAt: str | None = None
+
+
+class AuthSignupRequest(ApiSchema):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=8)
+    displayName: str | None = None
+    userId: str | None = None
+    deviceId: str | None = None
+
+    @validator("email", "password")
+    def validate_non_blank_auth_signup_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    @validator("displayName", "userId", "deviceId")
+    def validate_optional_signup_strings(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class AuthLoginRequest(ApiSchema):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=8)
+    deviceId: str | None = None
+
+    @validator("email", "password")
+    def validate_non_blank_auth_login_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    @validator("deviceId")
+    def validate_optional_login_device_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class AuthRefreshRequest(ApiSchema):
+    refreshToken: str = Field(min_length=1)
+
+    @validator("refreshToken")
+    def validate_non_blank_refresh_token(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class AuthLogoutRequest(ApiSchema):
+    refreshToken: str | None = None
+
+    @validator("refreshToken")
+    def validate_optional_non_blank_logout_refresh_token(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class AuthTokenResponse(ApiSchema):
+    status: Literal["authenticated"] = "authenticated"
+    tokenType: Literal["Bearer"] = "Bearer"
+    accessToken: str
+    refreshToken: str
+    expiresInSec: int = Field(ge=60)
+    refreshExpiresInSec: int = Field(ge=300)
+    user: AuthUserPayload
+
+
+class AuthLogoutResponse(ApiSchema):
+    status: Literal["logged_out"] = "logged_out"
+    revokedAccessToken: bool
+    revokedRefreshToken: bool
+
+
 class UploadAuthorizationRequest(ApiSchema):
     deviceId: str = Field(min_length=1)
     captureId: str | None = None
@@ -465,6 +572,16 @@ class MemorySearchRequest(ApiSchema):
     userId: str = Field(alias="user_id", min_length=1)
     query: str = Field(min_length=1)
     topK: int = Field(default=5, alias="top_k", ge=1, le=20)
+
+    if root_validator is not None:
+        @root_validator(pre=True)
+        def populate_search_aliases(cls, values: dict[str, Any]) -> dict[str, Any]:
+            values = dict(values or {})
+            if "userId" in values and "user_id" not in values:
+                values["user_id"] = values["userId"]
+            if "topK" in values and "top_k" not in values:
+                values["top_k"] = values["topK"]
+            return values
 
     @validator("userId", "query")
     def validate_non_blank_search_fields(cls, value: str) -> str:

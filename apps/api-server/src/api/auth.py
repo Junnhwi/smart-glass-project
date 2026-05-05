@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import secrets
+from dataclasses import dataclass
+from typing import Any
 
 from fastapi import HTTPException, Request, status
 
@@ -9,6 +11,16 @@ from fastapi import HTTPException, Request, status
 DEMO_AUTH_TOKEN_PREFIX = "demo-user:"
 INTERNAL_SERVICE_TOKEN_HEADER = "X-Internal-Service-Token"
 INTERNAL_SERVICE_TOKEN_ENV = "API_INTERNAL_SERVICE_TOKEN"
+ENABLE_DEMO_TOKENS_ENV = "API_AUTH_ENABLE_DEMO_TOKENS"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedPrincipal:
+    user_id: str
+    role: str
+    token_type: str
+    session_id: str | None = None
+    token_jti: str | None = None
 
 
 def build_demo_auth_token(user_id: str) -> str:
@@ -37,10 +49,37 @@ def _unauthorized(detail: str) -> HTTPException:
     )
 
 
-def resolve_authenticated_user(
+def _demo_tokens_enabled() -> bool:
+    raw_value = os.getenv(ENABLE_DEMO_TOKENS_ENV, "1").strip().lower()
+    return raw_value not in {"0", "false", "no", "off"}
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())
+
+
+def _get_auth_service(request: Request):
+    auth_service = getattr(request.app.state, "auth_service", None)
+    if auth_service is not None:
+        return auth_service
+
+    factory = getattr(request.app.state, "auth_service_factory", None)
+    if factory is None:
+        return None
+
+    auth_service = factory()
+    request.app.state.auth_service = auth_service
+    return auth_service
+
+
+def resolve_authenticated_principal(
     request: Request,
     claimed_user_id: str | None = None,
-) -> str:
+    *,
+    allowed_roles: set[str] | None = None,
+) -> AuthenticatedPrincipal:
     authorization = request.headers.get("Authorization", "").strip()
     if not authorization:
         raise _unauthorized("Authorization header is required")
@@ -50,18 +89,54 @@ def resolve_authenticated_user(
         raise _unauthorized("Authorization header must use Bearer token")
 
     token = credentials.strip()
-    if not token.startswith(DEMO_AUTH_TOKEN_PREFIX):
-        raise _unauthorized("Unsupported authorization token")
+    principal: AuthenticatedPrincipal
+    if token.startswith(DEMO_AUTH_TOKEN_PREFIX):
+        if not _demo_tokens_enabled():
+            raise _unauthorized("Demo authorization tokens are disabled")
 
-    authenticated_user_id = token[len(DEMO_AUTH_TOKEN_PREFIX) :].strip()
-    if not authenticated_user_id:
-        raise _unauthorized("Authenticated user id is missing")
+        authenticated_user_id = token[len(DEMO_AUTH_TOKEN_PREFIX) :].strip()
+        if not authenticated_user_id:
+            raise _unauthorized("Authenticated user id is missing")
+        principal = AuthenticatedPrincipal(
+            user_id=authenticated_user_id,
+            role="user",
+            token_type="demo",
+        )
+    else:
+        try:
+            auth_service = _get_auth_service(request)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        if auth_service is None:
+            raise _unauthorized("Unsupported authorization token")
+
+        try:
+            principal = auth_service.authenticate_access_token(token)
+        except PermissionError as exc:
+            raise _unauthorized(str(exc)) from exc
+        except LookupError as exc:
+            raise _unauthorized(str(exc)) from exc
+        except ValueError as exc:
+            raise _unauthorized(str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
 
     if claimed_user_id is not None:
         normalized_claimed_user_id = claimed_user_id.strip()
         if (
             normalized_claimed_user_id
-            and normalized_claimed_user_id != authenticated_user_id
+            and normalized_claimed_user_id != principal.user_id
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -70,7 +145,24 @@ def resolve_authenticated_user(
                 ),
             )
 
-    return authenticated_user_id
+    if allowed_roles is not None and principal.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user does not have the required role",
+        )
+
+    return principal
+
+
+def resolve_authenticated_user(
+    request: Request,
+    claimed_user_id: str | None = None,
+) -> str:
+    principal = resolve_authenticated_principal(
+        request,
+        claimed_user_id=claimed_user_id,
+    )
+    return _normalize_text(principal.user_id)
 
 
 def require_internal_service_token(request: Request) -> None:

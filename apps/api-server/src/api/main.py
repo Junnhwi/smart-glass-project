@@ -10,11 +10,19 @@ from fastapi.responses import JSONResponse
 
 from src.api.auth import (
     require_internal_service_token,
+    resolve_authenticated_principal,
     resolve_authenticated_user,
 )
 from src.api.intake import build_capture_upload_response
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
+    AuthLoginRequest,
+    AuthLogoutRequest,
+    AuthLogoutResponse,
+    AuthRefreshRequest,
+    AuthSignupRequest,
+    AuthTokenResponse,
+    AuthUserPayload,
     CaptureAcceptedResponse,
     CaptureMemoryStoreExecutionPayload,
     CaptureUploadResponse,
@@ -46,6 +54,7 @@ from src.api.schemas import (
     VlmInferenceResultPayload,
 )
 from src.database.memory_store import build_default_memory_store_client
+from src.modules.auth.service import build_default_auth_service
 from src.modules.media.service import (
     GalleryItem,
     MediaAccessUrl,
@@ -166,6 +175,50 @@ def _get_user_device_service(request: Request):
     return user_device_service
 
 
+def _get_auth_service(request: Request):
+    auth_service = getattr(request.app.state, "auth_service", None)
+    if auth_service is None:
+        auth_service = request.app.state.auth_service_factory()
+        request.app.state.auth_service = auth_service
+    return auth_service
+
+
+def _map_auth_profile(profile: Any) -> AuthUserPayload:
+    return AuthUserPayload(
+        userId=profile.user_id,
+        email=profile.email,
+        displayName=profile.display_name,
+        role=profile.role,
+        status=profile.status,
+        createdAt=profile.created_at,
+        lastLoginAt=profile.last_login_at,
+    )
+
+
+def _map_auth_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ValueError):
+        detail = str(exc)
+        if "already registered" in detail:
+            return HTTPException(status_code=409, detail=detail)
+        if "API_AUTH_JWT_SECRET" in detail or "API_CAPTURE_DATABASE_URL" in detail:
+            return HTTPException(status_code=503, detail=detail)
+        return HTTPException(status_code=400, detail=detail)
+    return HTTPException(status_code=503, detail=str(exc))
+
+
+def _request_ip_address(request: Request) -> str | None:
+    forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip() or None
+    if request.client is None:
+        return None
+    return request.client.host
+
+
 def _map_celery_state_to_capture_status(state: str) -> str:
     normalized = " ".join(str(state).split()).strip().upper()
     if normalized in {"PENDING", "RECEIVED"}:
@@ -275,6 +328,11 @@ def create_app() -> FastAPI:
             "routes": [
                 "GET /health/live",
                 "GET /health/ready",
+                "POST /auth/signup",
+                "POST /auth/login",
+                "POST /auth/refresh",
+                "POST /auth/logout",
+                "GET /auth/me",
                 "POST /users",
                 "POST /users/{userId}/devices",
                 "POST /devices/register",
@@ -303,6 +361,8 @@ def create_app() -> FastAPI:
     app.state.media_access_service_factory = build_default_media_access_service
     app.state.memory_query_service = None
     app.state.memory_query_service_factory = build_default_memory_query_service
+    app.state.auth_service = None
+    app.state.auth_service_factory = build_default_auth_service
     app.state.user_device_service = None
     app.state.user_device_service_factory = build_default_user_device_service
 
@@ -379,6 +439,130 @@ def create_app() -> FastAPI:
                 "checks": checks,
             },
         )
+
+    @app.post(
+        "/auth/signup",
+        status_code=status.HTTP_201_CREATED,
+        response_model=AuthTokenResponse,
+    )
+    def sign_up(
+        request: Request,
+        payload: AuthSignupRequest,
+    ) -> AuthTokenResponse:
+        try:
+            auth_service = _get_auth_service(request)
+            bundle = auth_service.sign_up(
+                email=payload.email,
+                password=payload.password,
+                display_name=payload.displayName,
+                user_id=payload.userId,
+                device_id=payload.deviceId,
+                user_agent=request.headers.get("User-Agent"),
+                ip_address=_request_ip_address(request),
+            )
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+        return AuthTokenResponse(
+            accessToken=bundle.access_token,
+            refreshToken=bundle.refresh_token,
+            expiresInSec=bundle.expires_in_sec,
+            refreshExpiresInSec=bundle.refresh_expires_in_sec,
+            user=_map_auth_profile(bundle.user),
+        )
+
+    @app.post(
+        "/auth/login",
+        response_model=AuthTokenResponse,
+    )
+    def login(
+        request: Request,
+        payload: AuthLoginRequest,
+    ) -> AuthTokenResponse:
+        try:
+            auth_service = _get_auth_service(request)
+            bundle = auth_service.login(
+                email=payload.email,
+                password=payload.password,
+                device_id=payload.deviceId,
+                user_agent=request.headers.get("User-Agent"),
+                ip_address=_request_ip_address(request),
+            )
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+        return AuthTokenResponse(
+            accessToken=bundle.access_token,
+            refreshToken=bundle.refresh_token,
+            expiresInSec=bundle.expires_in_sec,
+            refreshExpiresInSec=bundle.refresh_expires_in_sec,
+            user=_map_auth_profile(bundle.user),
+        )
+
+    @app.post(
+        "/auth/refresh",
+        response_model=AuthTokenResponse,
+    )
+    def refresh_auth_token(
+        request: Request,
+        payload: AuthRefreshRequest,
+    ) -> AuthTokenResponse:
+        try:
+            auth_service = _get_auth_service(request)
+            bundle = auth_service.refresh(
+                refresh_token=payload.refreshToken,
+                user_agent=request.headers.get("User-Agent"),
+                ip_address=_request_ip_address(request),
+            )
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+        return AuthTokenResponse(
+            accessToken=bundle.access_token,
+            refreshToken=bundle.refresh_token,
+            expiresInSec=bundle.expires_in_sec,
+            refreshExpiresInSec=bundle.refresh_expires_in_sec,
+            user=_map_auth_profile(bundle.user),
+        )
+
+    @app.post(
+        "/auth/logout",
+        response_model=AuthLogoutResponse,
+    )
+    def logout(
+        request: Request,
+        payload: AuthLogoutRequest | None = None,
+    ) -> AuthLogoutResponse:
+        payload = payload or AuthLogoutRequest()
+        authorization = request.headers.get("Authorization", "").strip()
+        _, _, bearer_token = authorization.partition(" ")
+        normalized_access_token = bearer_token.strip() or None
+        if normalized_access_token and normalized_access_token.startswith("demo-user:"):
+            normalized_access_token = None
+        try:
+            auth_service = _get_auth_service(request)
+            outcome = auth_service.logout(
+                refresh_token=payload.refreshToken,
+                access_token=normalized_access_token,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+        return AuthLogoutResponse(
+            revokedAccessToken=outcome.revoked_access_token,
+            revokedRefreshToken=outcome.revoked_refresh_token,
+        )
+
+    @app.get(
+        "/auth/me",
+        response_model=AuthUserPayload,
+    )
+    def get_current_auth_user(request: Request) -> AuthUserPayload:
+        principal = resolve_authenticated_principal(request)
+        try:
+            auth_service = _get_auth_service(request)
+            profile = auth_service.get_user_profile(principal.user_id)
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+        return _map_auth_profile(profile)
 
     @app.post(
         "/users",
