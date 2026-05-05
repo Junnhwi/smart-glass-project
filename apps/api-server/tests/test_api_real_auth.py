@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.database.user_registry import DeviceRecord
 from src.modules.auth.service import AuthenticatedPrincipal
 from src.modules.search.service import GeneratedAnswer, SearchHit
 
@@ -35,6 +37,14 @@ class FakeAuthTokenBundle:
 class FakeLogoutResult:
     revoked_access_token: bool
     revoked_refresh_token: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FakeOauthStart:
+    provider: str
+    authorization_url: str
+    state: str
+    expires_at: str
 
 
 class FakeAuthService:
@@ -168,6 +178,84 @@ class FakeAuthService:
         pass
 
 
+class FakeGoogleOauthService:
+    def __init__(self, token_bundle: FakeAuthTokenBundle) -> None:
+        self.token_bundle = token_bundle
+        self.last_start_redirect_uri: str | None = None
+        self.last_callback_args: tuple[str, str] | None = None
+        self.last_callback_error_args: tuple[str, str, str | None] | None = None
+        self.last_exchange_args: tuple[str, str | None, str | None, str | None] | None = None
+
+    def start(self, *, redirect_uri: str) -> FakeOauthStart:
+        self.last_start_redirect_uri = redirect_uri
+        return FakeOauthStart(
+            provider="google",
+            authorization_url="https://accounts.google.com/o/oauth2/v2/auth?state=oauth-state-001",
+            state="oauth-state-001",
+            expires_at="2026-05-05T00:10:00Z",
+        )
+
+    def handle_callback(
+        self,
+        *,
+        authorization_code: str,
+        state: str,
+    ) -> str:
+        self.last_callback_args = (authorization_code, state)
+        return (
+            "smart-glass-client://oauth"
+            "?oauth_code=oauth-handoff-001"
+            "&provider=google"
+            "&device_id=glass-001"
+        )
+
+    def handle_callback_error(
+        self,
+        *,
+        state: str,
+        error: str,
+        description: str | None = None,
+    ) -> str:
+        self.last_callback_error_args = (state, error, description)
+        return (
+            "smart-glass-client://oauth"
+            f"?oauth_error={quote(error)}"
+            f"&oauth_error_description={quote(description or '')}"
+        )
+
+    def exchange_handoff(
+        self,
+        *,
+        handoff_code: str,
+        device_id: str | None = None,
+        user_agent: str | None = None,
+        ip_address: str | None = None,
+    ) -> FakeAuthTokenBundle:
+        self.last_exchange_args = (
+            handoff_code,
+            device_id,
+            user_agent,
+            ip_address,
+        )
+        return self.token_bundle
+
+
+class FakeUserDeviceService:
+    def __init__(self) -> None:
+        self.registered_devices: list[tuple[str, str]] = []
+
+    def register_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        self.registered_devices.append((user_id, device_id))
+        return DeviceRecord(
+            user_id=user_id,
+            device_id=device_id,
+            registered_at="2026-05-05T00:11:00Z",
+        )
+
+    def check_health(self) -> None:
+        pass
+
+
 class FakeMemoryQueryService:
     def __init__(self) -> None:
         self.last_search_args: tuple[str, str, int] | None = None
@@ -202,16 +290,31 @@ class FakeMemoryQueryService:
 class ApiServerRealAuthTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_auth_service_factory = app.state.auth_service_factory
+        self.original_google_oauth_service_factory = app.state.google_oauth_service_factory
+        self.original_user_device_service_factory = app.state.user_device_service_factory
         self.fake_auth_service = FakeAuthService()
+        self.fake_google_oauth_service = FakeGoogleOauthService(
+            self.fake_auth_service.login(
+                email="user@example.com",
+                password="password123",
+            )
+        )
+        self.fake_user_device_service = FakeUserDeviceService()
         self.fake_memory_query_service = FakeMemoryQueryService()
         app.state.auth_service = self.fake_auth_service
+        app.state.google_oauth_service = self.fake_google_oauth_service
+        app.state.user_device_service = self.fake_user_device_service
         app.state.memory_query_service = self.fake_memory_query_service
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
         app.state.auth_service = None
+        app.state.google_oauth_service = None
+        app.state.user_device_service = None
         app.state.memory_query_service = None
         app.state.auth_service_factory = self.original_auth_service_factory
+        app.state.google_oauth_service_factory = self.original_google_oauth_service_factory
+        app.state.user_device_service_factory = self.original_user_device_service_factory
 
     def test_signup_endpoint_returns_token_bundle(self) -> None:
         response = self.client.post(
@@ -293,6 +396,76 @@ class ApiServerRealAuthTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.fake_memory_query_service.last_search_args, ("user-1", "wallet", 3))
+
+    def test_google_oauth_start_endpoint_returns_authorization_url(self) -> None:
+        response = self.client.post(
+            "/auth/oauth/google/start",
+            json={"redirectUri": "smart-glass-client://oauth?device_id=glass-001"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["provider"], "google")
+        self.assertEqual(body["state"], "oauth-state-001")
+        self.assertIn("accounts.google.com", body["authorizationUrl"])
+        self.assertEqual(
+            self.fake_google_oauth_service.last_start_redirect_uri,
+            "smart-glass-client://oauth?device_id=glass-001",
+        )
+
+    def test_google_oauth_callback_redirects_back_to_client(self) -> None:
+        response = self.client.get(
+            "/auth/oauth/google/callback",
+            params={"code": "google-code-001", "state": "oauth-state-001"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("oauth_code=oauth-handoff-001", response.headers["location"])
+        self.assertEqual(
+            self.fake_google_oauth_service.last_callback_args,
+            ("google-code-001", "oauth-state-001"),
+        )
+
+    def test_google_oauth_callback_error_redirects_back_to_client(self) -> None:
+        response = self.client.get(
+            "/auth/oauth/google/callback",
+            params={
+                "state": "oauth-state-001",
+                "error": "access_denied",
+                "error_description": "User denied access",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("oauth_error=access_denied", response.headers["location"])
+        self.assertEqual(
+            self.fake_google_oauth_service.last_callback_error_args,
+            ("oauth-state-001", "access_denied", "User denied access"),
+        )
+
+    def test_google_oauth_exchange_endpoint_registers_device(self) -> None:
+        response = self.client.post(
+            "/auth/oauth/google/exchange",
+            json={
+                "handoffCode": "oauth-handoff-001",
+                "deviceId": "glass-001",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "authenticated")
+        self.assertEqual(body["accessToken"], "jwt-login-token")
+        self.assertEqual(
+            self.fake_google_oauth_service.last_exchange_args,
+            ("oauth-handoff-001", "glass-001", "testclient", "testclient"),
+        )
+        self.assertEqual(
+            self.fake_user_device_service.registered_devices,
+            [("user-auth-001", "glass-001")],
+        )
 
 
 if __name__ == "__main__":

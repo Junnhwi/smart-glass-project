@@ -47,10 +47,29 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Email</Text>
+          <View style={styles.inputBox}>
+            <Text style={styles.value}>{currentUser?.email || 'Not connected'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.fieldGroup}>
           <Text style={styles.label}>Device ID</Text>
           <View style={styles.inputBox}>
             <Text style={styles.value}>
               {currentUser?.deviceId || 'Not connected'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Sign-In Method</Text>
+          <View style={styles.inputBox}>
+            <Text style={styles.value}>
+              {currentUser?.authProvider
+                ? currentUser.authProvider[0].toUpperCase() +
+                  currentUser.authProvider.slice(1)
+                : 'Unknown'}
             </Text>
           </View>
         </View>

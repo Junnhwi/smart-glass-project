@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from src.api.auth import (
     require_internal_service_token,
@@ -19,6 +19,9 @@ from src.api.schemas import (
     AuthLoginRequest,
     AuthLogoutRequest,
     AuthLogoutResponse,
+    AuthOauthExchangeRequest,
+    AuthOauthStartRequest,
+    AuthOauthStartResponse,
     AuthRefreshRequest,
     AuthSignupRequest,
     AuthTokenResponse,
@@ -54,6 +57,7 @@ from src.api.schemas import (
     VlmInferenceResultPayload,
 )
 from src.database.memory_store import build_default_memory_store_client
+from src.modules.auth.oauth import build_default_google_oauth_service
 from src.modules.auth.service import build_default_auth_service
 from src.modules.media.service import (
     GalleryItem,
@@ -183,6 +187,18 @@ def _get_auth_service(request: Request):
     return auth_service
 
 
+def _get_google_oauth_service(request: Request):
+    google_oauth_service = getattr(request.app.state, "google_oauth_service", None)
+    if google_oauth_service is None:
+        auth_service = _get_auth_service(request)
+        google_oauth_service = request.app.state.google_oauth_service_factory(
+            auth_service.repository,
+            auth_service,
+        )
+        request.app.state.google_oauth_service = google_oauth_service
+    return google_oauth_service
+
+
 def _map_auth_profile(profile: Any) -> AuthUserPayload:
     return AuthUserPayload(
         userId=profile.user_id,
@@ -205,6 +221,19 @@ def _map_auth_error(exc: Exception) -> HTTPException:
         if "already registered" in detail:
             return HTTPException(status_code=409, detail=detail)
         if "API_AUTH_JWT_SECRET" in detail or "API_CAPTURE_DATABASE_URL" in detail:
+            return HTTPException(status_code=503, detail=detail)
+        return HTTPException(status_code=400, detail=detail)
+    return HTTPException(status_code=503, detail=str(exc))
+
+
+def _map_oauth_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ValueError):
+        detail = str(exc)
+        if "API_AUTH_GOOGLE_" in detail or "API_AUTH_JWT_SECRET" in detail:
             return HTTPException(status_code=503, detail=detail)
         return HTTPException(status_code=400, detail=detail)
     return HTTPException(status_code=503, detail=str(exc))
@@ -333,6 +362,9 @@ def create_app() -> FastAPI:
                 "POST /auth/refresh",
                 "POST /auth/logout",
                 "GET /auth/me",
+                "POST /auth/oauth/google/start",
+                "GET /auth/oauth/google/callback",
+                "POST /auth/oauth/google/exchange",
                 "POST /users",
                 "POST /users/{userId}/devices",
                 "POST /devices/register",
@@ -363,6 +395,8 @@ def create_app() -> FastAPI:
     app.state.memory_query_service_factory = build_default_memory_query_service
     app.state.auth_service = None
     app.state.auth_service_factory = build_default_auth_service
+    app.state.google_oauth_service = None
+    app.state.google_oauth_service_factory = build_default_google_oauth_service
     app.state.user_device_service = None
     app.state.user_device_service_factory = build_default_user_device_service
 
@@ -407,6 +441,14 @@ def create_app() -> FastAPI:
         except Exception as exc:
             checks["mediaAccess"] = "error"
             errors["mediaAccess"] = str(exc)
+
+        try:
+            auth_service = _get_auth_service(request)
+            auth_service.check_health()
+            checks["auth"] = "ok"
+        except Exception as exc:
+            checks["auth"] = "error"
+            errors["auth"] = str(exc)
 
         try:
             user_device_service = _get_user_device_service(request)
@@ -563,6 +605,116 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise _map_auth_error(exc) from exc
         return _map_auth_profile(profile)
+
+    @app.post(
+        "/auth/oauth/google/start",
+        response_model=AuthOauthStartResponse,
+    )
+    def start_google_oauth(
+        request: Request,
+        payload: AuthOauthStartRequest,
+    ) -> AuthOauthStartResponse:
+        try:
+            google_oauth_service = _get_google_oauth_service(request)
+            start = google_oauth_service.start(redirect_uri=payload.redirectUri)
+        except Exception as exc:
+            raise _map_oauth_error(exc) from exc
+        return AuthOauthStartResponse(
+            provider="google",
+            authorizationUrl=start.authorization_url,
+            state=start.state,
+            expiresAt=start.expires_at,
+        )
+
+    @app.get("/auth/oauth/google/callback")
+    def handle_google_oauth_callback(
+        request: Request,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+        error_description: str | None = None,
+    ) -> RedirectResponse:
+        normalized_state = (state or "").strip()
+        if not normalized_state:
+            raise HTTPException(status_code=400, detail="OAuth state is required")
+
+        try:
+            google_oauth_service = _get_google_oauth_service(request)
+        except Exception as exc:
+            raise _map_oauth_error(exc) from exc
+
+        if error:
+            try:
+                redirect_url = google_oauth_service.handle_callback_error(
+                    state=normalized_state,
+                    error=error,
+                    description=error_description,
+                )
+            except Exception as exc:
+                raise _map_oauth_error(exc) from exc
+            return RedirectResponse(
+                url=redirect_url,
+                status_code=status.HTTP_302_FOUND,
+            )
+
+        normalized_code = (code or "").strip()
+        if not normalized_code:
+            raise HTTPException(
+                status_code=400,
+                detail="OAuth authorization code is required",
+            )
+
+        try:
+            redirect_url = google_oauth_service.handle_callback(
+                authorization_code=normalized_code,
+                state=normalized_state,
+            )
+        except Exception as exc:
+            raise _map_oauth_error(exc) from exc
+
+        return RedirectResponse(
+            url=redirect_url,
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    @app.post(
+        "/auth/oauth/google/exchange",
+        response_model=AuthTokenResponse,
+    )
+    def exchange_google_oauth_handoff(
+        request: Request,
+        payload: AuthOauthExchangeRequest,
+    ) -> AuthTokenResponse:
+        try:
+            google_oauth_service = _get_google_oauth_service(request)
+            bundle = google_oauth_service.exchange_handoff(
+                handoff_code=payload.handoffCode,
+                device_id=payload.deviceId,
+                user_agent=request.headers.get("User-Agent"),
+                ip_address=_request_ip_address(request),
+            )
+        except Exception as exc:
+            if isinstance(exc, (PermissionError, LookupError)):
+                raise _map_auth_error(exc) from exc
+            raise _map_oauth_error(exc) from exc
+
+        if payload.deviceId:
+            try:
+                user_device_service = _get_user_device_service(request)
+                user_device_service.register_device(
+                    user_id=bundle.user.user_id,
+                    device_id=payload.deviceId,
+                )
+            except Exception as exc:
+                raise _map_user_device_error(exc) from exc
+
+        return AuthTokenResponse(
+            accessToken=bundle.access_token,
+            refreshToken=bundle.refresh_token,
+            expiresInSec=bundle.expires_in_sec,
+            refreshExpiresInSec=bundle.refresh_expires_in_sec,
+            user=_map_auth_profile(bundle.user),
+        )
 
     @app.post(
         "/users",

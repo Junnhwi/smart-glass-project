@@ -66,6 +66,39 @@ class AuthSessionRecord:
     replaced_by_session_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class AuthIdentityRecord:
+    provider: str
+    provider_user_id: str
+    user_id: str
+    email: str | None
+    email_verified: bool
+    display_name: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuthOauthStateRecord:
+    state: str
+    provider: str
+    redirect_uri: str
+    code_verifier: str
+    expires_at: str
+    consumed_at: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuthOauthHandoffRecord:
+    handoff_code: str
+    provider: str
+    user_id: str
+    expires_at: str
+    consumed_at: str | None
+    created_at: str
+
+
 class AuthStoreUnavailableError(RuntimeError):
     pass
 
@@ -75,6 +108,9 @@ class PostgresAuthStore:
     auth_users_table_name = "auth_users"
     auth_sessions_table_name = "auth_sessions"
     auth_revocations_table_name = "auth_revoked_access_tokens"
+    auth_identities_table_name = "auth_identities"
+    auth_oauth_states_table_name = "auth_oauth_states"
+    auth_oauth_handoffs_table_name = "auth_oauth_handoffs"
 
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url.strip()
@@ -162,6 +198,53 @@ class PostgresAuthStore:
                                 user_id TEXT NOT NULL REFERENCES {self.auth_users_table_name} (user_id) ON DELETE CASCADE,
                                 expires_at TIMESTAMPTZ NOT NULL,
                                 revoked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                            )
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE TABLE IF NOT EXISTS {self.auth_identities_table_name} (
+                                provider TEXT NOT NULL,
+                                provider_user_id TEXT NOT NULL,
+                                user_id TEXT NOT NULL REFERENCES {self.auth_users_table_name} (user_id) ON DELETE CASCADE,
+                                email TEXT,
+                                email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                                display_name TEXT,
+                                profile_json JSONB,
+                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                                PRIMARY KEY (provider, provider_user_id)
+                            )
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS idx_{self.auth_identities_table_name}_user_id
+                            ON {self.auth_identities_table_name} (user_id)
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE TABLE IF NOT EXISTS {self.auth_oauth_states_table_name} (
+                                state TEXT PRIMARY KEY,
+                                provider TEXT NOT NULL,
+                                redirect_uri TEXT NOT NULL,
+                                code_verifier TEXT NOT NULL,
+                                expires_at TIMESTAMPTZ NOT NULL,
+                                consumed_at TIMESTAMPTZ,
+                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                            )
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE TABLE IF NOT EXISTS {self.auth_oauth_handoffs_table_name} (
+                                handoff_code TEXT PRIMARY KEY,
+                                provider TEXT NOT NULL,
+                                user_id TEXT NOT NULL REFERENCES {self.auth_users_table_name} (user_id) ON DELETE CASCADE,
+                                expires_at TIMESTAMPTZ NOT NULL,
+                                consumed_at TIMESTAMPTZ,
+                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                             )
                             """
                         )
@@ -504,6 +587,414 @@ class PostgresAuthStore:
             expires_at=_normalize_timestamp(row[7]) or "",
             revoked_at=_normalize_timestamp(row[8]),
             replaced_by_session_id=_normalize_text(row[9]) or None,
+        )
+
+    def get_auth_identity(
+        self,
+        *,
+        provider: str,
+        provider_user_id: str,
+    ) -> AuthIdentityRecord | None:
+        normalized_provider = _normalize_text(provider)
+        normalized_provider_user_id = _normalize_text(provider_user_id)
+        if not normalized_provider or not normalized_provider_user_id:
+            return None
+
+        self._ensure_schema()
+        query = f"""
+            SELECT
+                provider,
+                provider_user_id,
+                user_id,
+                email,
+                email_verified,
+                display_name,
+                created_at,
+                updated_at
+            FROM {self.auth_identities_table_name}
+            WHERE provider = %s
+              AND provider_user_id = %s
+            LIMIT 1
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (normalized_provider, normalized_provider_user_id),
+                    )
+                    row = cur.fetchone()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres read failed: {exc}"
+            ) from exc
+
+        if not row:
+            return None
+        return AuthIdentityRecord(
+            provider=str(row[0]),
+            provider_user_id=str(row[1]),
+            user_id=str(row[2]),
+            email=_normalize_email(row[3]) or None,
+            email_verified=bool(row[4]),
+            display_name=_normalize_text(row[5]) or None,
+            created_at=_normalize_timestamp(row[6]) or "",
+            updated_at=_normalize_timestamp(row[7]) or "",
+        )
+
+    def upsert_auth_identity(
+        self,
+        *,
+        provider: str,
+        provider_user_id: str,
+        user_id: str,
+        email: str | None,
+        email_verified: bool,
+        display_name: str | None,
+        profile_json: str | None,
+    ) -> AuthIdentityRecord:
+        normalized_provider = _normalize_text(provider)
+        normalized_provider_user_id = _normalize_text(provider_user_id)
+        normalized_user_id = _normalize_text(user_id)
+        normalized_email = _normalize_email(email) or None
+        normalized_display_name = _normalize_text(display_name) or None
+        normalized_profile_json = _normalize_text(profile_json) or None
+
+        if not normalized_provider:
+            raise ValueError("provider must not be blank")
+        if not normalized_provider_user_id:
+            raise ValueError("providerUserId must not be blank")
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+
+        self._ensure_schema()
+        query = f"""
+            INSERT INTO {self.auth_identities_table_name} (
+                provider,
+                provider_user_id,
+                user_id,
+                email,
+                email_verified,
+                display_name,
+                profile_json,
+                created_at,
+                updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
+            ON CONFLICT (provider, provider_user_id) DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                email = EXCLUDED.email,
+                email_verified = EXCLUDED.email_verified,
+                display_name = EXCLUDED.display_name,
+                profile_json = EXCLUDED.profile_json,
+                updated_at = NOW()
+            RETURNING
+                provider,
+                provider_user_id,
+                user_id,
+                email,
+                email_verified,
+                display_name,
+                created_at,
+                updated_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_provider,
+                            normalized_provider_user_id,
+                            normalized_user_id,
+                            normalized_email,
+                            bool(email_verified),
+                            normalized_display_name,
+                            normalized_profile_json,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise AuthStoreUnavailableError("Postgres write failed: auth identity row missing")
+        return AuthIdentityRecord(
+            provider=str(row[0]),
+            provider_user_id=str(row[1]),
+            user_id=str(row[2]),
+            email=_normalize_email(row[3]) or None,
+            email_verified=bool(row[4]),
+            display_name=_normalize_text(row[5]) or None,
+            created_at=_normalize_timestamp(row[6]) or "",
+            updated_at=_normalize_timestamp(row[7]) or "",
+        )
+
+    def create_oauth_state(
+        self,
+        *,
+        state: str,
+        provider: str,
+        redirect_uri: str,
+        code_verifier: str,
+        expires_at: str,
+    ) -> AuthOauthStateRecord:
+        normalized_state = _normalize_text(state)
+        normalized_provider = _normalize_text(provider)
+        normalized_redirect_uri = _normalize_text(redirect_uri)
+        normalized_code_verifier = _normalize_text(code_verifier)
+        normalized_expires_at = _normalize_timestamp(expires_at)
+
+        if not normalized_state:
+            raise ValueError("state must not be blank")
+        if not normalized_provider:
+            raise ValueError("provider must not be blank")
+        if not normalized_redirect_uri:
+            raise ValueError("redirectUri must not be blank")
+        if not normalized_code_verifier:
+            raise ValueError("codeVerifier must not be blank")
+        if not normalized_expires_at:
+            raise ValueError("expiresAt must not be blank")
+
+        self._ensure_schema()
+        query = f"""
+            INSERT INTO {self.auth_oauth_states_table_name} (
+                state,
+                provider,
+                redirect_uri,
+                code_verifier,
+                expires_at,
+                created_at
+            ) VALUES (%s, %s, %s, %s, %s::timestamptz, NOW())
+            ON CONFLICT (state) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                redirect_uri = EXCLUDED.redirect_uri,
+                code_verifier = EXCLUDED.code_verifier,
+                expires_at = EXCLUDED.expires_at,
+                consumed_at = NULL,
+                created_at = NOW()
+            RETURNING
+                state,
+                provider,
+                redirect_uri,
+                code_verifier,
+                expires_at,
+                consumed_at,
+                created_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_state,
+                            normalized_provider,
+                            normalized_redirect_uri,
+                            normalized_code_verifier,
+                            normalized_expires_at,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise AuthStoreUnavailableError("Postgres write failed: oauth state row missing")
+        return AuthOauthStateRecord(
+            state=str(row[0]),
+            provider=str(row[1]),
+            redirect_uri=str(row[2]),
+            code_verifier=str(row[3]),
+            expires_at=_normalize_timestamp(row[4]) or "",
+            consumed_at=_normalize_timestamp(row[5]),
+            created_at=_normalize_timestamp(row[6]) or "",
+        )
+
+    def consume_oauth_state(self, state: str) -> AuthOauthStateRecord | None:
+        normalized_state = _normalize_text(state)
+        if not normalized_state:
+            return None
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.auth_oauth_states_table_name}
+            SET consumed_at = COALESCE(consumed_at, NOW())
+            WHERE state = %s
+              AND consumed_at IS NULL
+            RETURNING
+                state,
+                provider,
+                redirect_uri,
+                code_verifier,
+                expires_at,
+                consumed_at,
+                created_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (normalized_state,))
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            return None
+        return AuthOauthStateRecord(
+            state=str(row[0]),
+            provider=str(row[1]),
+            redirect_uri=str(row[2]),
+            code_verifier=str(row[3]),
+            expires_at=_normalize_timestamp(row[4]) or "",
+            consumed_at=_normalize_timestamp(row[5]),
+            created_at=_normalize_timestamp(row[6]) or "",
+        )
+
+    def create_oauth_handoff(
+        self,
+        *,
+        handoff_code: str,
+        provider: str,
+        user_id: str,
+        expires_at: str,
+    ) -> AuthOauthHandoffRecord:
+        normalized_handoff_code = _normalize_text(handoff_code)
+        normalized_provider = _normalize_text(provider)
+        normalized_user_id = _normalize_text(user_id)
+        normalized_expires_at = _normalize_timestamp(expires_at)
+
+        if not normalized_handoff_code:
+            raise ValueError("handoffCode must not be blank")
+        if not normalized_provider:
+            raise ValueError("provider must not be blank")
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if not normalized_expires_at:
+            raise ValueError("expiresAt must not be blank")
+
+        self._ensure_schema()
+        query = f"""
+            INSERT INTO {self.auth_oauth_handoffs_table_name} (
+                handoff_code,
+                provider,
+                user_id,
+                expires_at,
+                created_at
+            ) VALUES (%s, %s, %s, %s::timestamptz, NOW())
+            RETURNING
+                handoff_code,
+                provider,
+                user_id,
+                expires_at,
+                consumed_at,
+                created_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_handoff_code,
+                            normalized_provider,
+                            normalized_user_id,
+                            normalized_expires_at,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise AuthStoreUnavailableError("Postgres write failed: oauth handoff row missing")
+        return AuthOauthHandoffRecord(
+            handoff_code=str(row[0]),
+            provider=str(row[1]),
+            user_id=str(row[2]),
+            expires_at=_normalize_timestamp(row[3]) or "",
+            consumed_at=_normalize_timestamp(row[4]),
+            created_at=_normalize_timestamp(row[5]) or "",
+        )
+
+    def consume_oauth_handoff(
+        self,
+        *,
+        handoff_code: str,
+        provider: str,
+    ) -> AuthOauthHandoffRecord | None:
+        normalized_handoff_code = _normalize_text(handoff_code)
+        normalized_provider = _normalize_text(provider)
+        if not normalized_handoff_code or not normalized_provider:
+            return None
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.auth_oauth_handoffs_table_name}
+            SET consumed_at = COALESCE(consumed_at, NOW())
+            WHERE handoff_code = %s
+              AND provider = %s
+              AND consumed_at IS NULL
+            RETURNING
+                handoff_code,
+                provider,
+                user_id,
+                expires_at,
+                consumed_at,
+                created_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (normalized_handoff_code, normalized_provider),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            return None
+        return AuthOauthHandoffRecord(
+            handoff_code=str(row[0]),
+            provider=str(row[1]),
+            user_id=str(row[2]),
+            expires_at=_normalize_timestamp(row[3]) or "",
+            consumed_at=_normalize_timestamp(row[4]),
+            created_at=_normalize_timestamp(row[5]) or "",
         )
 
     def get_refresh_session_by_token_hash(

@@ -416,6 +416,45 @@ class AuthLogoutResponse(ApiSchema):
     revokedRefreshToken: bool
 
 
+class AuthOauthStartRequest(ApiSchema):
+    redirectUri: str = Field(min_length=1)
+
+    @validator("redirectUri")
+    def validate_non_blank_oauth_redirect_uri(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class AuthOauthStartResponse(ApiSchema):
+    provider: Literal["google"]
+    authorizationUrl: str
+    state: str
+    expiresAt: str
+
+
+class AuthOauthExchangeRequest(ApiSchema):
+    handoffCode: str = Field(min_length=1)
+    deviceId: str | None = None
+
+    @validator("handoffCode")
+    def validate_non_blank_oauth_handoff_code(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    @validator("deviceId")
+    def validate_optional_oauth_device_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
 class UploadAuthorizationRequest(ApiSchema):
     deviceId: str = Field(min_length=1)
     captureId: str | None = None

@@ -434,6 +434,32 @@ class AuthService:
             ip_address=ip_address,
         )
 
+    def issue_tokens_for_user(
+        self,
+        *,
+        user_id: str,
+        device_id: str | None = None,
+        user_agent: str | None = None,
+        ip_address: str | None = None,
+    ) -> AuthTokenBundle:
+        normalized_user_id = _normalize_text(user_id)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+
+        user = self.repository.get_auth_user_by_user_id(normalized_user_id)
+        if user is None:
+            raise LookupError("auth user is not registered")
+        if _ensure_status(user.status) != "active":
+            raise PermissionError("The account is not active")
+
+        authenticated_user = self.repository.touch_last_login(user.user_id)
+        return self._create_session_tokens(
+            user=authenticated_user,
+            device_id=device_id,
+            user_agent=user_agent,
+            ip_address=ip_address,
+        )
+
     def refresh(
         self,
         *,

@@ -27,7 +27,7 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
 
   const handleLogout = () => {
     onClose();
-    signOut();
+    void signOut();
   };
 
   return (
