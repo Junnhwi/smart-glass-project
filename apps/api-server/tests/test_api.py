@@ -26,6 +26,7 @@ from src.modules.media.service import (
     MediaAccessUrl,
     MediaUrlSignerConfigError,
 )
+from src.modules.users.service import DeviceAuthorization
 from src.modules.search.service import GeneratedAnswer, SearchHit
 
 
@@ -96,6 +97,7 @@ class FakeCapturePipeline:
                 requestId="req-001",
                 memoryId="mem-001",
                 userId="user-1",
+                deviceId="glass-001",
                 taskType="metadata",
                 capturedAt="2026-04-07T08:00:00Z",
                 fileName="smart-glass-photo.jpg",
@@ -295,6 +297,37 @@ class FakeMemoryStoreClient:
         pass
 
 
+class FakeUserDeviceService:
+    def __init__(self) -> None:
+        self.last_authorized_device_id: str | None = None
+        self.authorization_status = "allowed"
+        self.authorization_user_id = "user-1"
+        self.should_fail = False
+        self.should_health_fail = False
+        self.health_checked = False
+
+    def authorize_device(self, *, device_id: str) -> DeviceAuthorization:
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        self.last_authorized_device_id = device_id
+        if self.authorization_status == "blocked":
+            return DeviceAuthorization(
+                status="blocked",
+                device_id=device_id,
+                user_id=None,
+            )
+        return DeviceAuthorization(
+            status="allowed",
+            device_id=device_id,
+            user_id=self.authorization_user_id,
+        )
+
+    def check_health(self) -> None:
+        self.health_checked = True
+        if self.should_health_fail:
+            raise RuntimeError("user registry unavailable")
+
+
 class ApiServerCaptureIntakeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_internal_service_token = os.environ.get(
@@ -305,10 +338,12 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.fake_memory_query_service = FakeMemoryQueryService()
         self.fake_media_access_service = FakeMediaAccessService()
         self.fake_memory_store_client = FakeMemoryStoreClient()
+        self.fake_user_device_service = FakeUserDeviceService()
         app.state.capture_pipeline = self.fake_pipeline
         app.state.memory_query_service = self.fake_memory_query_service
         app.state.media_access_service = self.fake_media_access_service
         app.state.memory_store_client = self.fake_memory_store_client
+        app.state.user_device_service = self.fake_user_device_service
         self.client = TestClient(
             app,
             headers={
@@ -321,6 +356,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         app.state.memory_query_service = None
         app.state.media_access_service = None
         app.state.memory_store_client = None
+        app.state.user_device_service = None
         if self.original_internal_service_token is None:
             os.environ.pop(INTERNAL_SERVICE_TOKEN_ENV, None)
         else:
@@ -334,6 +370,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
             "requestId": "req-001",
             "memoryId": "mem-001",
             "userId": "user-1",
+            "deviceId": "glass-001",
             "taskType": "metadata",
             "capturedAt": "2026-04-07T08:00:00Z",
             "fileName": "smart-glass-photo.jpg",
@@ -355,6 +392,11 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(body["worker"]["status"], "queued")
         self.assertIsNotNone(self.fake_pipeline.last_payload)
         self.assertEqual(self.fake_pipeline.last_payload.userId, "user-1")
+        self.assertEqual(self.fake_pipeline.last_payload.deviceId, "glass-001")
+        self.assertEqual(
+            self.fake_user_device_service.last_authorized_device_id,
+            "glass-001",
+        )
 
     def test_capture_task_polling_returns_completed_result(self) -> None:
         response = self.client.get("/media/captures/tasks/task-123")
@@ -626,6 +668,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
             requestId="req-002",
             memoryId="mem-002",
             userId="user-2",
+            deviceId="glass-002",
             capturedAt="2026-04-07T09:30:00Z",
             fileName="cafe-table.png",
             imageUrl="https://example.com/captures/cafe-table.png",
@@ -646,11 +689,14 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
             "requestId": "req-003",
             "memoryId": "mem-003",
             "userId": "user-3",
+            "deviceId": "glass-003",
             "capturedAt": "2026-04-07T11:00:00Z",
             "sourceImage": {
                 "imageKey": " captures//user-3//2026/04/07//photo.jpg ",
             },
         }
+
+        self.fake_user_device_service.authorization_user_id = "user-3"
 
         response = self.client.post("/media/captures", json=payload)
 
@@ -665,6 +711,8 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(body["worker"]["status"], "queued")
 
     def test_capture_registration_rejects_url_as_image_key(self) -> None:
+        self.fake_user_device_service.authorization_user_id = "user-4"
+
         response = self.client.post(
             "/media/captures",
             json={
@@ -672,6 +720,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
                 "requestId": "req-004",
                 "memoryId": "mem-004",
                 "userId": "user-4",
+                "deviceId": "glass-004",
                 "sourceImage": {
                     "imageKey": "https://storage.example.com/captures/user-4/photo.jpg",
                 },
@@ -682,6 +731,8 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertIn("relative object key", response.json()["detail"])
 
     def test_capture_registration_rejects_cross_user_image_key(self) -> None:
+        self.fake_user_device_service.authorization_user_id = "user-5"
+
         response = self.client.post(
             "/media/captures",
             json={
@@ -689,6 +740,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
                 "requestId": "req-005",
                 "memoryId": "mem-005",
                 "userId": "user-5",
+                "deviceId": "glass-005",
                 "sourceImage": {
                     "imageKey": "captures/user-6/private-photo.jpg",
                 },
@@ -699,6 +751,8 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertIn("requesting user's captures prefix", response.json()["detail"])
 
     def test_capture_registration_rejects_non_capture_image_key(self) -> None:
+        self.fake_user_device_service.authorization_user_id = "user-6"
+
         response = self.client.post(
             "/media/captures",
             json={
@@ -706,6 +760,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
                 "requestId": "req-006",
                 "memoryId": "mem-006",
                 "userId": "user-6",
+                "deviceId": "glass-006",
                 "sourceImage": {
                     "imageKey": "private/user-6/photo.jpg",
                 },
@@ -715,6 +770,71 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("requesting user's captures prefix", response.json()["detail"])
 
+    def test_capture_registration_requires_device_id(self) -> None:
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-007",
+                "requestId": "req-007",
+                "memoryId": "mem-007",
+                "userId": "user-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("deviceId", str(response.json()["detail"]))
+
+    def test_capture_registration_rejects_blocked_device(self) -> None:
+        self.fake_user_device_service.authorization_status = "blocked"
+
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-008",
+                "requestId": "req-008",
+                "memoryId": "mem-008",
+                "userId": "user-1",
+                "deviceId": "glass-008",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("not allowed", response.json()["detail"])
+
+    def test_capture_registration_rejects_device_user_mismatch(self) -> None:
+        self.fake_user_device_service.authorization_user_id = "user-9"
+
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-009",
+                "requestId": "req-009",
+                "memoryId": "mem-009",
+                "userId": "user-1",
+                "deviceId": "glass-009",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not match", response.json()["detail"])
+
+    def test_capture_registration_surfaces_user_device_service_unavailability(self) -> None:
+        self.fake_user_device_service.should_fail = True
+
+        response = self.client.post(
+            "/media/captures",
+            json={
+                "captureId": "capture-010",
+                "requestId": "req-010",
+                "memoryId": "mem-010",
+                "userId": "user-1",
+                "deviceId": "glass-010",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("unavailable", response.json()["detail"])
+
     def test_health_ready(self) -> None:
         response = self.client.get("/health/ready")
         self.assertEqual(response.status_code, 200)
@@ -722,9 +842,20 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.json()["checks"]["capturePipeline"], "ok")
         self.assertEqual(response.json()["checks"]["memoryQuery"], "ok")
         self.assertEqual(response.json()["checks"]["mediaAccess"], "ok")
+        self.assertEqual(response.json()["checks"]["userDevice"], "ok")
         self.assertTrue(self.fake_pipeline.health_checked)
         self.assertTrue(self.fake_memory_query_service.health_checked)
         self.assertTrue(self.fake_media_access_service.health_checked)
+        self.assertTrue(self.fake_user_device_service.health_checked)
+
+    def test_health_ready_returns_503_when_user_device_service_is_unavailable(self) -> None:
+        self.fake_user_device_service.should_health_fail = True
+
+        response = self.client.get("/health/ready")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["checks"]["userDevice"], "error")
+        self.assertIn("unavailable", response.json()["errors"]["userDevice"])
 
 
 if __name__ == "__main__":
