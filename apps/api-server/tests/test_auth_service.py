@@ -297,6 +297,27 @@ class AuthServiceTests(unittest.TestCase):
         self.assertEqual(result.user.status, "disabled")
         self.assertEqual(result.revoked_session_count, 1)
 
+    def test_authenticate_access_token_uses_current_database_role(self) -> None:
+        bundle = self.service.sign_up(
+            email="user@example.com",
+            password="password123",
+            display_name="Test User",
+        )
+
+        self.service.update_user(
+            user_id=bundle.user.user_id,
+            role="admin",
+        )
+        promoted_principal = self.service.authenticate_access_token(bundle.access_token)
+        self.assertEqual(promoted_principal.role, "admin")
+
+        self.service.update_user(
+            user_id=bundle.user.user_id,
+            role="user",
+        )
+        demoted_principal = self.service.authenticate_access_token(bundle.access_token)
+        self.assertEqual(demoted_principal.role, "user")
+
 
 if __name__ == "__main__":
     unittest.main()
