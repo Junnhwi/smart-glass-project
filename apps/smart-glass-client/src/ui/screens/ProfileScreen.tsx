@@ -1,28 +1,32 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 
 import {
   approveUserDevice,
   listUserDevices,
+  registerUserDevice,
   revokeUserDevice,
   type UserDevice,
 } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
+import logo from '../icon/logo.png';
+import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
 const formatTimestamp = (value?: string | null) => {
   if (!value) {
-    return 'Not available';
+    return '없음';
   }
 
   const parsed = new Date(value);
@@ -34,12 +38,17 @@ const formatTimestamp = (value?: string | null) => {
 };
 
 export default function ProfileScreen() {
-  const navigation = useNavigation<any>();
-  const { currentUser } = useAuth();
+  const navigation = useAppNavigation();
+  const { currentUser, setCurrentDevice } = useAuth();
   const [devices, setDevices] = useState<UserDevice[]>([]);
+  const [registerDeviceId, setRegisterDeviceId] = useState('');
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
-  const [isUpdatingDeviceId, setIsUpdatingDeviceId] = useState<string | null>(null);
+  const [isRegisteringDevice, setIsRegisteringDevice] = useState(false);
+  const [isUpdatingDeviceId, setIsUpdatingDeviceId] = useState<string | null>(
+    null
+  );
   const [errorMessage, setErrorMessage] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
 
   const loadDevices = async () => {
     if (!currentUser) {
@@ -59,7 +68,7 @@ export default function ProfileScreen() {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to load device information.';
+          : '기기 정보를 불러오지 못했어요.';
       setErrorMessage(message);
     } finally {
       setIsLoadingDevices(false);
@@ -69,6 +78,45 @@ export default function ProfileScreen() {
   useEffect(() => {
     void loadDevices();
   }, [currentUser?.authToken, currentUser?.userId]);
+
+  const moveToChatWithDevice = (deviceId: string) => {
+    setCurrentDevice(deviceId);
+    navigation.navigate('Chat');
+  };
+
+  const handleRegisterDevice = async () => {
+    if (!currentUser || isRegisteringDevice) {
+      return;
+    }
+
+    const nextDeviceId = registerDeviceId.trim();
+    if (!nextDeviceId) {
+      setErrorMessage('기기 ID를 입력해주세요.');
+      return;
+    }
+
+    setIsRegisteringDevice(true);
+    setErrorMessage('');
+    setStatusMessage('');
+    try {
+      await registerUserDevice({
+        userId: currentUser.userId,
+        deviceId: nextDeviceId,
+      });
+      setRegisterDeviceId('');
+      setStatusMessage('기기를 등록했어요.');
+      await loadDevices();
+      moveToChatWithDevice(nextDeviceId);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '기기 등록에 실패했어요.';
+      setErrorMessage(message);
+    } finally {
+      setIsRegisteringDevice(false);
+    }
+  };
 
   const handleDeviceStatusChange = async (
     device: UserDevice,
@@ -80,6 +128,8 @@ export default function ProfileScreen() {
 
     setIsUpdatingDeviceId(device.deviceId);
     setErrorMessage('');
+    setStatusMessage('');
+
     try {
       const updated =
         nextAction === 'approve'
@@ -99,11 +149,16 @@ export default function ProfileScreen() {
           item.deviceId === updated.deviceId ? updated : item
         )
       );
+
+      if (nextAction === 'revoke' && currentUser.deviceId === device.deviceId) {
+        setCurrentDevice(null);
+        setStatusMessage('현재 기기를 비활성화했어요.');
+      }
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to update the device status.';
+          : '기기 상태를 바꾸지 못했어요.';
       setErrorMessage(message);
     } finally {
       setIsUpdatingDeviceId(null);
@@ -111,24 +166,28 @@ export default function ProfileScreen() {
   };
 
   const currentManagedDevice = useMemo(() => {
-    if (!currentUser) {
+    if (!currentUser?.deviceId) {
       return null;
     }
+
     return (
       devices.find((device) => device.deviceId === currentUser.deviceId) || null
     );
-  }, [currentUser, devices]);
+  }, [currentUser?.deviceId, devices]);
 
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable onPress={() => navigation.goBack()}>
-          <Text style={styles.backButton}>{'<'}</Text>
+        <Pressable
+          style={styles.homeButton}
+          onPress={() => navigation.navigate('Chat')}
+        >
+          <Image source={logo} style={styles.homeLogo} />
         </Pressable>
 
-        <Text style={commonStyles.headerTitle}>Profile</Text>
+        <Text style={commonStyles.headerTitle}>프로필</Text>
 
-        <View style={{ width: 24 }} />
+        <View style={{ width: 28 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -139,52 +198,89 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Display Name</Text>
+          <Text style={styles.label}>이름</Text>
           <View style={styles.inputBox}>
             <Text style={styles.value}>
-              {currentUser?.displayName || 'Not set'}
+              {currentUser?.displayName || '없음'}
             </Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>User ID</Text>
+          <Text style={styles.label}>사용자 ID</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.userId || 'Not set'}</Text>
+            <Text style={styles.value}>{currentUser?.userId || '없음'}</Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Email</Text>
+          <Text style={styles.label}>이메일</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.email || 'Not connected'}</Text>
+            <Text style={styles.value}>{currentUser?.email || '없음'}</Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Device ID</Text>
+          <Text style={styles.label}>현재 기기</Text>
           <View style={styles.inputBox}>
             <Text style={styles.value}>
-              {currentUser?.deviceId || 'Not connected'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Sign-In Method</Text>
-          <View style={styles.inputBox}>
-            <Text style={styles.value}>
-              {currentUser?.authProvider
-                ? currentUser.authProvider[0].toUpperCase() +
-                  currentUser.authProvider.slice(1)
-                : 'Unknown'}
+              {currentUser?.deviceId || '선택된 기기가 없어요'}
             </Text>
           </View>
         </View>
 
         <View style={[commonStyles.card, styles.deviceCard]}>
+          <Text style={styles.deviceTitle}>기기 등록</Text>
+          <Text style={styles.deviceDescription}>
+            기기를 등록하거나, 이미 등록된 기기 중 하나를 선택하세요.
+          </Text>
+
+          {!currentUser?.deviceId ? (
+            <View style={styles.calloutBox}>
+              <Text style={styles.calloutTitle}>기기를 먼저 연결해주세요</Text>
+              <Text style={styles.calloutText}>
+                기기 ID를 등록하거나 아래 목록에서 선택하면 돼요.
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.registerRow}>
+            <TextInput
+              value={registerDeviceId}
+              onChangeText={setRegisterDeviceId}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="예: glass-001"
+              placeholderTextColor={colors.subText}
+              style={styles.registerInput}
+            />
+            <Pressable
+              style={[
+                styles.registerButton,
+                isRegisteringDevice && styles.registerButtonDisabled,
+              ]}
+              onPress={() => {
+                void handleRegisterDevice();
+              }}
+              disabled={isRegisteringDevice}
+            >
+              {isRegisteringDevice ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.registerButtonText}>등록</Text>
+              )}
+            </Pressable>
+          </View>
+
+          {statusMessage ? (
+            <Text style={styles.statusText}>{statusMessage}</Text>
+          ) : null}
+          {errorMessage ? (
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          ) : null}
+
           <View style={styles.deviceHeader}>
-            <Text style={styles.deviceTitle}>Registered Devices</Text>
+            <Text style={styles.deviceListTitle}>등록된 기기</Text>
             <Pressable
               style={styles.refreshButton}
               onPress={() => {
@@ -192,37 +288,29 @@ export default function ProfileScreen() {
               }}
               disabled={isLoadingDevices}
             >
-              <Text style={styles.refreshButtonText}>Refresh</Text>
+              <Text style={styles.refreshButtonText}>새로고침</Text>
             </Pressable>
           </View>
-
-          <Text style={styles.deviceDescription}>
-            You can temporarily block capture uploads from a device without
-            deleting your account.
-          </Text>
-
-          {errorMessage ? (
-            <Text style={styles.errorText}>{errorMessage}</Text>
-          ) : null}
 
           {isLoadingDevices ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.loadingText}>Loading devices...</Text>
+              <Text style={styles.loadingText}>기기 정보를 불러오는 중...</Text>
             </View>
           ) : null}
 
           {!isLoadingDevices && devices.length === 0 ? (
-            <Text style={styles.emptyText}>
-              No registered devices were found for this account yet.
-            </Text>
+            <Text style={styles.emptyText}>아직 등록된 기기가 없어요.</Text>
           ) : null}
 
           {currentManagedDevice ? (
             <View style={styles.currentDeviceBanner}>
-              <Text style={styles.currentDeviceBannerLabel}>Current Device</Text>
+              <Text style={styles.currentDeviceBannerLabel}>
+                현재 선택된 기기
+              </Text>
               <Text style={styles.currentDeviceBannerValue}>
-                {currentManagedDevice.deviceId} · {currentManagedDevice.status}
+                {currentManagedDevice.deviceId} ·{' '}
+                {currentManagedDevice.status === 'active' ? '사용 중' : '비활성'}
               </Text>
             </View>
           ) : null}
@@ -259,42 +347,80 @@ export default function ProfileScreen() {
                           : styles.statusChipTextRevoked,
                       ]}
                     >
-                      {device.status === 'active' ? 'Active' : 'Revoked'}
+                      {device.status === 'active' ? '사용 중' : '비활성'}
                     </Text>
                   </View>
                 </View>
 
                 <Text style={styles.deviceMeta}>
-                  Registered: {formatTimestamp(device.registeredAt)}
+                  등록: {formatTimestamp(device.registeredAt)}
                 </Text>
                 <Text style={styles.deviceMeta}>
-                  Updated: {formatTimestamp(device.updatedAt)}
+                  수정: {formatTimestamp(device.updatedAt)}
                 </Text>
                 {device.revokedAt ? (
                   <Text style={styles.deviceMeta}>
-                    Revoked: {formatTimestamp(device.revokedAt)}
+                    비활성화: {formatTimestamp(device.revokedAt)}
                   </Text>
                 ) : null}
 
-                <Pressable
-                  style={[
-                    styles.deviceActionButton,
-                    device.status === 'active'
-                      ? styles.deviceActionButtonDanger
-                      : styles.deviceActionButtonPrimary,
-                    isBusy && styles.deviceActionButtonDisabled,
-                  ]}
-                  onPress={() => {
-                    void handleDeviceStatusChange(device, nextAction);
-                  }}
-                  disabled={isBusy}
-                >
-                  {isBusy ? (
-                    <View style={styles.buttonLoadingRow}>
-                      <ActivityIndicator
-                        size="small"
-                        color={device.status === 'active' ? '#991B1B' : '#FFFFFF'}
-                      />
+                <View style={styles.deviceActions}>
+                  {device.status === 'active' ? (
+                    <Pressable
+                      style={[
+                        styles.sessionButton,
+                        isCurrentDevice && styles.sessionButtonSelected,
+                      ]}
+                      onPress={() => {
+                        setStatusMessage('현재 기기를 바꿨어요.');
+                        setErrorMessage('');
+                        moveToChatWithDevice(device.deviceId);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.sessionButtonText,
+                          isCurrentDevice && styles.sessionButtonTextSelected,
+                        ]}
+                      >
+                        {isCurrentDevice ? '선택됨' : '이 기기 사용'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+
+                  <Pressable
+                    style={[
+                      styles.deviceActionButton,
+                      device.status === 'active'
+                        ? styles.deviceActionButtonDanger
+                        : styles.deviceActionButtonPrimary,
+                      isBusy && styles.deviceActionButtonDisabled,
+                    ]}
+                    onPress={() => {
+                      void handleDeviceStatusChange(device, nextAction);
+                    }}
+                    disabled={isBusy}
+                  >
+                    {isBusy ? (
+                      <View style={styles.buttonLoadingRow}>
+                        <ActivityIndicator
+                          size="small"
+                          color={
+                            device.status === 'active' ? '#991B1B' : '#FFFFFF'
+                          }
+                        />
+                        <Text
+                          style={[
+                            styles.deviceActionText,
+                            device.status === 'active'
+                              ? styles.deviceActionTextDanger
+                              : styles.deviceActionTextPrimary,
+                          ]}
+                        >
+                          변경 중...
+                        </Text>
+                      </View>
+                    ) : (
                       <Text
                         style={[
                           styles.deviceActionText,
@@ -303,32 +429,18 @@ export default function ProfileScreen() {
                             : styles.deviceActionTextPrimary,
                         ]}
                       >
-                        Updating...
+                        {device.status === 'active' ? '비활성화' : '재활성화'}
                       </Text>
-                    </View>
-                  ) : (
-                    <Text
-                      style={[
-                        styles.deviceActionText,
-                        device.status === 'active'
-                          ? styles.deviceActionTextDanger
-                          : styles.deviceActionTextPrimary,
-                      ]}
-                    >
-                      {device.status === 'active'
-                        ? 'Deactivate Device'
-                        : 'Reactivate Device'}
-                    </Text>
-                  )}
-                </Pressable>
+                    )}
+                  </Pressable>
+                </View>
               </View>
             );
           })}
         </View>
 
         <Text style={styles.syncText}>
-          Search and media requests follow the signed-in user, and capture
-          uploads only work while the selected smart-glass device stays active.
+          여기서 고른 기기로 업로드와 추론이 진행돼요.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -340,6 +452,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 36,
     paddingBottom: 32,
+  },
+  homeButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  homeLogo: {
+    width: 28,
+    height: 28,
+    resizeMode: 'contain',
   },
   avatar: {
     width: 88,
@@ -383,14 +506,84 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 14,
   },
+  deviceTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  deviceDescription: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.subText,
+  },
+  calloutBox: {
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    gap: 4,
+  },
+  calloutTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#C2410C',
+  },
+  calloutText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#9A3412',
+  },
+  registerRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  registerInput: {
+    flex: 1,
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    fontSize: 14,
+    color: colors.text,
+  },
+  registerButton: {
+    minWidth: 100,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  registerButtonDisabled: {
+    opacity: 0.75,
+  },
+  registerButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  statusText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#047857',
+  },
+  errorText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
   deviceHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
-  deviceTitle: {
-    fontSize: 18,
+  deviceListTitle: {
+    fontSize: 16,
     fontWeight: '700',
     color: colors.text,
   },
@@ -405,11 +598,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
   },
-  deviceDescription: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.subText,
-  },
   loadingBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -422,11 +610,6 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 13,
     color: colors.subText,
-  },
-  errorText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#DC2626',
   },
   currentDeviceBanner: {
     padding: 12,
@@ -495,8 +678,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.subText,
   },
+  deviceActions: {
+    marginTop: 8,
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  sessionButton: {
+    minHeight: 42,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+  },
+  sessionButtonSelected: {
+    borderColor: colors.primary,
+    backgroundColor: '#DBEAFE',
+  },
+  sessionButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  sessionButtonTextSelected: {
+    color: colors.text,
+  },
   deviceActionButton: {
-    marginTop: 6,
     minHeight: 42,
     borderRadius: 12,
     alignItems: 'center',
@@ -535,11 +745,5 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: 16,
     lineHeight: 18,
-  },
-  backButton: {
-    fontSize: 24,
-    color: colors.text,
-    width: 24,
-    lineHeight: 24,
   },
 });

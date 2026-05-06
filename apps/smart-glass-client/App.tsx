@@ -9,22 +9,15 @@ import ProfileScreen from './src/ui/screens/ProfileScreen';
 import SettingsScreen from './src/ui/screens/SettingScreen';
 import { ItemProvider } from './src/ui/context/ItemContext';
 import { AuthProvider, useAuth } from './src/ui/context/AuthContext';
+import type { RootStackParamList } from './src/ui/navigation/routes';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ItemLocationScreen from './src/ui/screens/ItemLocationScreen';
-
-export type RootStackParamList = {
-  Login: undefined;
-  Chat: undefined;
-  History: undefined;
-  Profile: undefined;
-  Settings: undefined;
-  ItemLocation: undefined;
-};
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function AppNavigator() {
   const { currentUser } = useAuth();
+  const initialRouteName = currentUser?.deviceId ? 'Chat' : 'Profile';
 
   if (!currentUser) {
     return (
@@ -39,7 +32,7 @@ function AppNavigator() {
       <Stack.Navigator
         key={currentUser.userId}
         id="RootStack"
-        initialRouteName="Chat"
+        initialRouteName={initialRouteName}
         screenOptions={{ headerShown: false }}
       >
         <Stack.Screen name="Chat" component={ChatScreen} />

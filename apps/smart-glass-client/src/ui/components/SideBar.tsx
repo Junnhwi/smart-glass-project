@@ -1,9 +1,7 @@
 import React from 'react';
 import { Modal, View, Text, StyleSheet, Pressable, Image } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-import type { RootStackParamList } from '../../../App';
+import { useAppNavigation } from '../navigation/appNavigation';
 import { useAuth } from '../context/AuthContext';
 import historyIcon from '../icon/history.png';
 import settingsIcon from '../icon/setting.png';
@@ -16,8 +14,7 @@ type SidebarProps = {
 };
 
 export default function Sidebar({ visible, onClose }: SidebarProps) {
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useAppNavigation();
   const { currentUser, signOut } = useAuth();
 
   const handleMove = (screen: 'History' | 'Profile' | 'Settings') => {

@@ -1,6 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
@@ -27,6 +26,7 @@ import {
   type UploadAuthorizationResponse,
 } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
+import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
@@ -79,7 +79,7 @@ const buildUploadBody = async (asset: ImagePicker.ImagePickerAsset) => {
 
   const localResponse = await fetch(asset.uri);
   if (!localResponse.ok) {
-    throw new Error('Failed to read the selected image file.');
+    throw new Error('선택한 사진을 읽지 못했어요.');
   }
   return localResponse.blob();
 };
@@ -105,7 +105,7 @@ export default function SettingsScreen() {
   const [captureTaskStatus, setCaptureTaskStatus] =
     useState<CaptureTaskStatusResponse | null>(null);
 
-  const navigation = useNavigation<any>();
+  const navigation = useAppNavigation();
   const { currentUser } = useAuth();
 
   const resolvedFileName = useMemo(() => {
@@ -124,6 +124,7 @@ export default function SettingsScreen() {
   const canOpenChat =
     captureTaskStatus?.memoryStore?.status === 'success' ||
     captureTaskStatus?.status === 'completed';
+  const hasSelectedDevice = Boolean(currentUser?.deviceId);
 
   const choosePhoto = async () => {
     if (isPicking) {
@@ -138,7 +139,7 @@ export default function SettingsScreen() {
         const permission =
           await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
-          throw new Error('Media library permission is required to choose a photo.');
+          throw new Error('사진을 선택하려면 앨범 권한이 필요해요.');
         }
       }
 
@@ -154,11 +155,11 @@ export default function SettingsScreen() {
 
       const asset = result.assets[0];
       if (!asset) {
-        throw new Error('No image was selected.');
+        throw new Error('선택한 사진이 없어요.');
       }
 
       if (asset.type && asset.type !== 'image') {
-        throw new Error('Please choose an image file.');
+        throw new Error('이미지 파일만 선택할 수 있어요.');
       }
 
       setSelectedAsset(asset);
@@ -174,7 +175,7 @@ export default function SettingsScreen() {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to choose a photo.';
+          : '사진을 고르지 못했어요.';
       setErrorMessage(message);
     } finally {
       setIsPicking(false);
@@ -182,7 +183,7 @@ export default function SettingsScreen() {
   };
 
   const uploadSelectedPhoto = async () => {
-    if (!currentUser || !selectedAsset || isUploading) {
+    if (!currentUser || !currentUser.deviceId || !selectedAsset || isUploading) {
       return;
     }
 
@@ -200,13 +201,13 @@ export default function SettingsScreen() {
       });
 
       if (authorization.status !== 'allowed' || !authorization.userId) {
-        throw new Error('Device is not allowed to upload captures.');
+        throw new Error('이 기기로는 업로드할 수 없어요.');
       }
       if (!authorization.upload) {
-        throw new Error('Upload plan is missing from the authorization response.');
+        throw new Error('업로드 정보를 받지 못했어요.');
       }
       if (!authorization.upload.uploadUrl) {
-        throw new Error('Upload URL is missing from the authorization response.');
+        throw new Error('업로드 주소를 받지 못했어요.');
       }
 
       const body = await buildUploadBody(selectedAsset);
@@ -224,12 +225,12 @@ export default function SettingsScreen() {
 
       setUploadAuthorization(authorization);
       setCapturePayload(payload);
-      setUploadMessage('Photo uploaded successfully. Ready to register the capture.');
+      setUploadMessage('사진 업로드가 끝났어요. 이제 캡처를 등록하면 돼요.');
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to upload the selected photo.';
+          : '사진 업로드에 실패했어요.';
       setErrorMessage(message);
       setUploadAuthorization(null);
       setCapturePayload(null);
@@ -251,12 +252,12 @@ export default function SettingsScreen() {
       const response = await registerMediaCapture(capturePayload);
       setCaptureResponse(response);
       setCaptureTaskStatus(null);
-      setUploadMessage('Capture queued. Waiting for memory processing to finish.');
+      setUploadMessage('캡처를 등록했어요. 추론이 끝나길 기다리는 중이에요.');
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to register capture.';
+          : '캡처 등록에 실패했어요.';
       setErrorMessage(message);
       setCaptureResponse(null);
     } finally {
@@ -278,15 +279,13 @@ export default function SettingsScreen() {
       const response = await getCaptureTaskStatus(captureResponse.taskId);
       setCaptureTaskStatus(response);
       if (response.memoryStore?.status === 'success') {
-        setUploadMessage(
-          'Processing finished and the memory record was stored successfully.'
-        );
+        setUploadMessage('처리가 끝났고 메모리 저장도 완료됐어요.');
       }
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to refresh capture task status.';
+          : '처리 상태를 불러오지 못했어요.';
       setErrorMessage(message);
     } finally {
       setIsPollingTask(false);
@@ -322,19 +321,19 @@ export default function SettingsScreen() {
           <Text style={styles.backButton}>{'<'}</Text>
         </Pressable>
 
-        <Text style={commonStyles.headerTitle}>Settings</Text>
+        <Text style={commonStyles.headerTitle}>설정</Text>
 
         <View style={{ width: 24 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.item}>
-          <Text style={styles.label}>Voice Input</Text>
+          <Text style={styles.label}>음성 입력</Text>
           <Switch value={voiceEnabled} onValueChange={setVoiceEnabled} />
         </View>
 
         <View style={styles.item}>
-          <Text style={styles.label}>Notifications</Text>
+          <Text style={styles.label}>알림</Text>
           <Switch
             value={notificationEnabled}
             onValueChange={setNotificationEnabled}
@@ -342,22 +341,29 @@ export default function SettingsScreen() {
         </View>
 
         <View style={[commonStyles.card, styles.captureCard]}>
-          <Text style={styles.captureTitle}>Manual Capture Upload</Text>
+          <Text style={styles.captureTitle}>수동 업로드</Text>
           <Text style={styles.captureDescription}>
-            Choose an image, upload it through the signed device flow, and send
-            it into memory processing. This is useful as a manual fallback while
-            hardware capture is still being integrated.
+            사진을 올리고 캡처를 등록할 수 있어요.
           </Text>
 
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Signed-in Device</Text>
+            <Text style={styles.fieldLabel}>현재 기기</Text>
             <Text style={styles.readonlyValue}>
-              {currentUser?.deviceId || 'Not connected'}
+              {currentUser?.deviceId || '선택된 기기가 없어요'}
             </Text>
           </View>
 
+          {!hasSelectedDevice ? (
+            <View style={styles.deviceWarningBox}>
+              <Text style={styles.deviceWarningTitle}>기기 등록이 필요해요</Text>
+              <Text style={styles.deviceWarningText}>
+                프로필에서 기기를 등록한 뒤 다시 시도해주세요.
+              </Text>
+            </View>
+          ) : null}
+
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Selected Photo</Text>
+            <Text style={styles.fieldLabel}>선택한 사진</Text>
             {selectedAsset ? (
               <View style={styles.assetCard}>
                 <Image
@@ -366,19 +372,18 @@ export default function SettingsScreen() {
                   resizeMode="cover"
                 />
                 <Text style={styles.resultText}>
-                  fileName: {selectedAsset.fileName || resolvedFileName}
+                  파일명: {selectedAsset.fileName || resolvedFileName}
                 </Text>
                 <Text style={styles.resultText}>
-                  mimeType: {resolvedContentType}
+                  형식: {resolvedContentType}
                 </Text>
                 <Text style={styles.resultText}>
-                  size: {formatFileSize(selectedAsset.fileSize) || 'Unknown'}
+                  크기: {formatFileSize(selectedAsset.fileSize) || '알 수 없음'}
                 </Text>
               </View>
             ) : (
               <Text style={styles.emptyStateText}>
-                Choose an image to send it through the same upload and capture
-                path used by the API.
+                사진을 고르면 바로 업로드할 수 있어요.
               </Text>
             )}
           </View>
@@ -396,15 +401,15 @@ export default function SettingsScreen() {
             {isPicking ? (
               <View style={styles.loadingRow}>
                 <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>Choosing...</Text>
+                <Text style={styles.secondaryButtonText}>불러오는 중...</Text>
               </View>
             ) : (
-              <Text style={styles.secondaryButtonText}>Choose Photo</Text>
+              <Text style={styles.secondaryButtonText}>사진 선택</Text>
             )}
           </Pressable>
 
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Upload File Name</Text>
+            <Text style={styles.fieldLabel}>업로드 파일명</Text>
             <TextInput
               value={fileName}
               onChangeText={setFileName}
@@ -419,20 +424,21 @@ export default function SettingsScreen() {
           <Pressable
             style={[
               styles.primaryButton,
-              (!selectedAsset || isUploading) && styles.primaryButtonDisabled,
+              (!selectedAsset || isUploading || !hasSelectedDevice) &&
+                styles.primaryButtonDisabled,
             ]}
             onPress={() => {
               void uploadSelectedPhoto();
             }}
-            disabled={!selectedAsset || isUploading || !currentUser}
+            disabled={!selectedAsset || isUploading || !currentUser || !hasSelectedDevice}
           >
             {isUploading ? (
               <View style={styles.loadingRow}>
                 <ActivityIndicator size="small" color="#FFFFFF" />
-                <Text style={styles.primaryButtonText}>Uploading...</Text>
+                <Text style={styles.primaryButtonText}>업로드 중...</Text>
               </View>
             ) : (
-              <Text style={styles.primaryButtonText}>Upload to Storage</Text>
+              <Text style={styles.primaryButtonText}>스토리지 업로드</Text>
             )}
           </Pressable>
 
@@ -449,10 +455,10 @@ export default function SettingsScreen() {
             {isRegistering ? (
               <View style={styles.loadingRow}>
                 <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>Registering...</Text>
+                <Text style={styles.secondaryButtonText}>등록 중...</Text>
               </View>
             ) : (
-              <Text style={styles.secondaryButtonText}>Queue Capture</Text>
+              <Text style={styles.secondaryButtonText}>캡처 등록</Text>
             )}
           </Pressable>
 
@@ -470,11 +476,11 @@ export default function SettingsScreen() {
             {isPollingTask ? (
               <View style={styles.loadingRow}>
                 <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>Refreshing...</Text>
+                <Text style={styles.secondaryButtonText}>불러오는 중...</Text>
               </View>
             ) : (
               <Text style={styles.secondaryButtonText}>
-                Refresh Processing Status
+                상태 새로고침
               </Text>
             )}
           </Pressable>
@@ -489,76 +495,75 @@ export default function SettingsScreen() {
 
           {uploadAuthorization?.upload ? (
             <View style={styles.resultBox}>
-              <Text style={styles.resultTitle}>Upload Plan</Text>
+              <Text style={styles.resultTitle}>업로드 정보</Text>
               <Text style={styles.resultText}>
-                userId: {uploadAuthorization.userId}
+                사용자: {uploadAuthorization.userId}
               </Text>
               <Text style={styles.resultText}>
-                captureId: {uploadAuthorization.upload.captureId}
+                캡처 ID: {uploadAuthorization.upload.captureId}
               </Text>
               <Text style={styles.resultText}>
-                imageKey: {uploadAuthorization.upload.sourceImage.imageKey}
+                이미지 키: {uploadAuthorization.upload.sourceImage.imageKey}
               </Text>
               <Text style={styles.resultText}>
-                expiresAt: {uploadAuthorization.upload.expiresAt}
+                만료: {uploadAuthorization.upload.expiresAt}
               </Text>
             </View>
           ) : null}
 
           {capturePayload ? (
             <View style={styles.resultBox}>
-              <Text style={styles.resultTitle}>Capture Payload</Text>
+              <Text style={styles.resultTitle}>등록 정보</Text>
               <Text style={styles.resultText}>
-                deviceId: {capturePayload.deviceId}
+                기기 ID: {capturePayload.deviceId}
               </Text>
               <Text style={styles.resultText}>
-                requestId: {capturePayload.requestId}
+                요청 ID: {capturePayload.requestId}
               </Text>
               <Text style={styles.resultText}>
-                imageKey: {capturePayload.sourceImage.imageKey}
+                이미지 키: {capturePayload.sourceImage.imageKey}
               </Text>
             </View>
           ) : null}
 
           {captureResponse ? (
             <View style={styles.resultBox}>
-              <Text style={styles.resultTitle}>Queue Result</Text>
-              <Text style={styles.resultText}>taskId: {captureResponse.taskId}</Text>
+              <Text style={styles.resultTitle}>등록 결과</Text>
+              <Text style={styles.resultText}>작업 ID: {captureResponse.taskId}</Text>
               <Text style={styles.resultText}>
-                workerStatus: {captureResponse.worker.status}
+                워커 상태: {captureResponse.worker.status}
               </Text>
               <Text style={styles.resultText}>
-                processing: {captureIsFinished ? 'complete' : 'in progress'}
+                처리: {captureIsFinished ? '완료' : '진행 중'}
               </Text>
               <Text style={styles.resultHint}>
-                The uploaded image is now available to the worker through object
-                storage.
+                업로드한 사진이 워커에서 처리 가능한 상태예요.
               </Text>
             </View>
           ) : null}
 
           {captureTaskStatus ? (
             <View style={styles.resultBox}>
-              <Text style={styles.resultTitle}>Processing Status</Text>
+              <Text style={styles.resultTitle}>처리 상태</Text>
               <Text style={styles.resultText}>
-                status: {captureTaskStatus.status}
+                상태: {captureTaskStatus.status}
               </Text>
               <Text style={styles.resultText}>
-                workerStatus: {captureTaskStatus.worker.status}
+                워커 상태: {captureTaskStatus.worker.status}
               </Text>
               <Text style={styles.resultText}>
-                memoryStore: {captureTaskStatus.memoryStore?.status || 'pending'}
+                저장 상태: {captureTaskStatus.memoryStore?.status || '대기'}
               </Text>
               {captureTaskStatus.memoryStore?.storedCount !== undefined ? (
                 <Text style={styles.resultText}>
-                  storedCount: {captureTaskStatus.memoryStore.storedCount ?? 0}
+                  저장 수: {captureTaskStatus.memoryStore.storedCount ?? 0}
                 </Text>
               ) : null}
               {currentUser &&
               captureTaskStatus.memoryStore?.totalUserMemories?.[currentUser.userId] !==
                 undefined ? (
                 <Text style={styles.resultText}>
-                  totalUserMemories:{' '}
+                  전체 메모리:{' '}
                   {
                     captureTaskStatus.memoryStore.totalUserMemories[
                       currentUser.userId
@@ -568,32 +573,32 @@ export default function SettingsScreen() {
               ) : null}
               {workerMetadata?.caption ? (
                 <Text style={styles.resultText}>
-                  caption: {workerMetadata.caption}
+                  설명: {workerMetadata.caption}
                 </Text>
               ) : null}
               {workerMetadata?.sceneSummary ? (
                 <Text style={styles.resultText}>
-                  sceneSummary: {workerMetadata.sceneSummary}
+                  장면 요약: {workerMetadata.sceneSummary}
                 </Text>
               ) : null}
               {workerMetadata?.detectedObjects?.length ? (
                 <Text style={styles.resultText}>
-                  objects: {workerMetadata.detectedObjects.join(', ')}
+                  물체: {workerMetadata.detectedObjects.join(', ')}
                 </Text>
               ) : null}
               {workerMetadata?.positionHint ? (
                 <Text style={styles.resultText}>
-                  positionHint: {workerMetadata.positionHint}
+                  위치 힌트: {workerMetadata.positionHint}
                 </Text>
               ) : null}
               {captureTaskStatus.worker.error ? (
                 <Text style={styles.errorText}>
-                  workerError: {captureTaskStatus.worker.error}
+                  워커 오류: {captureTaskStatus.worker.error}
                 </Text>
               ) : null}
               {captureTaskStatus.memoryStore?.error ? (
                 <Text style={styles.errorText}>
-                  memoryStoreError: {captureTaskStatus.memoryStore.error}
+                  저장 오류: {captureTaskStatus.memoryStore.error}
                 </Text>
               ) : null}
               {canOpenChat ? (
@@ -601,7 +606,7 @@ export default function SettingsScreen() {
                   style={styles.inlineAction}
                   onPress={() => navigation.navigate('Chat')}
                 >
-                  <Text style={styles.inlineActionText}>Open Chat</Text>
+                  <Text style={styles.inlineActionText}>채팅 열기</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -658,6 +663,24 @@ const styles = StyleSheet.create({
   readonlyValue: {
     fontSize: 14,
     color: colors.text,
+  },
+  deviceWarningBox: {
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    gap: 4,
+  },
+  deviceWarningTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#C2410C',
+  },
+  deviceWarningText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#9A3412',
   },
   input: {
     height: 46,

@@ -6,7 +6,7 @@ export type AuthProviderName = 'demo' | 'password' | 'google';
 
 export type AuthUser = {
   userId: string;
-  deviceId: string;
+  deviceId?: string | null;
   displayName: string;
   authToken: string;
   refreshToken?: string | null;
@@ -16,7 +16,7 @@ export type AuthUser = {
 
 type SignInInput = {
   userId: string;
-  deviceId: string;
+  deviceId?: string | null;
   displayName?: string | null;
   authToken?: string | null;
   refreshToken?: string | null;
@@ -27,6 +27,7 @@ type SignInInput = {
 type AuthContextValue = {
   currentUser: AuthUser | null;
   signIn: (input: SignInInput) => void;
+  setCurrentDevice: (deviceId?: string | null) => void;
   signOut: () => Promise<void>;
 };
 
@@ -50,9 +51,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!userId) {
       throw new Error('userId is required');
     }
-    if (!deviceId) {
-      throw new Error('deviceId is required');
-    }
 
     const displayName = normalizeText(input.displayName) || userId;
     const authToken =
@@ -64,12 +62,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setCurrentUser({
       userId,
-      deviceId,
+      deviceId: deviceId || null,
       displayName,
       authToken,
       refreshToken,
       email,
       authProvider,
+    });
+  };
+
+  const setCurrentDevice = (deviceId?: string | null) => {
+    const normalizedDeviceId = normalizeText(deviceId);
+
+    setCurrentUser((prev) => {
+      if (!prev) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        deviceId: normalizedDeviceId || null,
+      };
     });
   };
 
@@ -99,7 +112,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{ currentUser, signIn, setCurrentDevice, signOut }}
+    >
       {children}
     </AuthContext.Provider>
   );

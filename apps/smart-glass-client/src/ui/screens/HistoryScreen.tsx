@@ -1,5 +1,4 @@
 import React from 'react';
-import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View,
@@ -10,6 +9,7 @@ import {
 } from 'react-native';
 
 import { commonStyles } from '../styles/commonStyles';
+import { useAppNavigation } from '../navigation/appNavigation';
 import { colors } from '../styles/colors';
 import { useItemContext } from '../context/ItemContext';
 
@@ -26,7 +26,7 @@ const formatTime = (timestamp: number) => {
 
 
 export default function HistoryScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useAppNavigation();
   const { itemCounts } = useItemContext();
 
   const sortedItems = Object.entries(itemCounts).sort(
