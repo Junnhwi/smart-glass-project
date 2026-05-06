@@ -730,6 +730,25 @@ class MemorySearchResponse(ApiSchema):
     hits: list[MemorySearchHitPayload]
 
 
+class MemoryRecentItemPayload(ApiSchema):
+    memoryId: str
+    imageKey: str | None = None
+    imageUrl: str | None = None
+    capturedAt: str | None = None
+    caption: str | None = None
+    sceneSummary: str | None = None
+    positionHint: str | None = None
+    location: MemoryLocationPayload
+    detectedObjects: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class MemoryRecentResponse(ApiSchema):
+    userId: str
+    totalItems: int
+    items: list[MemoryRecentItemPayload]
+
+
 class MemoryChatResponse(ApiSchema):
     answer: str
     answerMode: str

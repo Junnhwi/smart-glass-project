@@ -383,6 +383,14 @@ class MemoryQueryService:
         resolved_top_k = top_k if isinstance(top_k, int) and top_k > 0 else self.default_top_k
         return self._search_hits(user_id, query, min(resolved_top_k, 20))
 
+    def recent_memories(
+        self,
+        user_id: str,
+        limit: int | None = None,
+    ) -> list[MemoryRecord]:
+        resolved_limit = limit if isinstance(limit, int) and limit > 0 else self.default_top_k
+        return self.repository.list_by_user(user_id, limit=min(resolved_limit, 50))
+
     def chat(
         self,
         user_id: str,

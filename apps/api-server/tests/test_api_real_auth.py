@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.database.memory_store import MemoryLocation, MemoryRecord
 from src.database.user_registry import DeviceRecord
 from src.modules.auth.security import RateLimitExceededError
 from src.modules.auth.service import AuthenticatedPrincipal
@@ -329,6 +330,7 @@ class FakeMemoryQueryService:
     def __init__(self) -> None:
         self.last_search_args: tuple[str, str, int] | None = None
         self.last_chat_args: tuple[str, str, int] | None = None
+        self.last_recent_args: tuple[str, int] | None = None
 
     def search(self, user_id: str, query: str, top_k: int) -> list[SearchHit]:
         self.last_search_args = (user_id, query, top_k)
@@ -351,6 +353,26 @@ class FakeMemoryQueryService:
             ),
             [],
         )
+
+    def recent_memories(self, user_id: str, limit: int) -> list[MemoryRecord]:
+        self.last_recent_args = (user_id, limit)
+        return [
+            MemoryRecord(
+                memory_id="mem-recent-001",
+                user_id=user_id,
+                image_key="captures/user-1/recent-001.jpg",
+                image_url=None,
+                captured_at="2026-05-05T00:30:00Z",
+                caption="wallet on the desk",
+                scene_summary="workspace desk scene",
+                detected_objects=["wallet", "desk"],
+                tags=["workspace"],
+                ocr_text=None,
+                note=None,
+                position_hint="on the desk",
+                location=MemoryLocation(name="workspace"),
+            )
+        ]
 
     def check_health(self) -> None:
         pass
@@ -611,6 +633,23 @@ class ApiServerRealAuthTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.fake_memory_query_service.last_search_args, ("user-1", "wallet", 3))
+
+    def test_recent_memories_endpoint_accepts_jwt_access_token(self) -> None:
+        response = self.client.get(
+            "/memories/recent",
+            headers={"Authorization": "Bearer jwt-user-1"},
+            params={
+                "userId": "user-1",
+                "limit": 10,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["userId"], "user-1")
+        self.assertEqual(body["totalItems"], 1)
+        self.assertEqual(body["items"][0]["memoryId"], "mem-recent-001")
+        self.assertEqual(self.fake_memory_query_service.last_recent_args, ("user-1", 10))
 
     def test_google_oauth_start_endpoint_returns_authorization_url(self) -> None:
         response = self.client.post(
