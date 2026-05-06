@@ -35,6 +35,7 @@ API_AUTH_JWT_SECRET=replace-with-a-long-random-secret
 API_AUTH_GOOGLE_CLIENT_ID=...
 API_AUTH_GOOGLE_CLIENT_SECRET=...
 API_AUTH_GOOGLE_CALLBACK_URL=http://localhost:8002/auth/oauth/google/callback
+API_AUTH_OAUTH_REDIRECT_ALLOWLIST=smart-glass-client://oauth,http://localhost:8081/,http://127.0.0.1:8081/
 ```
 
 Optional but useful:
@@ -110,6 +111,10 @@ npx expo start --web
 7. On the login screen, enter a `Device ID`
 8. Click `Continue with Google`
 9. Complete the Google sign-in flow
+
+`API_AUTH_OAUTH_REDIRECT_ALLOWLIST` should include only trusted client return
+targets. For local web testing, keep `http://localhost:8081/` in the list. For
+native testing, keep `smart-glass-client://oauth`.
 
 ## Expected Successful Flow
 

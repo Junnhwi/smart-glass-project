@@ -6,7 +6,7 @@ import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import uuid4
 
@@ -31,6 +31,13 @@ GOOGLE_PROVIDER = "google"
 GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+DEFAULT_ALLOWED_REDIRECT_URIS = (
+    "smart-glass-client://oauth",
+    "http://localhost:8081/",
+    "http://127.0.0.1:8081/",
+    "http://localhost:19006/",
+    "http://127.0.0.1:19006/",
+)
 
 
 def _utc_now() -> datetime:
@@ -72,6 +79,44 @@ def _normalize_redirect_uri(value: str) -> str:
     if parsed.scheme in {"http", "https"} and not parsed.netloc:
         raise ValueError("redirectUri must include a valid host")
     return normalized
+
+
+def _canonicalize_redirect_uri(value: str) -> str:
+    normalized = _normalize_redirect_uri(value)
+    parsed = urlparse(normalized)
+    normalized_scheme = parsed.scheme.lower()
+    normalized_netloc = parsed.netloc.lower()
+    normalized_path = parsed.path or ("/" if normalized_scheme in {"http", "https"} else "")
+    return urlunparse(
+        parsed._replace(
+            scheme=normalized_scheme,
+            netloc=normalized_netloc,
+            path=normalized_path,
+            params="",
+            query="",
+            fragment="",
+        )
+    )
+
+
+def _normalize_allowed_redirect_uris(values: Iterable[str]) -> frozenset[str]:
+    normalized_values = {
+        _canonicalize_redirect_uri(value)
+        for value in values
+        if _normalize_text(value)
+    }
+    if not normalized_values:
+        raise ValueError("API_AUTH_OAUTH_REDIRECT_ALLOWLIST is required")
+    return frozenset(normalized_values)
+
+
+def _parse_env_list(value: str) -> tuple[str, ...]:
+    return tuple(
+        item.strip()
+        for raw_line in value.splitlines()
+        for item in raw_line.split(",")
+        if item.strip()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +215,7 @@ class GoogleOauthService:
         client_secret: str,
         callback_url: str,
         scopes: str = "openid email profile",
+        allowed_redirect_uris: Iterable[str] | None = None,
         state_ttl_sec: int = 600,
         handoff_ttl_sec: int = 300,
         password_iterations: int = 600_000,
@@ -181,6 +227,9 @@ class GoogleOauthService:
         self.client_secret = _normalize_text(client_secret)
         self.callback_url = _normalize_redirect_uri(callback_url)
         self.scopes = _normalize_text(scopes) or "openid email profile"
+        self.allowed_redirect_uris = _normalize_allowed_redirect_uris(
+            allowed_redirect_uris or DEFAULT_ALLOWED_REDIRECT_URIS
+        )
         self.state_ttl_sec = max(60, int(state_ttl_sec))
         self.handoff_ttl_sec = max(60, int(handoff_ttl_sec))
         self.password_iterations = max(100_000, int(password_iterations))
@@ -191,8 +240,14 @@ class GoogleOauthService:
         if not self.client_secret:
             raise ValueError("API_AUTH_GOOGLE_CLIENT_SECRET is required")
 
+    def _ensure_redirect_uri_allowed(self, redirect_uri: str) -> None:
+        canonical_redirect_uri = _canonicalize_redirect_uri(redirect_uri)
+        if canonical_redirect_uri not in self.allowed_redirect_uris:
+            raise ValueError("redirectUri is not allowed")
+
     def start(self, *, redirect_uri: str) -> OauthAuthorizationStart:
         normalized_redirect_uri = _normalize_redirect_uri(redirect_uri)
+        self._ensure_redirect_uri_allowed(normalized_redirect_uri)
         state = secrets.token_urlsafe(24)
         code_verifier = secrets.token_urlsafe(64)
         expires_at = _utc_now() + timedelta(seconds=self.state_ttl_sec)
@@ -454,6 +509,9 @@ def build_default_google_oauth_service(
     handoff_ttl_sec = int(
         os.getenv("API_AUTH_OAUTH_HANDOFF_TTL_SEC", "300").strip() or "300"
     )
+    allowed_redirect_uris = _parse_env_list(
+        os.getenv("API_AUTH_OAUTH_REDIRECT_ALLOWLIST", "").strip()
+    ) or DEFAULT_ALLOWED_REDIRECT_URIS
     password_iterations = int(
         os.getenv("API_AUTH_PASSWORD_ITERATIONS", "600000").strip() or "600000"
     )
@@ -464,6 +522,7 @@ def build_default_google_oauth_service(
         client_secret=client_secret,
         callback_url=callback_url,
         scopes=scopes,
+        allowed_redirect_uris=allowed_redirect_uris,
         state_ttl_sec=state_ttl_sec,
         handoff_ttl_sec=handoff_ttl_sec,
         password_iterations=password_iterations,

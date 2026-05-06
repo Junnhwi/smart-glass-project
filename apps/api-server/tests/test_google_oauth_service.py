@@ -246,6 +246,10 @@ class GoogleOauthServiceTests(unittest.TestCase):
             client_secret="google-client-secret",
             callback_url="http://localhost:8002/auth/oauth/google/callback",
             http_client=FakeHttpClient(),
+            allowed_redirect_uris=(
+                "smart-glass-client://oauth",
+                "http://localhost:8081/",
+            ),
             state_ttl_sec=600,
             handoff_ttl_sec=300,
             password_iterations=100_000,
@@ -264,6 +268,12 @@ class GoogleOauthServiceTests(unittest.TestCase):
         self.assertEqual(query["redirect_uri"][0], "http://localhost:8002/auth/oauth/google/callback")
         self.assertEqual(query["state"][0], start.state)
         self.assertEqual(query["code_challenge_method"][0], "S256")
+
+    def test_start_rejects_redirect_uri_outside_allowlist(self) -> None:
+        with self.assertRaisesRegex(ValueError, "redirectUri is not allowed"):
+            self.service.start(
+                redirect_uri="https://attacker.example/oauth"
+            )
 
     def test_handle_callback_creates_identity_and_redirects_back_to_client(self) -> None:
         start = self.service.start(

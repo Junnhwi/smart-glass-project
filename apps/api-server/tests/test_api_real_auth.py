@@ -51,6 +51,7 @@ class FakeOauthStart:
 class FakeAuthService:
     def __init__(self) -> None:
         self.should_reject_login = False
+        self.sign_up_error: Exception | None = None
         self.last_signup_payload: dict[str, str | None] | None = None
         self.last_login_payload: dict[str, str | None] | None = None
         self.last_refresh_token: str | None = None
@@ -88,6 +89,8 @@ class FakeAuthService:
         user_agent: str | None = None,
         ip_address: str | None = None,
     ) -> FakeAuthTokenBundle:
+        if self.sign_up_error is not None:
+            raise self.sign_up_error
         self.last_signup_payload = {
             "email": email,
             "display_name": display_name,
@@ -244,12 +247,15 @@ class FakeAuthService:
 class FakeGoogleOauthService:
     def __init__(self, token_bundle: FakeAuthTokenBundle) -> None:
         self.token_bundle = token_bundle
+        self.disallowed_redirect_uris: set[str] = set()
         self.last_start_redirect_uri: str | None = None
         self.last_callback_args: tuple[str, str] | None = None
         self.last_callback_error_args: tuple[str, str, str | None] | None = None
         self.last_exchange_args: tuple[str, str | None, str | None, str | None] | None = None
 
     def start(self, *, redirect_uri: str) -> FakeOauthStart:
+        if redirect_uri in self.disallowed_redirect_uris:
+            raise ValueError("redirectUri is not allowed")
         self.last_start_redirect_uri = redirect_uri
         return FakeOauthStart(
             provider="google",
@@ -456,6 +462,20 @@ class ApiServerRealAuthTests(unittest.TestCase):
             "succeeded",
         )
 
+    def test_signup_endpoint_returns_409_for_duplicate_email(self) -> None:
+        self.fake_auth_service.sign_up_error = ValueError("email is already registered")
+
+        response = self.client.post(
+            "/auth/signup",
+            json={
+                "email": "user@example.com",
+                "password": "password123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("already registered", response.json()["detail"])
+
     def test_login_endpoint_surfaces_invalid_credentials(self) -> None:
         self.fake_auth_service.should_reject_login = True
 
@@ -611,6 +631,18 @@ class ApiServerRealAuthTests(unittest.TestCase):
             self.fake_auth_security_service.recorded_events[-1]["event_type"],
             "auth.oauth.google.start",
         )
+
+    def test_google_oauth_start_endpoint_rejects_untrusted_redirect_uri(self) -> None:
+        untrusted_redirect_uri = "https://attacker.example/oauth"
+        self.fake_google_oauth_service.disallowed_redirect_uris.add(untrusted_redirect_uri)
+
+        response = self.client.post(
+            "/auth/oauth/google/start",
+            json={"redirectUri": untrusted_redirect_uri},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("redirectUri is not allowed", response.json()["detail"])
 
     def test_google_oauth_callback_redirects_back_to_client(self) -> None:
         response = self.client.get(

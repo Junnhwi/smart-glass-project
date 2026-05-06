@@ -345,7 +345,7 @@ class PostgresAuthStore:
                             created_at,
                             updated_at
                         ) VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
-                        ON CONFLICT (user_id) DO NOTHING
+                        ON CONFLICT DO NOTHING
                         RETURNING
                             user_id,
                             email,
@@ -366,8 +366,43 @@ class PostgresAuthStore:
                         ),
                     )
                     row = cur.fetchone()
+                    if row is None:
+                        cur.execute(
+                            f"""
+                            SELECT user_id
+                            FROM {self.auth_users_table_name}
+                            WHERE email = %s
+                            LIMIT 1
+                            """,
+                            (normalized_email,),
+                        )
+                        existing_by_email = cur.fetchone()
+                        if (
+                            existing_by_email is not None
+                            and _normalize_text(existing_by_email[0]) != normalized_user_id
+                        ):
+                            raise ValueError("email is already registered")
+
+                        cur.execute(
+                            f"""
+                            SELECT user_id
+                            FROM {self.auth_users_table_name}
+                            WHERE user_id = %s
+                            LIMIT 1
+                            """,
+                            (normalized_user_id,),
+                        )
+                        existing_by_user = cur.fetchone()
+                        if existing_by_user is not None:
+                            raise ValueError("userId is already registered for sign-in")
+
+                        raise AuthStoreUnavailableError(
+                            "Postgres write failed: auth user row missing"
+                        )
                 conn.commit()
         except AuthStoreUnavailableError:
+            raise
+        except ValueError:
             raise
         except Exception as exc:
             raise AuthStoreUnavailableError(
@@ -385,14 +420,6 @@ class PostgresAuthStore:
                 created_at=_normalize_timestamp(row[6]) or "",
                 last_login_at=_normalize_timestamp(row[7]),
             )
-
-        existing_by_email = self.get_auth_user_by_email(normalized_email)
-        if existing_by_email is not None and existing_by_email.user_id != normalized_user_id:
-            raise ValueError("email is already registered")
-
-        existing_by_user = self.get_auth_user_by_user_id(normalized_user_id)
-        if existing_by_user is not None:
-            raise ValueError("userId is already registered for sign-in")
 
         raise AuthStoreUnavailableError("Postgres write failed: auth user row missing")
 
