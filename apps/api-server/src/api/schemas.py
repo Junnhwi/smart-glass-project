@@ -351,6 +351,53 @@ class AuthUserPayload(ApiSchema):
     lastLoginAt: str | None = None
 
 
+class AuthAdminUserListResponse(ApiSchema):
+    status: Literal["ok"] = "ok"
+    totalUsers: int
+    items: list[AuthUserPayload]
+
+
+class AuthAdminUserUpdateRequest(ApiSchema):
+    displayName: str | None = None
+    role: Literal["user", "admin"] | None = None
+    status: Literal["active", "disabled"] | None = None
+
+    @validator("displayName")
+    def validate_optional_non_blank_admin_display_name(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+    if root_validator is not None:
+
+        @root_validator(skip_on_failure=True)
+        def validate_admin_update_has_changes(
+            cls,
+            values: dict[str, Any],
+        ) -> dict[str, Any]:
+            if (
+                values.get("displayName") is None
+                and values.get("role") is None
+                and values.get("status") is None
+            ):
+                raise ValueError(
+                    "at least one of displayName, role, status is required"
+                )
+            return values
+
+
+class AuthAdminUserUpdateResponse(ApiSchema):
+    status: Literal["updated"] = "updated"
+    user: AuthUserPayload
+    revokedSessionCount: int = 0
+
+
 class AuthSignupRequest(ApiSchema):
     email: str = Field(min_length=3)
     password: str = Field(min_length=8)

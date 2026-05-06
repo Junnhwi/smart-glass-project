@@ -488,6 +488,125 @@ class PostgresAuthStore:
             last_login_at=_normalize_timestamp(row[7]),
         )
 
+    def list_auth_users(self, *, limit: int = 100) -> list[AuthUserRecord]:
+        resolved_limit = max(1, min(int(limit), 500))
+        self._ensure_schema()
+        query = f"""
+            SELECT
+                user_id,
+                email,
+                password_hash,
+                display_name,
+                role,
+                status,
+                created_at,
+                last_login_at
+            FROM {self.auth_users_table_name}
+            ORDER BY created_at DESC, user_id ASC
+            LIMIT %s
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (resolved_limit,))
+                    rows = cur.fetchall()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres read failed: {exc}"
+            ) from exc
+
+        return [
+            AuthUserRecord(
+                user_id=str(row[0]),
+                email=str(row[1]),
+                password_hash=str(row[2]),
+                display_name=_normalize_text(row[3]) or None,
+                role=str(row[4]),
+                status=str(row[5]),
+                created_at=_normalize_timestamp(row[6]) or "",
+                last_login_at=_normalize_timestamp(row[7]),
+            )
+            for row in rows
+        ]
+
+    def update_auth_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+    ) -> AuthUserRecord:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_display_name = _normalize_text(display_name) or None
+        normalized_role = _normalize_text(role) or None
+        normalized_status = _normalize_text(status) or None
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if (
+            normalized_display_name is None
+            and normalized_role is None
+            and normalized_status is None
+        ):
+            raise ValueError("at least one auth user field must be updated")
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.auth_users_table_name}
+            SET
+                display_name = COALESCE(%s, display_name),
+                role = COALESCE(%s, role),
+                status = COALESCE(%s, status),
+                updated_at = NOW()
+            WHERE user_id = %s
+            RETURNING
+                user_id,
+                email,
+                password_hash,
+                display_name,
+                role,
+                status,
+                created_at,
+                last_login_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_display_name,
+                            normalized_role,
+                            normalized_status,
+                            normalized_user_id,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise LookupError("auth user is not registered")
+        return AuthUserRecord(
+            user_id=str(row[0]),
+            email=str(row[1]),
+            password_hash=str(row[2]),
+            display_name=_normalize_text(row[3]) or None,
+            role=str(row[4]),
+            status=str(row[5]),
+            created_at=_normalize_timestamp(row[6]) or "",
+            last_login_at=_normalize_timestamp(row[7]),
+        )
+
     def touch_last_login(self, user_id: str) -> AuthUserRecord:
         normalized_user_id = _normalize_text(user_id)
         if not normalized_user_id:
@@ -1123,6 +1242,35 @@ class PostgresAuthStore:
             ) from exc
 
         return row is not None
+
+    def revoke_refresh_sessions_by_user(self, *, user_id: str) -> int:
+        normalized_user_id = _normalize_text(user_id)
+        if not normalized_user_id:
+            return 0
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.auth_sessions_table_name}
+            SET revoked_at = COALESCE(revoked_at, NOW())
+            WHERE user_id = %s
+              AND revoked_at IS NULL
+            RETURNING session_id
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (normalized_user_id,))
+                    rows = cur.fetchall()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        return len(rows)
 
     def revoke_access_token(
         self,

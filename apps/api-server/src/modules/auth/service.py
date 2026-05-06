@@ -225,6 +225,12 @@ class LogoutResult:
     revoked_refresh_token: bool
 
 
+@dataclass(frozen=True, slots=True)
+class AuthUserUpdateResult:
+    user: AuthProfile
+    revoked_session_count: int = 0
+
+
 class AuthRepository(Protocol):
     def create_auth_user(
         self,
@@ -240,6 +246,17 @@ class AuthRepository(Protocol):
     def get_auth_user_by_email(self, email: str) -> AuthUserRecord | None: ...
 
     def get_auth_user_by_user_id(self, user_id: str) -> AuthUserRecord | None: ...
+
+    def list_auth_users(self, *, limit: int = 100) -> list[AuthUserRecord]: ...
+
+    def update_auth_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+    ) -> AuthUserRecord: ...
 
     def touch_last_login(self, user_id: str) -> AuthUserRecord: ...
 
@@ -266,6 +283,8 @@ class AuthRepository(Protocol):
         session_id: str,
         replaced_by_session_id: str | None = None,
     ) -> bool: ...
+
+    def revoke_refresh_sessions_by_user(self, *, user_id: str) -> int: ...
 
     def revoke_access_token(
         self,
@@ -577,6 +596,51 @@ class AuthService:
         if user is None:
             raise LookupError("auth user is not registered")
         return self._build_profile(user)
+
+    def list_users(self, *, limit: int = 100) -> list[AuthProfile]:
+        resolved_limit = max(1, min(int(limit), 500))
+        users = self.repository.list_auth_users(limit=resolved_limit)
+        return [self._build_profile(user) for user in users]
+
+    def update_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+    ) -> AuthUserUpdateResult:
+        normalized_user_id = _normalize_text(user_id)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+
+        normalized_display_name = _normalize_text(display_name) or None
+        normalized_role = _ensure_role(role) if role is not None else None
+        normalized_status = _ensure_status(status) if status is not None else None
+        if (
+            normalized_display_name is None
+            and normalized_role is None
+            and normalized_status is None
+        ):
+            raise ValueError("at least one auth user field must be updated")
+
+        updated_user = self.repository.update_auth_user(
+            user_id=normalized_user_id,
+            display_name=normalized_display_name,
+            role=normalized_role,
+            status=normalized_status,
+        )
+
+        revoked_session_count = 0
+        if normalized_status == "disabled":
+            revoked_session_count = self.repository.revoke_refresh_sessions_by_user(
+                user_id=normalized_user_id
+            )
+
+        return AuthUserUpdateResult(
+            user=self._build_profile(updated_user),
+            revoked_session_count=revoked_session_count,
+        )
 
     def check_health(self) -> None:
         self.repository.check_health()

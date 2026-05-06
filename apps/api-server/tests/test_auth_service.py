@@ -12,6 +12,7 @@ class FakeAuthRepository:
         self.users_by_user_id: dict[str, AuthUserRecord] = {}
         self.sessions_by_hash: dict[str, AuthSessionRecord] = {}
         self.revoked_token_jtis: set[str] = set()
+        self.revoked_sessions_by_user: dict[str, int] = {}
         self.health_checked = False
 
     def create_auth_user(
@@ -47,6 +48,34 @@ class FakeAuthRepository:
 
     def get_auth_user_by_user_id(self, user_id: str) -> AuthUserRecord | None:
         return self.users_by_user_id.get(user_id)
+
+    def list_auth_users(self, *, limit: int = 100) -> list[AuthUserRecord]:
+        return list(self.users_by_user_id.values())[:limit]
+
+    def update_auth_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+    ) -> AuthUserRecord:
+        record = self.users_by_user_id.get(user_id)
+        if record is None:
+            raise LookupError("auth user is not registered")
+        updated_record = AuthUserRecord(
+            user_id=record.user_id,
+            email=record.email,
+            password_hash=record.password_hash,
+            display_name=display_name if display_name is not None else record.display_name,
+            role=role if role is not None else record.role,
+            status=status if status is not None else record.status,
+            created_at=record.created_at,
+            last_login_at=record.last_login_at,
+        )
+        self.users_by_user_id[user_id] = updated_record
+        self.users_by_email[record.email] = updated_record
+        return updated_record
 
     def touch_last_login(self, user_id: str) -> AuthUserRecord:
         record = self.users_by_user_id[user_id]
@@ -119,6 +148,27 @@ class FakeAuthRepository:
             )
             return True
         return False
+
+    def revoke_refresh_sessions_by_user(self, *, user_id: str) -> int:
+        count = 0
+        for session_hash, session in list(self.sessions_by_hash.items()):
+            if session.user_id != user_id or session.revoked_at is not None:
+                continue
+            self.sessions_by_hash[session_hash] = AuthSessionRecord(
+                session_id=session.session_id,
+                user_id=session.user_id,
+                refresh_token_hash=session.refresh_token_hash,
+                device_id=session.device_id,
+                user_agent=session.user_agent,
+                ip_address=session.ip_address,
+                created_at=session.created_at,
+                expires_at=session.expires_at,
+                revoked_at="2026-05-05T00:30:00Z",
+                replaced_by_session_id=session.replaced_by_session_id,
+            )
+            count += 1
+        self.revoked_sessions_by_user[user_id] = count
+        return count
 
     def revoke_access_token(
         self,
@@ -217,6 +267,35 @@ class AuthServiceTests(unittest.TestCase):
         self.service.check_health()
 
         self.assertTrue(self.repository.health_checked)
+
+    def test_list_users_returns_profiles(self) -> None:
+        self.service.sign_up(
+            email="user@example.com",
+            password="password123",
+            display_name="Test User",
+        )
+
+        users = self.service.list_users(limit=10)
+
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0].email, "user@example.com")
+
+    def test_update_user_disables_account_and_revokes_sessions(self) -> None:
+        bundle = self.service.sign_up(
+            email="user@example.com",
+            password="password123",
+            display_name="Test User",
+        )
+
+        result = self.service.update_user(
+            user_id=bundle.user.user_id,
+            role="admin",
+            status="disabled",
+        )
+
+        self.assertEqual(result.user.role, "admin")
+        self.assertEqual(result.user.status, "disabled")
+        self.assertEqual(result.revoked_session_count, 1)
 
 
 if __name__ == "__main__":

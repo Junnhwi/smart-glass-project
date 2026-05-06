@@ -55,6 +55,8 @@ class FakeAuthService:
         self.last_login_payload: dict[str, str | None] | None = None
         self.last_refresh_token: str | None = None
         self.last_logout_input: tuple[str | None, str | None] | None = None
+        self.last_list_users_limit: int | None = None
+        self.last_update_user_payload: dict[str, str | None] | None = None
         self.profile = FakeAuthProfile(
             user_id="user-auth-001",
             email="user@example.com",
@@ -63,6 +65,15 @@ class FakeAuthService:
             status="active",
             created_at="2026-05-05T00:00:00Z",
             last_login_at="2026-05-05T00:10:00Z",
+        )
+        self.admin_profile = FakeAuthProfile(
+            user_id="admin-1",
+            email="admin@example.com",
+            display_name="Admin User",
+            role="admin",
+            status="active",
+            created_at="2026-05-05T00:00:00Z",
+            last_login_at="2026-05-05T00:20:00Z",
         )
 
     def sign_up(
@@ -150,17 +161,27 @@ class FakeAuthService:
         )
 
     def authenticate_access_token(self, token: str) -> AuthenticatedPrincipal:
-        if token != "jwt-user-1":
-            raise PermissionError("Access token is invalid")
-        return AuthenticatedPrincipal(
-            user_id="user-1",
-            role="user",
-            token_type="access",
-            session_id="ses-001",
-            token_jti="atk-001",
-        )
+        if token == "jwt-user-1":
+            return AuthenticatedPrincipal(
+                user_id="user-1",
+                role="user",
+                token_type="access",
+                session_id="ses-001",
+                token_jti="atk-001",
+            )
+        if token == "jwt-admin-1":
+            return AuthenticatedPrincipal(
+                user_id="admin-1",
+                role="admin",
+                token_type="access",
+                session_id="ses-admin-001",
+                token_jti="atk-admin-001",
+            )
+        raise PermissionError("Access token is invalid")
 
     def get_user_profile(self, user_id: str) -> FakeAuthProfile:
+        if user_id == self.admin_profile.user_id:
+            return self.admin_profile
         if user_id != self.profile.user_id and user_id != "user-1":
             raise LookupError("auth user is not registered")
         if user_id == "user-1":
@@ -174,6 +195,47 @@ class FakeAuthService:
                 last_login_at="2026-05-05T00:10:00Z",
             )
         return self.profile
+
+    def list_users(self, *, limit: int = 100) -> list[FakeAuthProfile]:
+        self.last_list_users_limit = limit
+        return [
+            self.admin_profile,
+            self.profile,
+        ][:limit]
+
+    def update_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        role: str | None = None,
+        status: str | None = None,
+    ):
+        self.last_update_user_payload = {
+            "user_id": user_id,
+            "display_name": display_name,
+            "role": role,
+            "status": status,
+        }
+        updated_profile = FakeAuthProfile(
+            user_id=self.profile.user_id if user_id == self.profile.user_id else user_id,
+            email=self.profile.email if user_id == self.profile.user_id else f"{user_id}@example.com",
+            display_name=display_name or self.profile.display_name,
+            role=role or self.profile.role,
+            status=status or self.profile.status,
+            created_at=self.profile.created_at,
+            last_login_at=self.profile.last_login_at,
+        )
+
+        class FakeAuthUserUpdateResult:
+            def __init__(self, user: FakeAuthProfile, revoked_session_count: int) -> None:
+                self.user = user
+                self.revoked_session_count = revoked_session_count
+
+        return FakeAuthUserUpdateResult(
+            updated_profile,
+            1 if status == "disabled" else 0,
+        )
 
     def check_health(self) -> None:
         pass
@@ -464,6 +526,57 @@ class ApiServerRealAuthTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["userId"], "user-1")
         self.assertEqual(response.json()["email"], "user1@example.com")
+
+    def test_admin_auth_users_endpoint_requires_admin_role(self) -> None:
+        response = self.client.get(
+            "/admin/auth/users",
+            headers={"Authorization": "Bearer jwt-user-1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("required role", response.json()["detail"])
+
+    def test_admin_auth_users_endpoint_lists_users_for_admin(self) -> None:
+        response = self.client.get(
+            "/admin/auth/users",
+            headers={"Authorization": "Bearer jwt-admin-1"},
+            params={"limit": 10},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["totalUsers"], 2)
+        self.assertEqual(self.fake_auth_service.last_list_users_limit, 10)
+        self.assertEqual(body["items"][0]["role"], "admin")
+
+    def test_admin_auth_user_update_endpoint_changes_role_and_status(self) -> None:
+        response = self.client.patch(
+            "/admin/auth/users/user-auth-001",
+            headers={"Authorization": "Bearer jwt-admin-1"},
+            json={
+                "displayName": "Renamed User",
+                "role": "admin",
+                "status": "disabled",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "updated")
+        self.assertEqual(body["user"]["displayName"], "Renamed User")
+        self.assertEqual(body["user"]["role"], "admin")
+        self.assertEqual(body["user"]["status"], "disabled")
+        self.assertEqual(body["revokedSessionCount"], 1)
+        self.assertEqual(
+            self.fake_auth_service.last_update_user_payload,
+            {
+                "user_id": "user-auth-001",
+                "display_name": "Renamed User",
+                "role": "admin",
+                "status": "disabled",
+            },
+        )
 
     def test_search_endpoint_accepts_jwt_access_token(self) -> None:
         response = self.client.post(

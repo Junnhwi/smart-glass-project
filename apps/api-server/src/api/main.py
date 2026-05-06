@@ -16,6 +16,9 @@ from src.api.auth import (
 from src.api.intake import build_capture_upload_response
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
+    AuthAdminUserListResponse,
+    AuthAdminUserUpdateRequest,
+    AuthAdminUserUpdateResponse,
     AuthLoginRequest,
     AuthLogoutRequest,
     AuthLogoutResponse,
@@ -227,6 +230,13 @@ def _map_auth_profile(profile: Any) -> AuthUserPayload:
         status=profile.status,
         createdAt=profile.created_at,
         lastLoginAt=profile.last_login_at,
+    )
+
+
+def _require_admin_principal(request: Request):
+    return resolve_authenticated_principal(
+        request,
+        allowed_roles={"admin"},
     )
 
 
@@ -473,6 +483,8 @@ def create_app() -> FastAPI:
                 "POST /auth/refresh",
                 "POST /auth/logout",
                 "GET /auth/me",
+                "GET /admin/auth/users",
+                "PATCH /admin/auth/users/{userId}",
                 "POST /auth/oauth/google/start",
                 "GET /auth/oauth/google/callback",
                 "POST /auth/oauth/google/exchange",
@@ -845,6 +857,64 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise _map_auth_error(exc) from exc
         return _map_auth_profile(profile)
+
+    @app.get(
+        "/admin/auth/users",
+        response_model=AuthAdminUserListResponse,
+    )
+    def admin_list_auth_users(
+        request: Request,
+        limit: int = 100,
+    ) -> AuthAdminUserListResponse:
+        _require_admin_principal(request)
+        try:
+            auth_service = _get_auth_service(request)
+            users = auth_service.list_users(limit=limit)
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+        return AuthAdminUserListResponse(
+            totalUsers=len(users),
+            items=[_map_auth_profile(user) for user in users],
+        )
+
+    @app.patch(
+        "/admin/auth/users/{userId}",
+        response_model=AuthAdminUserUpdateResponse,
+    )
+    def admin_update_auth_user(
+        request: Request,
+        userId: str,
+        payload: AuthAdminUserUpdateRequest,
+    ) -> AuthAdminUserUpdateResponse:
+        _require_admin_principal(request)
+        normalized_user_id = _normalize_user_scope(userId)
+        try:
+            auth_service = _get_auth_service(request)
+            result = auth_service.update_user(
+                user_id=normalized_user_id,
+                display_name=payload.displayName,
+                role=payload.role,
+                status=payload.status,
+            )
+        except Exception as exc:
+            raise _map_auth_error(exc) from exc
+
+        _record_auth_security_event(
+            request,
+            event_type="auth.admin.update_user",
+            outcome="succeeded",
+            user_id=result.user.user_id,
+            email=result.user.email,
+            metadata={
+                "role": result.user.role,
+                "status": result.user.status,
+                "revokedSessionCount": result.revoked_session_count,
+            },
+        )
+        return AuthAdminUserUpdateResponse(
+            user=_map_auth_profile(result.user),
+            revokedSessionCount=result.revoked_session_count,
+        )
 
     @app.post(
         "/auth/oauth/google/start",
