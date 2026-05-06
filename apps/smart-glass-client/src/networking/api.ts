@@ -48,6 +48,12 @@ export type MemoryChatResponse = {
   reason?: string | null;
 };
 
+export type MemorySearchResponse = {
+  query: string;
+  totalHits: number;
+  hits: MemorySearchHit[];
+};
+
 export type MemoryRecentResponse = {
   userId: string;
   totalItems: number;
@@ -417,6 +423,28 @@ export const chatWithMemories = async ({
 }) => {
   return postJson<MemoryChatResponse>(
     '/chat',
+    {
+      userId,
+      query,
+      topK,
+    },
+    { authToken }
+  );
+};
+
+export const searchMemories = async ({
+  authToken,
+  userId,
+  query,
+  topK = 10,
+}: {
+  authToken: string;
+  userId: string;
+  query: string;
+  topK?: number;
+}) => {
+  return postJson<MemorySearchResponse>(
+    '/search',
     {
       userId,
       query,
