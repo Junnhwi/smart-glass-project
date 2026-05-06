@@ -99,6 +99,20 @@ class AuthOauthHandoffRecord:
     created_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class AuthAuditEventRecord:
+    event_type: str
+    outcome: str
+    user_id: str | None
+    email: str | None
+    provider: str | None
+    device_id: str | None
+    ip_address: str | None
+    user_agent: str | None
+    metadata_json: str | None
+    created_at: str
+
+
 class AuthStoreUnavailableError(RuntimeError):
     pass
 
@@ -111,6 +125,7 @@ class PostgresAuthStore:
     auth_identities_table_name = "auth_identities"
     auth_oauth_states_table_name = "auth_oauth_states"
     auth_oauth_handoffs_table_name = "auth_oauth_handoffs"
+    auth_audit_logs_table_name = "auth_audit_logs"
 
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url.strip()
@@ -246,6 +261,29 @@ class PostgresAuthStore:
                                 consumed_at TIMESTAMPTZ,
                                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                             )
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE TABLE IF NOT EXISTS {self.auth_audit_logs_table_name} (
+                                event_id BIGSERIAL PRIMARY KEY,
+                                event_type TEXT NOT NULL,
+                                outcome TEXT NOT NULL,
+                                user_id TEXT,
+                                email TEXT,
+                                provider TEXT,
+                                device_id TEXT,
+                                ip_address TEXT,
+                                user_agent TEXT,
+                                metadata_json JSONB,
+                                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                            )
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            CREATE INDEX IF NOT EXISTS idx_{self.auth_audit_logs_table_name}_event_created_at
+                            ON {self.auth_audit_logs_table_name} (event_type, created_at DESC)
                             """
                         )
                     conn.commit()
@@ -1156,6 +1194,113 @@ class PostgresAuthStore:
             ) from exc
 
         return row is not None
+
+    def record_auth_event(
+        self,
+        *,
+        event_type: str,
+        outcome: str,
+        user_id: str | None = None,
+        email: str | None = None,
+        provider: str | None = None,
+        device_id: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        metadata_json: str | None = None,
+    ) -> AuthAuditEventRecord:
+        normalized_event_type = _normalize_text(event_type)
+        normalized_outcome = _normalize_text(outcome)
+        normalized_user_id = _normalize_text(user_id) or None
+        normalized_email = _normalize_email(email) or None
+        normalized_provider = _normalize_text(provider) or None
+        normalized_device_id = _normalize_text(device_id) or None
+        normalized_ip_address = _normalize_text(ip_address) or None
+        normalized_user_agent = _normalize_text(user_agent) or None
+        normalized_metadata_json = _normalize_text(metadata_json) or None
+
+        if not normalized_event_type:
+            raise ValueError("eventType must not be blank")
+        if not normalized_outcome:
+            raise ValueError("outcome must not be blank")
+
+        self._ensure_schema()
+        query = f"""
+            INSERT INTO {self.auth_audit_logs_table_name} (
+                event_type,
+                outcome,
+                user_id,
+                email,
+                provider,
+                device_id,
+                ip_address,
+                user_agent,
+                metadata_json,
+                created_at
+            ) VALUES (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s::jsonb,
+                NOW()
+            )
+            RETURNING
+                event_type,
+                outcome,
+                user_id,
+                email,
+                provider,
+                device_id,
+                ip_address,
+                user_agent,
+                metadata_json::text,
+                created_at
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_event_type,
+                            normalized_outcome,
+                            normalized_user_id,
+                            normalized_email,
+                            normalized_provider,
+                            normalized_device_id,
+                            normalized_ip_address,
+                            normalized_user_agent,
+                            normalized_metadata_json,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except AuthStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise AuthStoreUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise AuthStoreUnavailableError("Postgres write failed: auth audit row missing")
+        return AuthAuditEventRecord(
+            event_type=str(row[0]),
+            outcome=str(row[1]),
+            user_id=_normalize_text(row[2]) or None,
+            email=_normalize_email(row[3]) or None,
+            provider=_normalize_text(row[4]) or None,
+            device_id=_normalize_text(row[5]) or None,
+            ip_address=_normalize_text(row[6]) or None,
+            user_agent=_normalize_text(row[7]) or None,
+            metadata_json=_normalize_text(row[8]) or None,
+            created_at=_normalize_timestamp(row[9]) or "",
+        )
 
     def check_health(self) -> None:
         if not self._schema_ready:

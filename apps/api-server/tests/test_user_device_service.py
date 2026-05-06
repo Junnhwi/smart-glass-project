@@ -42,6 +42,49 @@ class FakeUserDeviceRepository:
     def get_device(self, device_id: str) -> DeviceRecord | None:
         return self.devices.get(device_id)
 
+    def list_devices(self, *, user_id: str) -> list[DeviceRecord]:
+        return [
+            device
+            for device in self.devices.values()
+            if device.user_id == user_id
+        ]
+
+    def approve_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        device = self.devices.get(device_id)
+        if device is None:
+            raise LookupError("deviceId is not registered")
+        if device.user_id != user_id:
+            raise ValueError("deviceId is registered to another user")
+        approved = DeviceRecord(
+            device_id=device.device_id,
+            user_id=device.user_id,
+            registered_at=device.registered_at,
+            status="active",
+            approved_at="2026-05-05T00:03:00Z",
+            revoked_at=None,
+            updated_at="2026-05-05T00:03:00Z",
+        )
+        self.devices[device_id] = approved
+        return approved
+
+    def revoke_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        device = self.devices.get(device_id)
+        if device is None:
+            raise LookupError("deviceId is not registered")
+        if device.user_id != user_id:
+            raise ValueError("deviceId is registered to another user")
+        revoked = DeviceRecord(
+            device_id=device.device_id,
+            user_id=device.user_id,
+            registered_at=device.registered_at,
+            status="revoked",
+            approved_at=device.approved_at,
+            revoked_at="2026-05-05T00:04:00Z",
+            updated_at="2026-05-05T00:04:00Z",
+        )
+        self.devices[device_id] = revoked
+        return revoked
+
     def find_user_by_device_id(self, device_id: str) -> UserRecord | None:
         device = self.devices.get(device_id)
         if device is None:
@@ -81,6 +124,39 @@ class UserDeviceServiceTests(unittest.TestCase):
         self.assertEqual(record.user_id, "user-1")
         self.assertEqual(record.device_id, "glass-001")
         self.assertEqual(self.repository.get_device("glass-001"), record)
+
+    def test_list_devices_returns_registered_devices_for_user(self) -> None:
+        self.service.create_user(user_id="user-1")
+        self.service.register_device(user_id="user-1", device_id="glass-001")
+        self.service.register_device(user_id="user-1", device_id="glass-002")
+
+        result = self.service.list_devices(user_id="user-1")
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual({device.device_id for device in result}, {"glass-001", "glass-002"})
+
+    def test_revoke_device_marks_device_as_blocked_for_authorization(self) -> None:
+        self.service.create_user(user_id="user-1")
+        self.service.register_device(user_id="user-1", device_id="glass-001")
+
+        revoked = self.service.revoke_device(user_id="user-1", device_id="glass-001")
+        authorization = self.service.authorize_device(device_id="glass-001")
+
+        self.assertEqual(revoked.status, "revoked")
+        self.assertEqual(authorization.status, "blocked")
+        self.assertIsNone(authorization.user_id)
+
+    def test_approve_device_reactivates_revoked_device(self) -> None:
+        self.service.create_user(user_id="user-1")
+        self.service.register_device(user_id="user-1", device_id="glass-001")
+        self.service.revoke_device(user_id="user-1", device_id="glass-001")
+
+        approved = self.service.approve_device(user_id="user-1", device_id="glass-001")
+        authorization = self.service.authorize_device(device_id="glass-001")
+
+        self.assertEqual(approved.status, "active")
+        self.assertEqual(authorization.status, "allowed")
+        self.assertEqual(authorization.user_id, "user-1")
 
     def test_register_device_rejects_unknown_user(self) -> None:
         with self.assertRaisesRegex(LookupError, "userId is not registered"):

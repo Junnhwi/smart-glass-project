@@ -53,11 +53,18 @@ from src.api.schemas import (
     UploadAuthorizationResponse,
     UserCreateRequest,
     UserCreateResponse,
+    UserDeviceListResponse,
+    UserDevicePayload,
     UserDeviceRegistrationRequest,
+    UserDeviceStatusResponse,
     VlmInferenceResultPayload,
 )
 from src.database.memory_store import build_default_memory_store_client
 from src.modules.auth.oauth import build_default_google_oauth_service
+from src.modules.auth.security import (
+    RateLimitExceededError,
+    build_default_auth_security_service,
+)
 from src.modules.auth.service import build_default_auth_service
 from src.modules.media.service import (
     GalleryItem,
@@ -199,6 +206,18 @@ def _get_google_oauth_service(request: Request):
     return google_oauth_service
 
 
+def _get_auth_security_service(request: Request):
+    auth_security_service = getattr(request.app.state, "auth_security_service", None)
+    if auth_security_service is None:
+        auth_service = _get_auth_service(request)
+        repository = getattr(auth_service, "repository", None)
+        auth_security_service = request.app.state.auth_security_service_factory(
+            repository
+        )
+        request.app.state.auth_security_service = auth_security_service
+    return auth_security_service
+
+
 def _map_auth_profile(profile: Any) -> AuthUserPayload:
     return AuthUserPayload(
         userId=profile.user_id,
@@ -208,6 +227,48 @@ def _map_auth_profile(profile: Any) -> AuthUserPayload:
         status=profile.status,
         createdAt=profile.created_at,
         lastLoginAt=profile.last_login_at,
+    )
+
+
+def _record_auth_security_event(
+    request: Request,
+    *,
+    event_type: str,
+    outcome: str,
+    user_id: str | None = None,
+    email: str | None = None,
+    provider: str | None = None,
+    device_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        auth_security_service = _get_auth_security_service(request)
+        auth_security_service.record_event(
+            event_type=event_type,
+            outcome=outcome,
+            user_id=user_id,
+            email=email,
+            provider=provider,
+            device_id=device_id,
+            ip_address=_request_ip_address(request),
+            user_agent=request.headers.get("User-Agent"),
+            metadata=metadata,
+        )
+    except Exception:
+        # Auth logging should not block a request that already succeeded or failed
+        # for a more meaningful reason.
+        return
+
+
+def _map_user_device(device: Any) -> UserDevicePayload:
+    return UserDevicePayload(
+        userId=device.user_id,
+        deviceId=device.device_id,
+        status=device.status,
+        registeredAt=device.registered_at,
+        approvedAt=device.approved_at,
+        revokedAt=device.revoked_at,
+        updatedAt=device.updated_at,
     )
 
 
@@ -239,6 +300,26 @@ def _map_oauth_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail=str(exc))
 
 
+def _enforce_auth_rate_limits(
+    request: Request,
+    *,
+    limits: list[tuple[str, str | None]],
+) -> None:
+    auth_security_service = _get_auth_security_service(request)
+    try:
+        for policy_key, identifier in limits:
+            auth_security_service.enforce_rate_limit(
+                policy_key=policy_key,
+                identifier=identifier,
+            )
+    except RateLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_sec)},
+        ) from exc
+
+
 def _request_ip_address(request: Request) -> str | None:
     forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
     if forwarded_for:
@@ -246,6 +327,36 @@ def _request_ip_address(request: Request) -> str | None:
     if request.client is None:
         return None
     return request.client.host
+
+
+def _normalize_user_scope(user_id: str) -> str:
+    normalized = " ".join(str(user_id).strip().split())
+    if not normalized:
+        raise HTTPException(status_code=400, detail="userId must not be blank")
+    return normalized
+
+
+def _resolve_self_user(
+    request: Request,
+    user_id: str,
+) -> str:
+    normalized_user_id = _normalize_user_scope(user_id)
+    return resolve_authenticated_user(
+        request,
+        claimed_user_id=normalized_user_id,
+    )
+
+
+def _resolve_admin_user_scope(
+    request: Request,
+    user_id: str,
+) -> str:
+    normalized_user_id = _normalize_user_scope(user_id)
+    resolve_authenticated_principal(
+        request,
+        allowed_roles={"admin"},
+    )
+    return normalized_user_id
 
 
 def _map_celery_state_to_capture_status(state: str) -> str:
@@ -268,7 +379,7 @@ def _map_user_device_error(exc: Exception) -> HTTPException:
         detail = str(exc)
         if "API_CAPTURE_DATABASE_URL" in detail or "database_url" in detail:
             return HTTPException(status_code=503, detail=detail)
-        if "already registered" in detail:
+        if "already registered" in detail or "registered to another user" in detail:
             return HTTPException(status_code=409, detail=detail)
         return HTTPException(status_code=400, detail=detail)
     return HTTPException(status_code=503, detail=str(exc))
@@ -366,7 +477,13 @@ def create_app() -> FastAPI:
                 "GET /auth/oauth/google/callback",
                 "POST /auth/oauth/google/exchange",
                 "POST /users",
+                "GET /users/{userId}/devices",
                 "POST /users/{userId}/devices",
+                "POST /users/{userId}/devices/{deviceId}/approve",
+                "POST /users/{userId}/devices/{deviceId}/revoke",
+                "GET /admin/users/{userId}/devices",
+                "POST /admin/users/{userId}/devices/{deviceId}/approve",
+                "POST /admin/users/{userId}/devices/{deviceId}/revoke",
                 "POST /devices/register",
                 "POST /media/upload-authorizations",
                 "POST /media/captures",
@@ -395,6 +512,8 @@ def create_app() -> FastAPI:
     app.state.memory_query_service_factory = build_default_memory_query_service
     app.state.auth_service = None
     app.state.auth_service_factory = build_default_auth_service
+    app.state.auth_security_service = None
+    app.state.auth_security_service_factory = build_default_auth_security_service
     app.state.google_oauth_service = None
     app.state.google_oauth_service_factory = build_default_google_oauth_service
     app.state.user_device_service = None
@@ -491,7 +610,15 @@ def create_app() -> FastAPI:
         request: Request,
         payload: AuthSignupRequest,
     ) -> AuthTokenResponse:
+        ip_address = _request_ip_address(request)
         try:
+            _enforce_auth_rate_limits(
+                request,
+                limits=[
+                    ("auth.signup.ip", ip_address),
+                    ("auth.signup.email", payload.email),
+                ],
+            )
             auth_service = _get_auth_service(request)
             bundle = auth_service.sign_up(
                 email=payload.email,
@@ -500,10 +627,38 @@ def create_app() -> FastAPI:
                 user_id=payload.userId,
                 device_id=payload.deviceId,
                 user_agent=request.headers.get("User-Agent"),
-                ip_address=_request_ip_address(request),
+                ip_address=ip_address,
             )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                _record_auth_security_event(
+                    request,
+                    event_type="auth.signup",
+                    outcome="rate_limited",
+                    email=payload.email,
+                    device_id=payload.deviceId,
+                    metadata={"status_code": exc.status_code},
+                )
+            raise
         except Exception as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.signup",
+                outcome="failed",
+                email=payload.email,
+                device_id=payload.deviceId,
+                metadata={"error": str(exc)},
+            )
             raise _map_auth_error(exc) from exc
+        _record_auth_security_event(
+            request,
+            event_type="auth.signup",
+            outcome="succeeded",
+            user_id=bundle.user.user_id,
+            email=bundle.user.email,
+            device_id=payload.deviceId,
+            metadata={"role": bundle.user.role},
+        )
         return AuthTokenResponse(
             accessToken=bundle.access_token,
             refreshToken=bundle.refresh_token,
@@ -520,17 +675,53 @@ def create_app() -> FastAPI:
         request: Request,
         payload: AuthLoginRequest,
     ) -> AuthTokenResponse:
+        ip_address = _request_ip_address(request)
         try:
+            _enforce_auth_rate_limits(
+                request,
+                limits=[
+                    ("auth.login.ip", ip_address),
+                    ("auth.login.email", payload.email),
+                ],
+            )
             auth_service = _get_auth_service(request)
             bundle = auth_service.login(
                 email=payload.email,
                 password=payload.password,
                 device_id=payload.deviceId,
                 user_agent=request.headers.get("User-Agent"),
-                ip_address=_request_ip_address(request),
+                ip_address=ip_address,
             )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                _record_auth_security_event(
+                    request,
+                    event_type="auth.login",
+                    outcome="rate_limited",
+                    email=payload.email,
+                    device_id=payload.deviceId,
+                    metadata={"status_code": exc.status_code},
+                )
+            raise
         except Exception as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.login",
+                outcome="failed",
+                email=payload.email,
+                device_id=payload.deviceId,
+                metadata={"error": str(exc)},
+            )
             raise _map_auth_error(exc) from exc
+        _record_auth_security_event(
+            request,
+            event_type="auth.login",
+            outcome="succeeded",
+            user_id=bundle.user.user_id,
+            email=bundle.user.email,
+            device_id=payload.deviceId,
+            metadata={"role": bundle.user.role},
+        )
         return AuthTokenResponse(
             accessToken=bundle.access_token,
             refreshToken=bundle.refresh_token,
@@ -547,15 +738,43 @@ def create_app() -> FastAPI:
         request: Request,
         payload: AuthRefreshRequest,
     ) -> AuthTokenResponse:
+        ip_address = _request_ip_address(request)
         try:
+            _enforce_auth_rate_limits(
+                request,
+                limits=[("auth.refresh.ip", ip_address)],
+            )
             auth_service = _get_auth_service(request)
             bundle = auth_service.refresh(
                 refresh_token=payload.refreshToken,
                 user_agent=request.headers.get("User-Agent"),
-                ip_address=_request_ip_address(request),
+                ip_address=ip_address,
             )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                _record_auth_security_event(
+                    request,
+                    event_type="auth.refresh",
+                    outcome="rate_limited",
+                    metadata={"status_code": exc.status_code},
+                )
+            raise
         except Exception as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.refresh",
+                outcome="failed",
+                metadata={"error": str(exc)},
+            )
             raise _map_auth_error(exc) from exc
+        _record_auth_security_event(
+            request,
+            event_type="auth.refresh",
+            outcome="succeeded",
+            user_id=bundle.user.user_id,
+            email=bundle.user.email,
+            metadata={"role": bundle.user.role},
+        )
         return AuthTokenResponse(
             accessToken=bundle.access_token,
             refreshToken=bundle.refresh_token,
@@ -585,9 +804,30 @@ def create_app() -> FastAPI:
                 access_token=normalized_access_token,
             )
         except PermissionError as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.logout",
+                outcome="failed",
+                metadata={"error": str(exc)},
+            )
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         except Exception as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.logout",
+                outcome="failed",
+                metadata={"error": str(exc)},
+            )
             raise _map_auth_error(exc) from exc
+        _record_auth_security_event(
+            request,
+            event_type="auth.logout",
+            outcome="succeeded",
+            metadata={
+                "revokedAccessToken": outcome.revoked_access_token,
+                "revokedRefreshToken": outcome.revoked_refresh_token,
+            },
+        )
         return AuthLogoutResponse(
             revokedAccessToken=outcome.revoked_access_token,
             revokedRefreshToken=outcome.revoked_refresh_token,
@@ -614,11 +854,40 @@ def create_app() -> FastAPI:
         request: Request,
         payload: AuthOauthStartRequest,
     ) -> AuthOauthStartResponse:
+        ip_address = _request_ip_address(request)
         try:
+            _enforce_auth_rate_limits(
+                request,
+                limits=[("auth.oauth.google.start.ip", ip_address)],
+            )
             google_oauth_service = _get_google_oauth_service(request)
             start = google_oauth_service.start(redirect_uri=payload.redirectUri)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                _record_auth_security_event(
+                    request,
+                    event_type="auth.oauth.google.start",
+                    outcome="rate_limited",
+                    provider="google",
+                    metadata={"status_code": exc.status_code},
+                )
+            raise
         except Exception as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.oauth.google.start",
+                outcome="failed",
+                provider="google",
+                metadata={"error": str(exc)},
+            )
             raise _map_oauth_error(exc) from exc
+        _record_auth_security_event(
+            request,
+            event_type="auth.oauth.google.start",
+            outcome="succeeded",
+            provider="google",
+            metadata={"redirectUri": payload.redirectUri},
+        )
         return AuthOauthStartResponse(
             provider="google",
             authorizationUrl=start.authorization_url,
@@ -685,15 +954,39 @@ def create_app() -> FastAPI:
         request: Request,
         payload: AuthOauthExchangeRequest,
     ) -> AuthTokenResponse:
+        ip_address = _request_ip_address(request)
         try:
+            _enforce_auth_rate_limits(
+                request,
+                limits=[("auth.oauth.google.exchange.ip", ip_address)],
+            )
             google_oauth_service = _get_google_oauth_service(request)
             bundle = google_oauth_service.exchange_handoff(
                 handoff_code=payload.handoffCode,
                 device_id=payload.deviceId,
                 user_agent=request.headers.get("User-Agent"),
-                ip_address=_request_ip_address(request),
+                ip_address=ip_address,
             )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                _record_auth_security_event(
+                    request,
+                    event_type="auth.oauth.google.exchange",
+                    outcome="rate_limited",
+                    provider="google",
+                    device_id=payload.deviceId,
+                    metadata={"status_code": exc.status_code},
+                )
+            raise
         except Exception as exc:
+            _record_auth_security_event(
+                request,
+                event_type="auth.oauth.google.exchange",
+                outcome="failed",
+                provider="google",
+                device_id=payload.deviceId,
+                metadata={"error": str(exc)},
+            )
             if isinstance(exc, (PermissionError, LookupError)):
                 raise _map_auth_error(exc) from exc
             raise _map_oauth_error(exc) from exc
@@ -707,6 +1000,17 @@ def create_app() -> FastAPI:
                 )
             except Exception as exc:
                 raise _map_user_device_error(exc) from exc
+
+        _record_auth_security_event(
+            request,
+            event_type="auth.oauth.google.exchange",
+            outcome="succeeded",
+            user_id=bundle.user.user_id,
+            email=bundle.user.email,
+            provider="google",
+            device_id=payload.deviceId,
+            metadata={"role": bundle.user.role},
+        )
 
         return AuthTokenResponse(
             accessToken=bundle.access_token,
@@ -734,6 +1038,46 @@ def create_app() -> FastAPI:
         return UserCreateResponse(
             userId=user.user_id,
             createdAt=user.created_at,
+        )
+
+    @app.get(
+        "/users/{userId}/devices",
+        response_model=UserDeviceListResponse,
+    )
+    def list_user_devices(
+        request: Request,
+        userId: str,
+    ) -> UserDeviceListResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            devices = user_device_service.list_devices(user_id=authorized_user_id)
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceListResponse(
+            userId=authorized_user_id,
+            totalDevices=len(devices),
+            items=[_map_user_device(device) for device in devices],
+        )
+
+    @app.get(
+        "/admin/users/{userId}/devices",
+        response_model=UserDeviceListResponse,
+    )
+    def admin_list_user_devices(
+        request: Request,
+        userId: str,
+    ) -> UserDeviceListResponse:
+        authorized_user_id = _resolve_admin_user_scope(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            devices = user_device_service.list_devices(user_id=authorized_user_id)
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceListResponse(
+            userId=authorized_user_id,
+            totalDevices=len(devices),
+            items=[_map_user_device(device) for device in devices],
         )
 
     @app.post(
@@ -781,6 +1125,118 @@ def create_app() -> FastAPI:
             userId=device.user_id,
             deviceId=device.device_id,
             registeredAt=device.registered_at,
+        )
+
+    @app.post(
+        "/users/{userId}/devices/{deviceId}/approve",
+        response_model=UserDeviceStatusResponse,
+    )
+    def approve_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.approve_device(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
+        )
+
+    @app.post(
+        "/admin/users/{userId}/devices/{deviceId}/approve",
+        response_model=UserDeviceStatusResponse,
+    )
+    def admin_approve_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_admin_user_scope(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.approve_device(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
+        )
+
+    @app.post(
+        "/users/{userId}/devices/{deviceId}/revoke",
+        response_model=UserDeviceStatusResponse,
+    )
+    def revoke_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.revoke_device(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
+        )
+
+    @app.post(
+        "/admin/users/{userId}/devices/{deviceId}/revoke",
+        response_model=UserDeviceStatusResponse,
+    )
+    def admin_revoke_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_admin_user_scope(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.revoke_device(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
         )
 
     @app.post(

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.database.user_registry import DeviceRecord
+from src.modules.auth.security import RateLimitExceededError
 from src.modules.auth.service import AuthenticatedPrincipal
 from src.modules.search.service import GeneratedAnswer, SearchHit
 
@@ -287,12 +288,57 @@ class FakeMemoryQueryService:
         pass
 
 
+class FakeAuthSecurityService:
+    def __init__(self) -> None:
+        self.rate_limited_policy_keys: set[str] = set()
+        self.enforced_limits: list[tuple[str, str | None]] = []
+        self.recorded_events: list[dict[str, object | None]] = []
+
+    def enforce_rate_limit(self, *, policy_key: str, identifier: str | None) -> None:
+        self.enforced_limits.append((policy_key, identifier))
+        if policy_key in self.rate_limited_policy_keys:
+            raise RateLimitExceededError(
+                policy_key=policy_key,
+                identifier=identifier or "anonymous",
+                retry_after_sec=60,
+            )
+
+    def record_event(
+        self,
+        *,
+        event_type: str,
+        outcome: str,
+        user_id: str | None = None,
+        email: str | None = None,
+        provider: str | None = None,
+        device_id: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self.recorded_events.append(
+            {
+                "event_type": event_type,
+                "outcome": outcome,
+                "user_id": user_id,
+                "email": email,
+                "provider": provider,
+                "device_id": device_id,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                "metadata": metadata,
+            }
+        )
+
+
 class ApiServerRealAuthTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_auth_service_factory = app.state.auth_service_factory
+        self.original_auth_security_service_factory = app.state.auth_security_service_factory
         self.original_google_oauth_service_factory = app.state.google_oauth_service_factory
         self.original_user_device_service_factory = app.state.user_device_service_factory
         self.fake_auth_service = FakeAuthService()
+        self.fake_auth_security_service = FakeAuthSecurityService()
         self.fake_google_oauth_service = FakeGoogleOauthService(
             self.fake_auth_service.login(
                 email="user@example.com",
@@ -302,6 +348,7 @@ class ApiServerRealAuthTests(unittest.TestCase):
         self.fake_user_device_service = FakeUserDeviceService()
         self.fake_memory_query_service = FakeMemoryQueryService()
         app.state.auth_service = self.fake_auth_service
+        app.state.auth_security_service = self.fake_auth_security_service
         app.state.google_oauth_service = self.fake_google_oauth_service
         app.state.user_device_service = self.fake_user_device_service
         app.state.memory_query_service = self.fake_memory_query_service
@@ -309,10 +356,12 @@ class ApiServerRealAuthTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         app.state.auth_service = None
+        app.state.auth_security_service = None
         app.state.google_oauth_service = None
         app.state.user_device_service = None
         app.state.memory_query_service = None
         app.state.auth_service_factory = self.original_auth_service_factory
+        app.state.auth_security_service_factory = self.original_auth_security_service_factory
         app.state.google_oauth_service_factory = self.original_google_oauth_service_factory
         app.state.user_device_service_factory = self.original_user_device_service_factory
 
@@ -333,6 +382,17 @@ class ApiServerRealAuthTests(unittest.TestCase):
         self.assertEqual(body["accessToken"], "jwt-signup-token")
         self.assertEqual(body["user"]["email"], "user@example.com")
         self.assertEqual(self.fake_auth_service.last_signup_payload["device_id"], "glass-001")
+        self.assertEqual(
+            self.fake_auth_security_service.enforced_limits[:2],
+            [
+                ("auth.signup.ip", "testclient"),
+                ("auth.signup.email", "user@example.com"),
+            ],
+        )
+        self.assertEqual(
+            self.fake_auth_security_service.recorded_events[-1]["outcome"],
+            "succeeded",
+        )
 
     def test_login_endpoint_surfaces_invalid_credentials(self) -> None:
         self.fake_auth_service.should_reject_login = True
@@ -347,6 +407,28 @@ class ApiServerRealAuthTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertIn("Invalid email or password", response.json()["detail"])
+        self.assertEqual(
+            self.fake_auth_security_service.recorded_events[-1]["outcome"],
+            "failed",
+        )
+
+    def test_login_endpoint_returns_429_when_rate_limited(self) -> None:
+        self.fake_auth_security_service.rate_limited_policy_keys.add("auth.login.ip")
+
+        response = self.client.post(
+            "/auth/login",
+            json={
+                "email": "user@example.com",
+                "password": "password123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("Too many requests", response.json()["detail"])
+        self.assertEqual(
+            self.fake_auth_security_service.recorded_events[-1]["outcome"],
+            "rate_limited",
+        )
 
     def test_refresh_endpoint_rotates_refresh_token(self) -> None:
         response = self.client.post(
@@ -412,6 +494,10 @@ class ApiServerRealAuthTests(unittest.TestCase):
             self.fake_google_oauth_service.last_start_redirect_uri,
             "smart-glass-client://oauth?device_id=glass-001",
         )
+        self.assertEqual(
+            self.fake_auth_security_service.recorded_events[-1]["event_type"],
+            "auth.oauth.google.start",
+        )
 
     def test_google_oauth_callback_redirects_back_to_client(self) -> None:
         response = self.client.get(
@@ -465,6 +551,10 @@ class ApiServerRealAuthTests(unittest.TestCase):
         self.assertEqual(
             self.fake_user_device_service.registered_devices,
             [("user-auth-001", "glass-001")],
+        )
+        self.assertEqual(
+            self.fake_auth_security_service.recorded_events[-1]["outcome"],
+            "succeeded",
         )
 
 

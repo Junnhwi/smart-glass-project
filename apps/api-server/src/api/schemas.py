@@ -314,6 +314,33 @@ class DeviceRegistrationResponse(ApiSchema):
     registeredAt: str
 
 
+class UserDevicePayload(ApiSchema):
+    userId: str
+    deviceId: str
+    status: Literal["active", "revoked"]
+    registeredAt: str
+    approvedAt: str | None = None
+    revokedAt: str | None = None
+    updatedAt: str | None = None
+
+
+class UserDeviceListResponse(ApiSchema):
+    status: Literal["ok"] = "ok"
+    userId: str
+    totalDevices: int
+    items: list[UserDevicePayload]
+
+
+class UserDeviceStatusResponse(ApiSchema):
+    status: Literal["active", "revoked"]
+    userId: str
+    deviceId: str
+    registeredAt: str
+    approvedAt: str | None = None
+    revokedAt: str | None = None
+    updatedAt: str | None = None
+
+
 class AuthUserPayload(ApiSchema):
     userId: str
     email: str
