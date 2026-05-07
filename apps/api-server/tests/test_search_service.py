@@ -262,6 +262,49 @@ class MemoryQueryServiceTests(unittest.TestCase):
 
         self.assertTrue(repository.health_checked)
 
+    def test_recent_memories_uses_repository_order(self) -> None:
+        records = [
+            MemoryRecord(
+                memory_id="mem-recent-01",
+                user_id="user-7",
+                image_key="captures/recent-01.jpg",
+                image_url=None,
+                captured_at="2026-05-01T08:00:00Z",
+                caption="wallet on shelf",
+                scene_summary=None,
+                detected_objects=["wallet"],
+                tags=["home"],
+                ocr_text=None,
+                note=None,
+                position_hint="on shelf",
+                location=MemoryLocation(name="bedroom"),
+            ),
+            MemoryRecord(
+                memory_id="mem-recent-02",
+                user_id="user-7",
+                image_key="captures/recent-02.jpg",
+                image_url=None,
+                captured_at="2026-05-02T08:00:00Z",
+                caption="earbuds on desk",
+                scene_summary=None,
+                detected_objects=["earbuds"],
+                tags=["workspace"],
+                ocr_text=None,
+                note=None,
+                position_hint="on desk",
+                location=MemoryLocation(name="workspace"),
+            ),
+        ]
+        repository = FakeMemoryRepository(records)
+        service = MemoryQueryService(repository, default_top_k=5)
+
+        items = service.recent_memories("user-7", 10)
+
+        self.assertEqual(repository.last_user_id, "user-7")
+        self.assertEqual(repository.last_limit, 10)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].memory_id, "mem-recent-01")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,19 @@ export type MemorySearchHit = {
   tags: string[];
 };
 
+export type MemoryRecentItem = {
+  memoryId: string;
+  imageKey?: string | null;
+  imageUrl?: string | null;
+  capturedAt?: string | null;
+  caption?: string | null;
+  sceneSummary?: string | null;
+  positionHint?: string | null;
+  location: MemoryLocation;
+  detectedObjects: string[];
+  tags: string[];
+};
+
 export type MemoryChatResponse = {
   answer: string;
   answerMode: string;
@@ -33,6 +46,18 @@ export type MemoryChatResponse = {
   citedMemoryIds: string[];
   confidence?: number | null;
   reason?: string | null;
+};
+
+export type MemorySearchResponse = {
+  query: string;
+  totalHits: number;
+  hits: MemorySearchHit[];
+};
+
+export type MemoryRecentResponse = {
+  userId: string;
+  totalItems: number;
+  items: MemoryRecentItem[];
 };
 
 export type MediaAccessUrl = {
@@ -407,6 +432,28 @@ export const chatWithMemories = async ({
   );
 };
 
+export const searchMemories = async ({
+  authToken,
+  userId,
+  query,
+  topK = 10,
+}: {
+  authToken: string;
+  userId: string;
+  query: string;
+  topK?: number;
+}) => {
+  return postJson<MemorySearchResponse>(
+    '/search',
+    {
+      userId,
+      query,
+      topK,
+    },
+    { authToken }
+  );
+};
+
 export const issueMediaAccessUrls = async ({
   authToken,
   userId,
@@ -427,6 +474,36 @@ export const issueMediaAccessUrls = async ({
     },
     { authToken }
   );
+};
+
+export const listRecentMemories = async ({
+  authToken,
+  userId,
+  limit = 20,
+}: {
+  authToken: string;
+  userId: string;
+  limit?: number;
+}) => {
+  const query = new URLSearchParams({
+    userId,
+    limit: String(limit),
+  });
+  const response = await fetch(
+    `${API_BASE_URL}/memories/recent?${query.toString()}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<MemoryRecentResponse>;
 };
 
 export const requestMediaUploadAuthorization = async ({

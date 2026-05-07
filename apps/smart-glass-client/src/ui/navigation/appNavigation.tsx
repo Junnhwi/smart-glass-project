@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from './routes';
@@ -81,4 +82,23 @@ export function useAppNavigation() {
     navigate: navigation.navigate,
     goBack: navigation.goBack,
   };
+}
+
+export function useAppRoute<T extends RouteName>() {
+  if (Platform.OS === 'web') {
+    const context = useContext(WebNavigationContext);
+    if (!context?.currentRoute) {
+      throw new Error(
+        'useAppRoute must be used inside a WebNavigationProvider on web.'
+      );
+    }
+
+    return context.currentRoute as RouteState<T>;
+  }
+
+  const route = useRoute<RouteProp<RootStackParamList, T>>();
+  return {
+    name: route.name,
+    params: route.params,
+  } as RouteState<T>;
 }

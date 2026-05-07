@@ -48,6 +48,8 @@ from src.api.schemas import (
     MemoryChatResponse,
     MemoryInferenceResultIngestResponse,
     MemoryLocationPayload,
+    MemoryRecentItemPayload,
+    MemoryRecentResponse,
     MemorySearchHitPayload,
     MemorySearchRequest,
     MemorySearchResponse,
@@ -62,7 +64,7 @@ from src.api.schemas import (
     UserDeviceStatusResponse,
     VlmInferenceResultPayload,
 )
-from src.database.memory_store import build_default_memory_store_client
+from src.database.memory_store import MemoryRecord, build_default_memory_store_client
 from src.modules.auth.oauth import build_default_google_oauth_service
 from src.modules.auth.security import (
     RateLimitExceededError,
@@ -119,6 +121,21 @@ def _map_hit(hit: SearchHit) -> MemorySearchHitPayload:
         location=MemoryLocationPayload(**hit.memory.location.to_dict()),
         detectedObjects=hit.memory.detected_objects,
         tags=hit.memory.tags,
+    )
+
+
+def _map_memory_record(record: MemoryRecord) -> MemoryRecentItemPayload:
+    return MemoryRecentItemPayload(
+        memoryId=record.memory_id,
+        imageKey=record.image_key,
+        imageUrl=record.image_url,
+        capturedAt=record.captured_at,
+        caption=record.caption,
+        sceneSummary=record.scene_summary,
+        positionHint=record.position_hint,
+        location=MemoryLocationPayload(**record.location.to_dict()),
+        detectedObjects=record.detected_objects,
+        tags=record.tags,
     )
 
 
@@ -1647,6 +1664,35 @@ def create_app() -> FastAPI:
             citedMemoryIds=answer_result.cited_memory_ids,
             confidence=answer_result.confidence,
             reason=answer_result.reason,
+        )
+
+    @app.get("/memories/recent", response_model=MemoryRecentResponse)
+    def list_recent_memories(
+        request: Request,
+        userId: str,
+        limit: int = 20,
+    ) -> MemoryRecentResponse:
+        user_id = resolve_authenticated_user(request, userId)
+        try:
+            memory_query_service = _get_memory_query_service(request)
+            records = memory_query_service.recent_memories(
+                user_id=user_id,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Memory query backend unavailable: {exc}",
+            ) from exc
+
+        return MemoryRecentResponse(
+            userId=user_id,
+            totalItems=len(records),
+            items=[_map_memory_record(record) for record in records],
         )
 
     return app

@@ -568,7 +568,6 @@ class AuthService:
             raise PermissionError("Access token has been revoked")
 
         user_id = _normalize_text(payload.get("sub"))
-        role = _ensure_role(payload.get("role"))
         session_id = _normalize_text(payload.get("sid")) or None
         if not user_id:
             raise PermissionError("Access token subject is missing")
@@ -578,10 +577,11 @@ class AuthService:
             raise PermissionError("Authenticated user does not exist")
         if _ensure_status(user.status) != "active":
             raise PermissionError("The account is not active")
+        current_role = _ensure_role(user.role)
 
         return AuthenticatedPrincipal(
             user_id=user_id,
-            role=role,
+            role=current_role,
             token_type=ACCESS_TOKEN_TYPE,
             session_id=session_id,
             token_jti=token_jti or None,
