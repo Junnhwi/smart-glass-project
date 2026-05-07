@@ -15,17 +15,47 @@ from typing import Any
 
 DEMO_AUTH_TOKEN_PREFIX = "demo-user:"
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8002"
+DEFAULT_IMAGE_PATH = "apps/inference-server/sample_data/KakaoTalk_20260406_114213285.png"
 DEFAULT_QUERY_BY_STEM = {
     "wallet": "wallet",
     "key": "key",
     "keys": "key",
+}
+METADATA_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "near",
+    "next",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+    "있다",
+    "있는",
+    "위",
+    "옆",
+    "근처",
+    "사진",
+    "장면",
 }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the second integration-test capture flow against api-server: "
+            "Run the device-auth capture smoke flow against api-server: "
             "user registration, device registration, upload authorization, "
             "direct upload, capture registration, task polling, and chat/search validation."
         )
@@ -33,8 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "image_path",
         nargs="?",
-        default="apps/inference-server/sample_data/key_1.jpg",
-        help="Image file to upload. Defaults to apps/inference-server/sample_data/key_1.jpg",
+        default=DEFAULT_IMAGE_PATH,
+        help=f"Image file to upload. Defaults to {DEFAULT_IMAGE_PATH}",
     )
     parser.add_argument(
         "--api-base-url",
@@ -54,7 +84,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--query",
         default="",
-        help="Search/chat query to verify stored memory. Defaults to a value inferred from the image file name.",
+        help=(
+            "Search/chat query to verify stored memory. When omitted, the script "
+            "uses metadata stored from the actual VLM result instead of the image file name."
+        ),
     )
     parser.add_argument(
         "--poll-timeout-sec",
@@ -81,6 +114,144 @@ def infer_query(image_path: Path, explicit_query: str) -> str:
         if token in stem:
             return query
     return stem.replace("_", " ").replace("-", " ").strip() or "photo"
+
+
+def normalize_query_candidate(value: Any) -> str:
+    normalized = " ".join(str(value or "").replace("_", " ").replace("-", " ").split())
+    return normalized.strip(" ,.;:()[]{}\"'")
+
+
+def append_candidate(candidates: list[str], value: Any) -> None:
+    candidate = normalize_query_candidate(value)
+    if not candidate:
+        return
+    lowered = candidate.lower()
+    if lowered in METADATA_QUERY_STOPWORDS:
+        return
+    if len(candidate) <= 1 and not ("\uac00" <= candidate <= "\ud7a3"):
+        return
+    if candidate not in candidates:
+        candidates.append(candidate)
+
+
+def append_text_candidates(candidates: list[str], value: Any, *, max_terms: int = 8) -> None:
+    text = normalize_query_candidate(value)
+    if not text:
+        return
+
+    append_candidate(candidates, text)
+    for raw_token in text.replace("/", " ").split():
+        token = normalize_query_candidate(raw_token)
+        if len(token) < 2:
+            continue
+        append_candidate(candidates, token)
+        if len(candidates) >= max_terms:
+            break
+
+
+def metadata_query_candidates(memory_item: dict[str, Any] | None) -> list[str]:
+    candidates: list[str] = []
+    if not memory_item:
+        return candidates
+
+    for field_name in ("detectedObjects", "tags"):
+        values = memory_item.get(field_name) or []
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            append_candidate(candidates, value)
+
+    append_text_candidates(candidates, memory_item.get("positionHint"), max_terms=12)
+    location = memory_item.get("location") or {}
+    if isinstance(location, dict):
+        append_candidate(candidates, location.get("name"))
+        append_candidate(candidates, location.get("address"))
+
+    append_text_candidates(candidates, memory_item.get("caption"), max_terms=18)
+    append_text_candidates(candidates, memory_item.get("sceneSummary"), max_terms=24)
+    return candidates
+
+
+def hit_memory_ids(search_payload: dict[str, Any]) -> set[str]:
+    hits = search_payload.get("hits") or []
+    if not isinstance(hits, list):
+        return set()
+    return {
+        str(hit.get("memoryId") or "").strip()
+        for hit in hits
+        if isinstance(hit, dict) and str(hit.get("memoryId") or "").strip()
+    }
+
+
+def choose_metadata_query(
+    *,
+    api_base_url: str,
+    user_id: str,
+    headers: dict[str, str],
+    target_memory_id: str,
+    explicit_query: str,
+    fallback_query: str,
+) -> tuple[str, dict[str, Any], dict[str, Any] | None, list[str]]:
+    recent_status, recent_payload = http_get_json(
+        f"{api_base_url}/memories/recent?"
+        + urllib.parse.urlencode({"userId": user_id, "limit": "10"}),
+        headers=headers,
+    )
+    recent_result = require_success(
+        recent_status,
+        recent_payload,
+        "recent memory metadata lookup",
+    )
+    recent_items = recent_result.get("items") or []
+    target_memory = None
+    if isinstance(recent_items, list):
+        for item in recent_items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("memoryId") or "").strip() == target_memory_id:
+                target_memory = item
+                break
+        if target_memory is None and recent_items:
+            first_item = recent_items[0]
+            if isinstance(first_item, dict):
+                target_memory = first_item
+
+    candidates: list[str] = []
+    append_candidate(candidates, explicit_query)
+    for candidate in metadata_query_candidates(target_memory):
+        append_candidate(candidates, candidate)
+    append_candidate(candidates, fallback_query)
+
+    search_attempts: list[dict[str, Any]] = []
+    for candidate in candidates:
+        search_status, search_payload = http_json(
+            "POST",
+            f"{api_base_url}/search",
+            payload={"userId": user_id, "query": candidate, "topK": 3},
+            headers=headers,
+        )
+        search_result = require_success(
+            search_status,
+            search_payload,
+            f"search validation for query {candidate!r}",
+        )
+        search_attempts.append(
+            {
+                "query": candidate,
+                "totalHits": search_result.get("totalHits"),
+                "memoryIds": sorted(hit_memory_ids(search_result)),
+            }
+        )
+        if int(search_result.get("totalHits") or 0) <= 0:
+            continue
+        if not target_memory_id or target_memory_id in hit_memory_ids(search_result):
+            return candidate, search_result, target_memory, candidates
+
+    raise RuntimeError(
+        "search returned zero relevant hits after successful memory store. "
+        "Tried metadata-derived queries:\n"
+        + json.dumps(search_attempts, ensure_ascii=False, indent=2)
+    )
 
 
 def infer_content_type(image_path: Path) -> str:
@@ -176,11 +347,15 @@ def main() -> int:
     if not device_id:
         raise SystemExit("--device-id must not be blank")
 
-    query = infer_query(image_path, args.query)
+    fallback_query = infer_query(image_path, "")
+    explicit_query = args.query.strip()
     content_type = infer_content_type(image_path)
 
     print_step(f"image={image_path}")
-    print_step(f"user_id={user_id} device_id={device_id} query={query!r}")
+    print_step(
+        f"user_id={user_id} device_id={device_id} "
+        f"query={'metadata-derived' if not explicit_query else explicit_query!r}"
+    )
 
     health_status, health_payload = http_get_json(f"{api_base_url}/health/ready")
     require_success(health_status, health_payload, "api-server readiness check")
@@ -286,20 +461,19 @@ def main() -> int:
     print_step("worker completed and memory was stored")
 
     headers = bearer_headers(user_id)
-
-    search_status, search_payload = http_json(
-        "POST",
-        f"{api_base_url}/search",
-        payload={"userId": user_id, "query": query, "topK": 3},
+    target_memory_id = str(upload.get("memoryId") or capture_payload.get("memoryId") or "").strip()
+    query, search_result, target_memory, query_candidates = choose_metadata_query(
+        api_base_url=api_base_url,
+        user_id=user_id,
         headers=headers,
+        target_memory_id=target_memory_id,
+        explicit_query=explicit_query,
+        fallback_query=fallback_query,
     )
-    search_result = require_success(search_status, search_payload, "search validation")
-    if int(search_result.get("totalHits") or 0) <= 0:
-        raise RuntimeError(
-            "search returned zero hits after successful memory store:\n"
-            + json.dumps(search_result, ensure_ascii=False, indent=2)
-        )
-    print_step(f"search validation passed total_hits={search_result['totalHits']}")
+    print_step(
+        f"search validation passed query={query!r} "
+        f"total_hits={search_result['totalHits']}"
+    )
 
     chat_status, chat_payload = http_json(
         "POST",
@@ -320,8 +494,12 @@ def main() -> int:
         "userId": user_id,
         "deviceId": device_id,
         "query": query,
+        "querySource": "explicit" if explicit_query else "stored_metadata",
+        "queryCandidates": query_candidates,
         "imagePath": str(image_path),
         "imageKey": image_key,
+        "memoryId": target_memory_id,
+        "storedMetadata": target_memory,
         "taskId": task_id,
         "taskStatus": final_status,
         "memoryStoreStatus": memory_store.get("status"),
