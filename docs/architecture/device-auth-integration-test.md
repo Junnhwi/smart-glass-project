@@ -33,6 +33,12 @@ From the repository root:
 python scripts/run-device-auth-flow.py
 ```
 
+The default image is:
+
+```text
+apps/inference-server/sample_data/KakaoTalk_20260406_114213285.png
+```
+
 Optional custom image:
 
 ```bash
@@ -49,6 +55,13 @@ python scripts/run-device-auth-flow.py \
   --query key
 ```
 
+When `--query` is omitted, the script does not infer the verification query
+from the image file name. After memory persistence succeeds, it reads
+`/memories/recent`, finds the stored memory, builds query candidates from the
+actual VLM metadata (`detectedObjects`, `tags`, `positionHint`, `caption`,
+`sceneSummary`), and uses the first query that returns the stored memory from
+`/search`.
+
 ## Success Criteria
 
 The script succeeds only when all of these pass:
@@ -57,5 +70,6 @@ The script succeeds only when all of these pass:
 - direct object-storage upload succeeds
 - capture task reaches `completed`
 - memory store status is `success`
-- `/search` returns at least one hit
-- `/chat` returns a non-empty answer
+- `/memories/recent` returns the stored memory metadata
+- metadata-derived `/search` query returns the stored memory
+- `/chat` returns a non-empty answer for the selected query

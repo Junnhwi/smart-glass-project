@@ -3,11 +3,63 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
 
 jobs:
-  placeholder:
+  api-server:
+    name: api-server unittest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "Set up monorepo CI here"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api-server/requirements.txt
+
+      - name: Install API dependencies
+        run: python -m pip install -r apps/api-server/requirements.txt
+
+      - name: Run API unit tests
+        working-directory: apps/api-server
+        run: python -m unittest discover -s tests
+
+  smoke-script:
+    name: smoke script syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile device auth smoke script
+        run: python -m py_compile scripts/run-device-auth-flow.py
+
+  smart-glass-client:
+    name: smart-glass-client typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Typecheck smart-glass-client
+        run: npx tsc --noEmit -p apps/smart-glass-client/tsconfig.json
