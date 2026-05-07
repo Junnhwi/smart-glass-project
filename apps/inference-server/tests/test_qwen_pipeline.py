@@ -104,6 +104,48 @@ class QwenPipelineTestCase(unittest.TestCase):
         self.assertIn("Apple", result["metadata"]["tags"])
         self.assertEqual(mocked_detail.call_count, 3)
 
+        pipeline_meta = result["pipeline_output"]["pipeline_meta"]
+        self.assertEqual(
+            pipeline_meta["stage_call_counts"],
+            {
+                "object_list": 1,
+                "scene_summary": 1,
+                "object_detail": 3,
+                "nearby_candidate_collection": 1,
+                "deduplicate": 1,
+                "missing_object_check": 1,
+            },
+        )
+        self.assertEqual(
+            set(pipeline_meta["stage_timings_sec"]),
+            set(pipeline_meta["stage_call_counts"]),
+        )
+        self.assertIn(
+            pipeline_meta["slowest_stage"],
+            pipeline_meta["stage_timings_sec"],
+        )
+        self.assertGreaterEqual(pipeline_meta["stage_total_sec"], 0.0)
+        self.assertEqual(
+            pipeline_meta["candidate_counts"],
+            {
+                "initial_objects": 2,
+                "initial_details": 2,
+                "nearby_candidates": 0,
+                "deduped_objects": 2,
+                "missing_objects": 1,
+                "final_objects": 3,
+            },
+        )
+        self.assertEqual(
+            pipeline_meta["image_pixels"],
+            {
+                "original": 4096,
+                "processed": 4096,
+                "max_allowed": spec.max_image_pixels,
+                "downscaled": False,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

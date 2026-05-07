@@ -147,6 +147,42 @@ class VlmContractErrorHandlingTestCase(unittest.TestCase):
         self.assertEqual(result["errorCode"], "inference_timeout")
         self.assertTrue(result["retryable"])
 
+    def test_build_vlm_error_result_accepts_error_details(self) -> None:
+        result = build_vlm_error_result(
+            request_id="req-3",
+            user_id="user-3",
+            image_key="captures/sample.jpg",
+            error=TimeoutError("timed out"),
+            model_key="unknown-model",
+            quantization="none",
+            dtype_name="float16",
+            error_code="inference_timeout",
+            retryable=True,
+            error_details={
+                "category": " timeout ",
+                "reason": "inference_timeout",
+                "exceptionType": "TimeoutError",
+                "retryable": True,
+                "source": " inference_worker ",
+                "taskTimeLimit": {
+                    "softSec": "120",
+                    "hardSec": 150,
+                },
+            },
+        )
+
+        self.assertEqual(
+            result["errorDetails"],
+            {
+                "category": "timeout",
+                "reason": "inference_timeout",
+                "exceptionType": "TimeoutError",
+                "retryable": True,
+                "source": "inference_worker",
+                "taskTimeLimit": {"softSec": 120, "hardSec": 150},
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,47 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+# 광록님의 성능 측정 필드와 팀원분의 상세 정보 필드가 모두 통합된 리스트입니다!
+LOG_EXTRA_FIELDS = (
+    "request_id",
+    "method",
+    "path",
+    "status_code",
+    "duration_ms",
+    "client_ip",
+    "task_name",
+    "image_key",
+    "memory_id",
+    "user_id",
+    "model_key",
+    "model_id",
+    "model_mode",
+    "quantization",
+    "dtype_name",
+    "settings_source",
+    "soft_time_limit_sec",
+    "hard_time_limit_sec",
+    "fallback_model_key",
+    "fallback_triggered",
+    "latency_sec",
+    "load_time_sec",
+    "queue_wait_sec",
+    "storage_read_sec",
+    "image_decode_sec",
+    "model_inference_sec",
+    "task_latency_sec",
+    "peak_memory_mb",
+    "retry_count",
+    "next_retry_count",
+    "max_retries",
+    "retry_delay_sec",
+    "retry_backoff_multiplier",
+    "retry_max_delay_sec",
+    "retryable",
+    "failure_category",
+    "error_code",
+)
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -14,22 +55,8 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
 
-        for key in (
-            "request_id",
-            "method",
-            "path",
-            "status_code",
-            "duration_ms",
-            "client_ip",
-            "task_name",
-            "image_key",
-            "user_id",
-            "model_key",
-            "quantization",
-            "latency_sec",
-            "peak_memory_mb",
-            "error_code",
-        ):
+        # 팀원분이 정리하신 깔끔한 반복문 구조를 사용합니다
+        for key in LOG_EXTRA_FIELDS:
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value

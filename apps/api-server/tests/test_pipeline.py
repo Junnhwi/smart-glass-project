@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 
 from src.api.intake import build_capture_upload_response, build_worker_task_kwargs
 from src.api.pipeline import (
     CapturePipelineError,
     CapturePipelineSettings,
     CaptureProcessingPipeline,
+    CaptureTaskStatus,
     CaptureTaskOutcome,
 )
 from src.api.schemas import CaptureUploadRequest
@@ -19,6 +21,14 @@ class RecordingTaskTransport:
         self.last_kwargs: dict[str, object] | None = None
         self.last_timeout_sec: float | None = None
 
+    def submit(
+        self,
+        *,
+        task_kwargs: dict[str, object],
+    ) -> str:
+        self.last_kwargs = task_kwargs
+        return self.outcome.task_id or "task-123"
+
     def submit_and_wait(
         self,
         *,
@@ -28,6 +38,14 @@ class RecordingTaskTransport:
         self.last_kwargs = task_kwargs
         self.last_timeout_sec = timeout_sec
         return self.outcome
+
+    def get_status(self, task_id: str) -> CaptureTaskStatus:
+        return CaptureTaskStatus(
+            task_id=task_id,
+            state="SUCCESS",
+            result=self.outcome.result,
+            error=None,
+        )
 
 
 class RecordingMemoryStoreClient:
@@ -61,6 +79,7 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
             requestId="req-10",
             memoryId="mem-10",
             userId="user-10",
+            deviceId="glass-10",
             taskType="metadata",
             capturedAt="2026-04-07T08:00:00Z",
             fileName="glass-photo.jpg",
@@ -101,6 +120,22 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
         }
         return worker_result, expected_kwargs
 
+    def _assert_task_kwargs_match(
+        self,
+        actual: dict[str, object] | None,
+        expected: dict[str, object],
+    ) -> None:
+        self.assertIsNotNone(actual)
+        actual_static = dict(actual or {})
+        expected_static = dict(expected)
+        enqueued_at = actual_static.pop("enqueued_at", None)
+        expected_static.pop("enqueued_at", None)
+
+        self.assertEqual(actual_static, expected_static)
+        self.assertIsInstance(enqueued_at, str)
+        parsed = datetime.fromisoformat(enqueued_at.replace("Z", "+00:00"))
+        self.assertIsNotNone(parsed.tzinfo)
+
     def test_pipeline_dispatches_worker_and_skips_memory_storage_when_disabled(self) -> None:
         payload = self._build_payload()
         worker_result, expected_kwargs = self._build_worker_result(payload)
@@ -120,7 +155,7 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
 
         response = pipeline.process(payload)
 
-        self.assertEqual(task_transport.last_kwargs, expected_kwargs)
+        self._assert_task_kwargs_match(task_transport.last_kwargs, expected_kwargs)
         self.assertEqual(task_transport.last_timeout_sec, 15.0)
         self.assertEqual(response.status, "completed")
         self.assertEqual(response.capture.captureId, "capture-10")
@@ -128,6 +163,57 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
         self.assertEqual(response.worker.status, "success")
         self.assertEqual(response.memoryStore.status, "skipped")
         self.assertEqual(response.memoryStore.backend, "disabled")
+
+    def test_pipeline_submit_enqueues_without_waiting_for_worker_result(self) -> None:
+        payload = self._build_payload()
+        worker_result, expected_kwargs = self._build_worker_result(payload)
+        task_transport = RecordingTaskTransport(
+            CaptureTaskOutcome(task_id="task-123", result=worker_result)
+        )
+        pipeline = CaptureProcessingPipeline(
+            settings=CapturePipelineSettings(
+                broker_url="redis://redis:6379/0",
+                result_backend_url="redis://redis:6379/1",
+                enable_memory_store=False,
+            ),
+            task_transport=task_transport,
+            memory_store_client=None,
+        )
+
+        task_id, capture = pipeline.submit(payload)
+
+        self.assertEqual(task_id, "task-123")
+        self.assertEqual(capture.captureId, "capture-10")
+        self._assert_task_kwargs_match(task_transport.last_kwargs, expected_kwargs)
+        self.assertIsNone(task_transport.last_timeout_sec)
+
+    def test_pipeline_polling_status_persists_memory_when_worker_succeeded(self) -> None:
+        payload = self._build_payload()
+        worker_result, _ = self._build_worker_result(payload)
+        memory_store = RecordingMemoryStoreClient(
+            MemoryStoreOutcome(stored_count=1, total_user_memories={"user-10": 1})
+        )
+        pipeline = CaptureProcessingPipeline(
+            settings=CapturePipelineSettings(
+                broker_url="redis://redis:6379/0",
+                result_backend_url="redis://redis:6379/1",
+                enable_memory_store=True,
+                database_url="postgresql://postgres:postgres@postgres:5432/smart_glass",
+            ),
+            task_transport=RecordingTaskTransport(
+                CaptureTaskOutcome(task_id="task-123", result=worker_result)
+            ),
+            memory_store_client=memory_store,
+        )
+
+        response_status, memory_store_payload = pipeline.build_memory_store_payload(
+            worker_result
+        )
+
+        self.assertEqual(response_status, "completed")
+        self.assertEqual(memory_store.last_worker_result, worker_result)
+        self.assertEqual(memory_store_payload.status, "success")
+        self.assertEqual(memory_store_payload.storedCount, 1)
 
     def test_pipeline_dispatches_worker_and_persists_memory_when_enabled(self) -> None:
         payload = self._build_payload()
@@ -152,7 +238,7 @@ class CaptureProcessingPipelineTests(unittest.TestCase):
 
         response = pipeline.process(payload)
 
-        self.assertEqual(task_transport.last_kwargs, expected_kwargs)
+        self._assert_task_kwargs_match(task_transport.last_kwargs, expected_kwargs)
         self.assertEqual(task_transport.last_timeout_sec, 15.0)
         self.assertEqual(memory_store.last_worker_result, worker_result)
         self.assertEqual(response.status, "completed")

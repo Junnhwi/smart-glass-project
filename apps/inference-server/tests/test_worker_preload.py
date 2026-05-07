@@ -27,7 +27,8 @@ class WorkerPreloadTestCase(unittest.TestCase):
                     "src.worker_preload.get_qwen_vlm_components",
                     return_value=("cuda", object(), fake_model, object()),
                 ):
-                    payload = preload_configured_model()
+                    with patch("src.worker_preload.logger.info") as mocked_logger_info:
+                        payload = preload_configured_model()
 
             self.assertEqual(payload["status"], "ready")
             self.assertEqual(payload["model_key"], "qwen2.5-vl-7b")
@@ -44,6 +45,10 @@ class WorkerPreloadTestCase(unittest.TestCase):
             self.assertEqual(
                 saved["executionPolicy"]["selectedModelKey"], "qwen2.5-vl-7b"
             )
+            log_extra = mocked_logger_info.call_args.kwargs["extra"]
+            self.assertEqual(log_extra["model_key"], "qwen2.5-vl-7b")
+            self.assertEqual(log_extra["model_id"], "Qwen/Qwen2.5-VL-7B-Instruct")
+            self.assertEqual(log_extra["dtype_name"], "float16")
 
     def test_preload_writes_error_status_when_loader_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -61,12 +66,19 @@ class WorkerPreloadTestCase(unittest.TestCase):
                     "src.worker_preload.get_qwen_vlm_components",
                     side_effect=RuntimeError("OOM"),
                 ):
-                    with self.assertRaises(RuntimeError):
-                        preload_configured_model()
+                    with patch(
+                        "src.worker_preload.logger.exception"
+                    ) as mocked_logger_exception:
+                        with self.assertRaises(RuntimeError):
+                            preload_configured_model()
 
             saved = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["status"], "error")
             self.assertEqual(saved["error"], "OOM")
+            log_extra = mocked_logger_exception.call_args.kwargs["extra"]
+            self.assertEqual(log_extra["model_key"], "qwen2.5-vl-7b")
+            self.assertEqual(log_extra["model_id"], "Qwen/Qwen2.5-VL-7B-Instruct")
+            self.assertEqual(log_extra["dtype_name"], "float16")
 
     def test_preload_uses_serving_profile_when_runtime_env_is_absent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

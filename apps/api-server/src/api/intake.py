@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
-import re
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
 from uuid import uuid4
 
 from src.api.schemas import (
@@ -16,6 +14,11 @@ from src.api.schemas import (
     VlmGenerationConfigPayload,
     VlmInferenceRequestPayload,
     VlmSourceImagePayload,
+)
+from src.modules.media.object_keys import (
+    build_capture_object_key,
+    normalize_capture_object_key_for_user,
+    object_key_file_name,
 )
 
 
@@ -33,24 +36,10 @@ def _ensure_identifier(prefix: str, explicit: str | None) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
 
 
-def _sanitize_path_segment(value: str | None, fallback: str) -> str:
-    normalized = _normalize_text(value)
-    if not normalized:
-        return fallback
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", normalized)
-    cleaned = cleaned.strip("._-")
-    return cleaned or fallback
-
-
 def _capture_timestamp(captured_at: str | None) -> str:
     normalized = _normalize_text(captured_at)
     if not normalized:
-        return (
-            datetime.now(timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
+        return _utc_now_isoformat()
 
     candidate = normalized.replace("Z", "+00:00")
     try:
@@ -69,13 +58,13 @@ def _capture_timestamp(captured_at: str | None) -> str:
     )
 
 
-def _date_path(captured_at: str) -> str:
-    candidate = captured_at.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(candidate)
-    except ValueError:
-        parsed = datetime.now(timezone.utc)
-    return parsed.astimezone(timezone.utc).strftime("%Y/%m/%d")
+def _utc_now_isoformat() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _guess_content_type(file_name: str | None, explicit: str | None) -> str | None:
@@ -95,23 +84,33 @@ def _guess_content_type(file_name: str | None, explicit: str | None) -> str | No
 def _resolve_source_image(payload: CaptureUploadRequest, capture_id: str, captured_at: str) -> CaptureSourceImageSnapshot:
     source_image = payload.sourceImage or CaptureSourceImagePayload()
     explicit_image_key = _normalize_text(source_image.imageKey) or _normalize_text(payload.imageKey)
+    normalized_image_key = (
+        normalize_capture_object_key_for_user(
+            explicit_image_key,
+            user_id=payload.userId,
+        )
+        if explicit_image_key
+        else None
+    )
     explicit_image_url = _normalize_text(source_image.imageUrl) or _normalize_text(payload.imageUrl)
     explicit_content_type = _normalize_text(source_image.contentType) or _normalize_text(payload.contentType)
 
     file_name = _normalize_text(payload.fileName)
-    if not file_name and explicit_image_key:
-        file_name = PurePosixPath(explicit_image_key).name or None
+    if not file_name and normalized_image_key:
+        file_name = object_key_file_name(normalized_image_key)
 
     if not file_name:
         file_name = "capture.jpg"
 
-    if explicit_image_key:
-        image_key = explicit_image_key
+    if normalized_image_key:
+        image_key = normalized_image_key
     else:
-        safe_user_id = _sanitize_path_segment(payload.userId, "user")
-        safe_file_name = _sanitize_path_segment(file_name, "capture.jpg")
-        safe_capture_id = _sanitize_path_segment(capture_id, "capture")
-        image_key = f"captures/{safe_user_id}/{_date_path(captured_at)}/{safe_capture_id}-{safe_file_name}"
+        image_key = build_capture_object_key(
+            user_id=payload.userId,
+            captured_at=captured_at,
+            capture_id=capture_id,
+            file_name=file_name,
+        )
 
     content_type = _guess_content_type(file_name, explicit_content_type)
     return CaptureSourceImageSnapshot(
@@ -169,6 +168,8 @@ def build_capture_upload_response(
 
 def build_worker_task_kwargs(
     response: CaptureUploadResponse,
+    *,
+    enqueued_at: str | None = None,
 ) -> dict[str, object]:
     return {
         "image_key": response.sourceImage.imageKey,
@@ -178,4 +179,5 @@ def build_worker_task_kwargs(
         "image_url": response.sourceImage.imageUrl,
         "request_id": response.requestId,
         "task_type": response.taskType,
+        "enqueued_at": _normalize_text(enqueued_at) or _utc_now_isoformat(),
     }

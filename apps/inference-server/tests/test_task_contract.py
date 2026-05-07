@@ -1,12 +1,18 @@
 import io
 import os
 import unittest
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from PIL import Image
 
-from src.queue.tasks import process_vision_inference
+from src.queue.tasks import (
+    _resolve_retry_delay_seconds,
+    _should_retry_task,
+    process_vision_inference,
+)
 from src.storage.s3 import StorageAccessError, StorageNotFoundError, StorageObject
 
 
@@ -43,6 +49,15 @@ def _build_test_image_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _utc_now_isoformat() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
 class TaskContractTestCase(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["STORAGE_BUCKET_NAME"] = "smart-glass-test"
@@ -63,6 +78,11 @@ class TaskContractTestCase(unittest.TestCase):
         ):
             os.environ.pop(name, None)
 
+    def _assert_runtime_metric(self, runtime: dict[str, object], key: str) -> None:
+        self.assertIn(key, runtime)
+        self.assertIsInstance(runtime[key], (int, float))
+        self.assertGreaterEqual(runtime[key], 0)
+
     def test_process_vision_inference_returns_vlm_success_contract(self) -> None:
         with patch(
             "src.queue.tasks.get_storage_service",
@@ -82,14 +102,16 @@ class TaskContractTestCase(unittest.TestCase):
                     "prompt": "a photography of",
                 },
             ):
-                result = process_vision_inference(
-                    image_key="captures/wallet-01.jpg",
-                    user_id="user-1",
-                    memory_id="mem-1",
-                    captured_at="2026-04-04T10:00:00Z",
-                    image_url="https://example.com/captures/wallet-01.jpg",
-                    request_id="req-123",
-                )
+            with patch("src.queue.tasks.logger.info") as mocked_logger_info:
+                    result = process_vision_inference(
+                        image_key="captures/wallet-01.jpg",
+                        user_id="user-1",
+                        memory_id="mem-1",
+                        captured_at="2026-04-04T10:00:00Z",
+                        image_url="https://example.com/captures/wallet-01.jpg",
+                        request_id="req-123",
+                        enqueued_at=_utc_now_isoformat(),
+                    )
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["requestId"], "req-123")
@@ -128,6 +150,21 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["providerMetadata"]["raw"], None)
         self.assertEqual(result["runtime"]["latencySec"], 0.42)
         self.assertEqual(result["runtime"]["peakMemoryMb"], 512.5)
+        log_extra = mocked_logger_info.call_args.kwargs["extra"]
+        self.assertEqual(
+            log_extra["model_id"],
+            "Salesforce/blip-image-captioning-base",
+        )
+        self.assertEqual(log_extra["dtype_name"], "float16")
+        
+        for key in (
+            "queueWaitSec",
+            "storageReadSec",
+            "imageDecodeSec",
+            "modelInferenceSec",
+            "taskLatencySec",
+        ):
+            self._assert_runtime_metric(result["runtime"], key)
 
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
@@ -148,6 +185,11 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["errorCode"], "storage_access_error")
         self.assertEqual(result["message"], "s3 unavailable")
         self.assertTrue(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "storage")
+        self.assertEqual(result["errorDetails"]["reason"], "storage_access_error")
+        self.assertEqual(result["errorDetails"]["exceptionType"], "StorageAccessError")
+        self.assertTrue(result["errorDetails"]["retryable"])
+        self.assertEqual(result["errorDetails"]["source"], "inference_worker")
         self.assertEqual(result["providerMetadata"]["modelKey"], "blip-base")
         self.assertEqual(
             result["providerMetadata"]["executionPolicy"]["selectedModelKey"],
@@ -159,6 +201,10 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(
             result["providerMetadata"]["capabilities"]["sceneSummary"], False
         )
+        self._assert_runtime_metric(result["runtime"], "storageReadSec")
+        self._assert_runtime_metric(result["runtime"], "taskLatencySec")
+        self.assertNotIn("imageDecodeSec", result["runtime"])
+        self.assertNotIn("modelInferenceSec", result["runtime"])
 
     def test_process_vision_inference_marks_missing_source_image_as_non_retryable(
         self,
@@ -177,6 +223,46 @@ class TaskContractTestCase(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorCode"], "source_image_not_found")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "source_image")
+        self.assertEqual(result["errorDetails"]["reason"], "source_image_not_found")
+        self.assertFalse(result["errorDetails"]["retryable"])
+
+    def test_process_vision_inference_marks_invalid_image_as_input_error(self) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(b"not-an-image"),
+        ):
+            result = process_vision_inference(
+                image_key="captures/broken.jpg",
+                user_id="user-1",
+                request_id="req-invalid-image-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "invalid_source_image")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "input")
+        self.assertEqual(result["errorDetails"]["reason"], "invalid_source_image")
+        self.assertFalse(result["errorDetails"]["retryable"])
+
+    def test_process_vision_inference_marks_invalid_object_key_as_non_retryable(
+        self,
+    ) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(
+                ValueError("storage object key must not be blank")
+            ),
+        ):
+            result = process_vision_inference(
+                image_key="   ",
+                user_id="user-1",
+                request_id="req-invalid-key-1",
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errorCode"], "invalid_inference_request")
         self.assertFalse(result["retryable"])
 
     def test_process_vision_inference_marks_timeout_as_retryable_timeout_error(self) -> None:
@@ -197,6 +283,158 @@ class TaskContractTestCase(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorCode"], "inference_timeout")
         self.assertTrue(result["retryable"])
+        self.assertEqual(result["errorDetails"]["category"], "timeout")
+        self.assertEqual(result["errorDetails"]["reason"], "inference_timeout")
+        self.assertEqual(
+            result["errorDetails"]["exceptionType"],
+            "SoftTimeLimitExceeded",
+        )
+        self.assertTrue(result["errorDetails"]["retryable"])
+        self.assertEqual(
+            result["errorDetails"]["taskTimeLimit"],
+            {"softSec": 120, "hardSec": 150},
+        )
+
+    def test_worker_retry_policy_skips_direct_calls(self) -> None:
+        task_request = SimpleNamespace(called_directly=True, retries=0)
+
+        should_retry = _should_retry_task(
+            retryable=True,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertFalse(should_retry)
+
+    def test_worker_retry_policy_allows_retryable_worker_attempt(self) -> None:
+        task_request = SimpleNamespace(called_directly=False, retries=1)
+
+        should_retry = _should_retry_task(
+            retryable=True,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertTrue(should_retry)
+
+    def test_worker_retry_policy_stops_at_max_retries(self) -> None:
+        task_request = SimpleNamespace(called_directly=False, retries=2)
+
+        should_retry = _should_retry_task(
+            retryable=True,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertFalse(should_retry)
+
+    def test_worker_retry_policy_skips_non_retryable_errors(self) -> None:
+        task_request = SimpleNamespace(called_directly=False, retries=0)
+
+        should_retry = _should_retry_task(
+            retryable=False,
+            task_request=task_request,
+            max_retries=2,
+        )
+
+        self.assertFalse(should_retry)
+
+    def test_process_vision_inference_retry_log_includes_decision_fields(self) -> None:
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FailingStorageService(StorageAccessError("s3 unavailable")),
+        ):
+            with patch("src.queue.tasks._should_retry_task", return_value=True):
+                with patch.object(
+                    process_vision_inference,
+                    "retry",
+                    side_effect=Retry("retry scheduled"),
+                ):
+                    with patch("src.queue.tasks.logger.warning") as mocked_warning:
+                        with self.assertRaises(Retry):
+                            process_vision_inference(
+                                image_key="captures/wallet-01.jpg",
+                                user_id="user-1",
+                                request_id="req-retry-log-1",
+                            )
+
+        log_extra = mocked_warning.call_args.kwargs["extra"]
+        self.assertEqual(log_extra["model_id"], "Salesforce/blip-image-captioning-base")
+        self.assertEqual(log_extra["dtype_name"], "float16")
+        self.assertTrue(log_extra["retryable"])
+        self.assertEqual(log_extra["failure_category"], "storage")
+        self.assertEqual(log_extra["retry_count"], 0)
+        self.assertEqual(log_extra["max_retries"], 2)
+        self.assertEqual(log_extra["retry_delay_sec"], 10)
+
+    def test_worker_retry_delay_uses_bounded_backoff(self) -> None:
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                0,
+                base_delay_sec=10,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            10,
+        )
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                1,
+                base_delay_sec=10,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            20,
+        )
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                3,
+                base_delay_sec=10,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            60,
+        )
+
+    def test_worker_retry_delay_keeps_zero_delay_explicit(self) -> None:
+        self.assertEqual(
+            _resolve_retry_delay_seconds(
+                3,
+                base_delay_sec=0,
+                backoff_multiplier=2.0,
+                max_delay_sec=60,
+            ),
+            0,
+        )
+
+    def test_process_vision_inference_schedules_retry_for_worker_attempt(self) -> None:
+        process_vision_inference.request.called_directly = False
+        process_vision_inference.request.retries = 1
+        try:
+            with patch(
+                "src.queue.tasks.get_storage_service",
+                return_value=_FailingStorageService(StorageAccessError("s3 flaky")),
+            ):
+                with patch.object(
+                    process_vision_inference,
+                    "retry",
+                    side_effect=Retry(),
+                ) as mocked_retry:
+                    with self.assertRaises(Retry):
+                        process_vision_inference.run(
+                            image_key="captures/wallet-01.jpg",
+                            user_id="user-1",
+                            request_id="req-retry-1",
+                        )
+
+            self.assertEqual(mocked_retry.call_args.kwargs["countdown"], 20)
+            self.assertIsInstance(
+                mocked_retry.call_args.kwargs["exc"],
+                StorageAccessError,
+            )
+        finally:
+            process_vision_inference.request.called_directly = True
+            process_vision_inference.request.retries = 0
 
     def test_process_vision_inference_routes_qwen_vlm_metadata_to_contract(self) -> None:
         os.environ["VISION_CAPTION_MODEL"] = "qwen2.5-vl-7b"

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from src.database.memory_store import MemoryLocation, MemoryRecord
-from src.modules.media.service import MediaAccessService, S3MediaUrlSigner
+from src.modules.media.service import (
+    MediaAccessService,
+    MediaUrlSignerConfigError,
+    S3MediaUrlSigner,
+)
 
 
 class FakeS3Client:
@@ -102,6 +107,32 @@ class MediaUrlSignerTests(unittest.TestCase):
             ],
         )
 
+    def test_sign_get_object_normalizes_object_key_before_signing(self) -> None:
+        client = FakeS3Client()
+        signer = S3MediaUrlSigner(
+            client=client,
+            default_bucket_name="smart-glass-test",
+            default_expiration_sec=300,
+        )
+
+        result = signer.sign_get_object(" captures//user-1//photo.jpg ")
+
+        self.assertEqual(result.image_key, "captures/user-1/photo.jpg")
+        self.assertEqual(
+            client.calls[0]["Params"]["Key"],
+            "captures/user-1/photo.jpg",
+        )
+
+    def test_sign_get_object_rejects_traversal_key(self) -> None:
+        signer = S3MediaUrlSigner(
+            client=FakeS3Client(),
+            default_bucket_name="smart-glass-test",
+            default_expiration_sec=300,
+        )
+
+        with self.assertRaisesRegex(ValueError, "path traversal"):
+            signer.sign_get_object("captures/user-1/../private.jpg")
+
     def test_sign_get_object_uses_default_expiration(self) -> None:
         client = FakeS3Client()
         signer = S3MediaUrlSigner(
@@ -127,6 +158,48 @@ class MediaUrlSignerTests(unittest.TestCase):
             "expiresInSec must be between 30 and 3600",
         ):
             signer.sign_get_object("captures/user-1/photo.jpg", expires_in_sec=10)
+
+    def test_check_health_requires_bucket_configuration(self) -> None:
+        signer = S3MediaUrlSigner(
+            client=FakeS3Client(),
+            default_expiration_sec=300,
+        )
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(MediaUrlSignerConfigError):
+                signer.check_health()
+
+    def test_sign_put_object_generates_presigned_upload_url(self) -> None:
+        client = FakeS3Client()
+        signer = S3MediaUrlSigner(
+            client=client,
+            default_bucket_name="smart-glass-test",
+            default_expiration_sec=300,
+        )
+
+        result = signer.sign_put_object(
+            "captures/user-1/photo.jpg",
+            content_type="image/jpeg",
+            expires_in_sec=180,
+        )
+
+        self.assertEqual(result.image_key, "captures/user-1/photo.jpg")
+        self.assertEqual(result.expires_in_sec, 180)
+        self.assertIn("https://signed.example.com/", result.access_url)
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "client_method": "put_object",
+                    "Params": {
+                        "Bucket": "smart-glass-test",
+                        "Key": "captures/user-1/photo.jpg",
+                        "ContentType": "image/jpeg",
+                    },
+                    "ExpiresIn": 180,
+                }
+            ],
+        )
 
     def test_media_access_service_lists_gallery_items(self) -> None:
         repository = FakeMediaRepository(
@@ -212,7 +285,7 @@ class MediaUrlSignerTests(unittest.TestCase):
 
         result = service.issue_access_url(
             user_id="user-1",
-            image_key="captures/user-1/photo-1.jpg",
+            image_key=" captures//user-1//photo-1.jpg ",
             expires_in_sec=180,
         )
 

@@ -191,6 +191,28 @@ SKIP_BUILD=0 MODEL_KEY=qwen2.5-vl-7b bash scripts/run-qwen-local-image.sh /absol
 - 도메인별 alias 규칙 보강
 - 최종 운영 기본 모델 결정
 
+## 파이프라인 병목 1차 점검
+
+Qwen multi-stage pipeline은 이제 `pipelineOutput.pipeline_meta`에 단계별 진단값을 포함한다.
+
+추가된 주요 필드:
+
+- `stage_timings_sec`: 단계별 누적 소요 시간
+- `stage_call_counts`: 단계별 호출 횟수
+- `stage_total_sec`: 기록된 단계 시간의 합계
+- `slowest_stage`: 해당 실행에서 가장 오래 걸린 단계
+- `candidate_counts`: object 후보가 단계별로 얼마나 늘거나 줄었는지 보여주는 카운트
+- `image_pixels`: 원본/처리 이미지 픽셀 수와 다운스케일 여부
+
+1차 병목 판단 기준:
+
+- `object_detail` 시간이 크고 호출 횟수가 많으면 object 수가 latency를 밀어 올리는 상황이다.
+- `object_list` 또는 `scene_summary`가 가장 느리면 기본 generation 자체가 병목일 가능성이 높다.
+- `deduplicate` 또는 `missing_object_check`가 커지면 후처리용 VLM 재확인 prompt가 병목 후보가 된다.
+- `image_pixels.downscaled=true`이면 입력 이미지 크기가 latency와 VRAM 사용량에 영향을 준 것으로 해석한다.
+
+`benchmark_qwen_models.py`는 각 case에 `pipelineDiagnostics`를 남기고, 모델별 summary에 `avgStageTimingsSec`와 `slowestStageCounts`를 포함한다. 따라서 실제 GPU benchmark를 돌린 뒤에는 총 latency뿐 아니라 어느 단계가 반복적으로 가장 느린지도 같이 비교할 수 있다.
+
 ## PR에 같이 적으면 좋은 요약
 
 이번 PR은 `AI/` 아래에 있던 Qwen 실험 코드를 직접 편입한 것이 아니라, `apps/inference-server` 구조에 맞는 adapter / parser / task 연결 / Docker smoke test 경로를 추가한 작업이다.
