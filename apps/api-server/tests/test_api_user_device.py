@@ -4,8 +4,10 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+from src.api.auth import build_bearer_authorization_header
 from src.api.main import app
 from src.database.user_registry import DeviceRecord, UserRecord
+from src.modules.auth.service import AuthenticatedPrincipal
 from src.modules.media.service import MediaAccessUrl
 from src.modules.users.service import DeviceAuthorization
 
@@ -15,6 +17,7 @@ class FakeUserDeviceService:
         self.created_users: list[str | None] = []
         self.registered_devices: list[tuple[str, str]] = []
         self.authorized_devices: list[str] = []
+        self.devices_by_user: dict[str, list[DeviceRecord]] = {}
         self.should_fail = False
         self.should_lookup_fail = False
         self.should_conflict = False
@@ -37,16 +40,82 @@ class FakeUserDeviceService:
         if self.should_conflict:
             raise ValueError("deviceId is already registered to another user")
         self.registered_devices.append((user_id, device_id))
-        return DeviceRecord(
+        record = DeviceRecord(
             user_id=user_id,
             device_id=device_id,
             registered_at="2026-05-05T02:05:00Z",
+            status="active",
+            approved_at="2026-05-05T02:05:00Z",
+            updated_at="2026-05-05T02:05:00Z",
         )
+        user_devices = [
+            device
+            for device in self.devices_by_user.get(user_id, [])
+            if device.device_id != device_id
+        ]
+        user_devices.append(record)
+        self.devices_by_user[user_id] = user_devices
+        return record
+
+    def list_devices(self, *, user_id: str) -> list[DeviceRecord]:
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        return list(self.devices_by_user.get(user_id, []))
+
+    def approve_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        devices = self.devices_by_user.get(user_id, [])
+        for index, device in enumerate(devices):
+            if device.device_id != device_id:
+                continue
+            approved = DeviceRecord(
+                user_id=user_id,
+                device_id=device_id,
+                registered_at=device.registered_at,
+                status="active",
+                approved_at="2026-05-05T02:15:00Z",
+                revoked_at=None,
+                updated_at="2026-05-05T02:15:00Z",
+            )
+            devices[index] = approved
+            return approved
+        raise LookupError("deviceId is not registered")
+
+    def revoke_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        devices = self.devices_by_user.get(user_id, [])
+        for index, device in enumerate(devices):
+            if device.device_id != device_id:
+                continue
+            revoked = DeviceRecord(
+                user_id=user_id,
+                device_id=device_id,
+                registered_at=device.registered_at,
+                status="revoked",
+                approved_at=device.approved_at,
+                revoked_at="2026-05-05T02:20:00Z",
+                updated_at="2026-05-05T02:20:00Z",
+            )
+            devices[index] = revoked
+            return revoked
+        raise LookupError("deviceId is not registered")
 
     def authorize_device(self, *, device_id: str) -> DeviceAuthorization:
         if self.should_fail:
             raise RuntimeError("user registry unavailable")
         self.authorized_devices.append(device_id)
+        for devices in self.devices_by_user.values():
+            for device in devices:
+                if device.device_id != device_id:
+                    continue
+                if device.status == "revoked":
+                    return DeviceAuthorization(
+                        status="blocked",
+                        device_id=device_id,
+                        user_id=None,
+                    )
         if self.authorization_status == "blocked":
             return DeviceAuthorization(
                 status="blocked",
@@ -86,22 +155,50 @@ class FakeMediaAccessService:
             expires_in_sec=resolved_expiration,
         )
 
+class FakeAuthService:
+    def authenticate_access_token(self, token: str) -> AuthenticatedPrincipal:
+        if token == "jwt-user-1":
+            return AuthenticatedPrincipal(
+                user_id="user-1",
+                role="user",
+                token_type="access",
+                session_id="session-user-1",
+                token_jti="atk-user-1",
+            )
+        if token == "jwt-admin-1":
+            return AuthenticatedPrincipal(
+                user_id="admin-1",
+                role="admin",
+                token_type="access",
+                session_id="session-admin-1",
+                token_jti="atk-admin-1",
+            )
+        raise PermissionError("Access token is invalid")
+
+    def check_health(self) -> None:
+        pass
+
 
 class ApiServerUserDeviceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_user_device_service_factory = app.state.user_device_service_factory
         self.original_media_access_service_factory = app.state.media_access_service_factory
+        self.original_auth_service_factory = app.state.auth_service_factory
         self.fake_user_device_service = FakeUserDeviceService()
         self.fake_media_access_service = FakeMediaAccessService()
+        self.fake_auth_service = FakeAuthService()
         app.state.user_device_service = self.fake_user_device_service
         app.state.media_access_service = self.fake_media_access_service
+        app.state.auth_service = self.fake_auth_service
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
         app.state.user_device_service = None
         app.state.media_access_service = None
+        app.state.auth_service = None
         app.state.user_device_service_factory = self.original_user_device_service_factory
         app.state.media_access_service_factory = self.original_media_access_service_factory
+        app.state.auth_service_factory = self.original_auth_service_factory
 
     def test_create_user_endpoint_accepts_explicit_identifier(self) -> None:
         response = self.client.post(
@@ -151,6 +248,139 @@ class ApiServerUserDeviceTests(unittest.TestCase):
             self.fake_user_device_service.registered_devices,
             [("user-2", "glass-002")],
         )
+
+    def test_list_user_devices_requires_matching_authenticated_user(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.get(
+            "/users/user-1/devices",
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["userId"], "user-1")
+        self.assertEqual(body["totalDevices"], 1)
+        self.assertEqual(body["items"][0]["deviceId"], "glass-001")
+        self.assertEqual(body["items"][0]["status"], "active")
+
+    def test_list_user_devices_rejects_authenticated_user_mismatch(self) -> None:
+        response = self.client.get(
+            "/users/user-1/devices",
+            headers={"Authorization": build_bearer_authorization_header("user-2")},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not match", response.json()["detail"])
+
+    def test_revoke_user_device_marks_device_as_revoked(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.post(
+            "/users/user-1/devices/glass-001/revoke",
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "revoked")
+        authorization = self.fake_user_device_service.authorize_device(device_id="glass-001")
+        self.assertEqual(authorization.status, "blocked")
+
+    def test_approve_user_device_reactivates_revoked_device(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+        self.fake_user_device_service.revoke_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.post(
+            "/users/user-1/devices/glass-001/approve",
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "active")
+
+    def test_user_device_route_rejects_admin_token(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.get(
+            "/users/user-1/devices",
+            headers={"Authorization": "Bearer jwt-admin-1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not match", response.json()["detail"])
+
+    def test_admin_list_user_devices_allows_admin_scope(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.get(
+            "/admin/users/user-1/devices",
+            headers={"Authorization": "Bearer jwt-admin-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["userId"], "user-1")
+        self.assertEqual(body["totalDevices"], 1)
+        self.assertEqual(body["items"][0]["deviceId"], "glass-001")
+
+    def test_admin_device_route_rejects_non_admin_user(self) -> None:
+        response = self.client.get(
+            "/admin/users/user-1/devices",
+            headers={"Authorization": "Bearer jwt-user-1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("required role", response.json()["detail"])
+
+    def test_admin_revoke_user_device_marks_device_as_revoked(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.post(
+            "/admin/users/user-1/devices/glass-001/revoke",
+            headers={"Authorization": "Bearer jwt-admin-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "revoked")
+
+    def test_admin_approve_user_device_reactivates_revoked_device(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+        self.fake_user_device_service.revoke_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.post(
+            "/admin/users/user-1/devices/glass-001/approve",
+            headers={"Authorization": "Bearer jwt-admin-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "active")
 
     def test_register_device_returns_404_when_user_is_missing(self) -> None:
         self.fake_user_device_service.should_lookup_fail = True
@@ -232,6 +462,25 @@ class ApiServerUserDeviceTests(unittest.TestCase):
         self.assertIsNone(response.json()["userId"])
         self.assertIsNone(response.json()["upload"])
         self.assertEqual(self.fake_user_device_service.authorized_devices, ["glass-999"])
+
+    def test_upload_authorization_returns_blocked_response_for_revoked_device(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+        self.fake_user_device_service.revoke_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.post(
+            "/media/upload-authorizations",
+            json={"deviceId": "glass-001"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["status"], "blocked")
+        self.assertIsNone(response.json()["userId"])
 
     def test_upload_authorization_rejects_invalid_explicit_image_key(self) -> None:
         response = self.client.post(

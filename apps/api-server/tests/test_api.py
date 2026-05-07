@@ -328,6 +328,17 @@ class FakeUserDeviceService:
             raise RuntimeError("user registry unavailable")
 
 
+class FakeAuthService:
+    def __init__(self) -> None:
+        self.health_checked = False
+        self.should_health_fail = False
+
+    def check_health(self) -> None:
+        self.health_checked = True
+        if self.should_health_fail:
+            raise RuntimeError("auth storage unavailable")
+
+
 class ApiServerCaptureIntakeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_internal_service_token = os.environ.get(
@@ -339,11 +350,13 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.fake_media_access_service = FakeMediaAccessService()
         self.fake_memory_store_client = FakeMemoryStoreClient()
         self.fake_user_device_service = FakeUserDeviceService()
+        self.fake_auth_service = FakeAuthService()
         app.state.capture_pipeline = self.fake_pipeline
         app.state.memory_query_service = self.fake_memory_query_service
         app.state.media_access_service = self.fake_media_access_service
         app.state.memory_store_client = self.fake_memory_store_client
         app.state.user_device_service = self.fake_user_device_service
+        app.state.auth_service = self.fake_auth_service
         self.client = TestClient(
             app,
             headers={
@@ -357,6 +370,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         app.state.media_access_service = None
         app.state.memory_store_client = None
         app.state.user_device_service = None
+        app.state.auth_service = None
         if self.original_internal_service_token is None:
             os.environ.pop(INTERNAL_SERVICE_TOKEN_ENV, None)
         else:
@@ -842,10 +856,12 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.json()["checks"]["capturePipeline"], "ok")
         self.assertEqual(response.json()["checks"]["memoryQuery"], "ok")
         self.assertEqual(response.json()["checks"]["mediaAccess"], "ok")
+        self.assertEqual(response.json()["checks"]["auth"], "ok")
         self.assertEqual(response.json()["checks"]["userDevice"], "ok")
         self.assertTrue(self.fake_pipeline.health_checked)
         self.assertTrue(self.fake_memory_query_service.health_checked)
         self.assertTrue(self.fake_media_access_service.health_checked)
+        self.assertTrue(self.fake_auth_service.health_checked)
         self.assertTrue(self.fake_user_device_service.health_checked)
 
     def test_health_ready_returns_503_when_user_device_service_is_unavailable(self) -> None:

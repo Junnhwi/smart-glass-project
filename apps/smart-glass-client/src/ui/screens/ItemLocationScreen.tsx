@@ -1,5 +1,4 @@
 import React from 'react';
-import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View,
@@ -10,6 +9,7 @@ import {
 } from 'react-native';
 
 import { commonStyles } from '../styles/commonStyles';
+import { useAppNavigation } from '../navigation/appNavigation';
 import { colors } from '../styles/colors';
 
 const dummyLocations = [
@@ -21,7 +21,7 @@ const dummyLocations = [
 ];
 
 export default function ItemLocationScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useAppNavigation();
 
   return (
     <SafeAreaView style={commonStyles.screen}>

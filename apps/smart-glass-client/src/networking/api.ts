@@ -159,6 +159,56 @@ export type DeviceRegistrationResponse = {
   registeredAt: string;
 };
 
+export type UserDevice = {
+  userId: string;
+  deviceId: string;
+  status: 'active' | 'revoked';
+  registeredAt: string;
+  approvedAt?: string | null;
+  revokedAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type UserDeviceListResponse = {
+  status: 'ok';
+  userId: string;
+  totalDevices: number;
+  items: UserDevice[];
+};
+
+export type AuthUserPayload = {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: 'user' | 'admin';
+  status: 'active' | 'disabled';
+  createdAt: string;
+  lastLoginAt?: string | null;
+};
+
+export type AuthTokenResponse = {
+  status: 'authenticated';
+  tokenType: 'Bearer';
+  accessToken: string;
+  refreshToken: string;
+  expiresInSec: number;
+  refreshExpiresInSec: number;
+  user: AuthUserPayload;
+};
+
+export type AuthLogoutResponse = {
+  status: 'logged_out';
+  revokedAccessToken: boolean;
+  revokedRefreshToken: boolean;
+};
+
+export type GoogleOauthStartResponse = {
+  provider: 'google';
+  authorizationUrl: string;
+  state: string;
+  expiresAt: string;
+};
+
 const buildErrorMessage = async (response: Response) => {
   const rawText = await response.text();
   if (!rawText) {
@@ -238,6 +288,101 @@ export const ensureUserDeviceRegistration = async ({
     user,
     device,
   };
+};
+
+export const listUserDevices = async ({
+  authToken,
+  userId,
+}: {
+  authToken: string;
+  userId: string;
+}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/devices`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<UserDeviceListResponse>;
+};
+
+export const approveUserDevice = async ({
+  authToken,
+  userId,
+  deviceId,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+}) => {
+  return postJson<UserDevice>(
+    `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/approve`,
+    {},
+    { authToken }
+  );
+};
+
+export const revokeUserDevice = async ({
+  authToken,
+  userId,
+  deviceId,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+}) => {
+  return postJson<UserDevice>(
+    `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/revoke`,
+    {},
+    { authToken }
+  );
+};
+
+export const startGoogleOauth = async ({
+  redirectUri,
+}: {
+  redirectUri: string;
+}) => {
+  return postJson<GoogleOauthStartResponse>('/auth/oauth/google/start', {
+    redirectUri,
+  });
+};
+
+export const exchangeGoogleOauth = async ({
+  handoffCode,
+  deviceId,
+}: {
+  handoffCode: string;
+  deviceId?: string;
+}) => {
+  return postJson<AuthTokenResponse>('/auth/oauth/google/exchange', {
+    handoffCode,
+    deviceId,
+  });
+};
+
+export const logoutAuthSession = async ({
+  authToken,
+  refreshToken,
+}: {
+  authToken?: string | null;
+  refreshToken?: string | null;
+}) => {
+  return postJson<AuthLogoutResponse>(
+    '/auth/logout',
+    {
+      refreshToken: refreshToken || undefined,
+    },
+    { authToken: authToken || undefined }
+  );
 };
 
 export const chatWithMemories = async ({

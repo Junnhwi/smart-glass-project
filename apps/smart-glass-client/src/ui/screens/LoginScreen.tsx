@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { ensureUserDeviceRegistration } from '../../networking/api';
+import {
+  createUser,
+  exchangeGoogleOauth,
+  startGoogleOauth,
+} from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
 import logo from '../icon/logo.png';
 import { colors } from '../styles/colors';
@@ -19,183 +24,366 @@ import { commonStyles } from '../styles/commonStyles';
 
 const DEMO_ACCOUNTS = [
   {
-    label: 'Default Demo',
-    hint: 'Connects the default user to the demo smart-glass device.',
+    label: '기본 데모',
+    hint: '빠르게 확인할 때 사용해요.',
     userId: 'user-1',
-    displayName: 'Default User',
-    deviceId: 'glass-001',
+    displayName: '기본 사용자',
   },
   {
-    label: 'Contract Test',
-    hint: 'Uses the integration account for API contract checks.',
+    label: '계약 테스트',
+    hint: '연동 확인용 계정이에요.',
     userId: 'contract-test-user',
-    displayName: 'Contract Tester',
-    deviceId: 'glass-contract-001',
+    displayName: '계약 테스트 사용자',
   },
 ];
 
+const normalizeText = (value: string | null | undefined) =>
+  String(value ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(' ');
+
+const buildOauthRedirectUri = () => {
+  const baseUrl =
+    Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname}`
+      : 'smart-glass-client://oauth';
+  return new URL(baseUrl).toString();
+};
+
+const parseOauthCallbackUrl = (url: string) => {
+  const parsed = new URL(url);
+  return {
+    handoffCode: normalizeText(parsed.searchParams.get('oauth_code')),
+    oauthError: normalizeText(parsed.searchParams.get('oauth_error')),
+    oauthErrorDescription: normalizeText(
+      parsed.searchParams.get('oauth_error_description')
+    ),
+  };
+};
+
+const clearOauthQueryParamsFromWeb = () => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return;
+  }
+
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.delete('oauth_code');
+  nextUrl.searchParams.delete('oauth_error');
+  nextUrl.searchParams.delete('oauth_error_description');
+  nextUrl.searchParams.delete('provider');
+  window.history.replaceState({}, document.title, nextUrl.toString());
+};
+
 export default function LoginScreen() {
   const { signIn } = useAuth();
-  const [userId, setUserId] = useState(DEMO_ACCOUNTS[0].userId);
-  const [displayName, setDisplayName] = useState(DEMO_ACCOUNTS[0].displayName);
-  const [deviceId, setDeviceId] = useState(DEMO_ACCOUNTS[0].deviceId);
+  const [selectedDemoAccount, setSelectedDemoAccount] = useState(
+    DEMO_ACCOUNTS[0]
+  );
   const [errorMessage, setErrorMessage] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [isDemoSubmitting, setIsDemoSubmitting] = useState(false);
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
 
-  const handleSubmit = async () => {
-    if (isSubmitting) {
+  const signInRef = useRef(signIn);
+  const handledOauthCodeRef = useRef('');
+
+  useEffect(() => {
+    signInRef.current = signIn;
+  }, [signIn]);
+
+  useEffect(() => {
+    const processOauthCallback = async (url: string | null) => {
+      const normalizedUrl = normalizeText(url);
+      if (!normalizedUrl) {
+        return;
+      }
+
+      let callbackPayload: ReturnType<typeof parseOauthCallbackUrl>;
+      try {
+        callbackPayload = parseOauthCallbackUrl(normalizedUrl);
+      } catch {
+        return;
+      }
+
+      if (callbackPayload.oauthError) {
+        setStatusMessage('');
+        setErrorMessage(
+          callbackPayload.oauthErrorDescription ||
+            '구글 로그인을 완료하지 못했어요.'
+        );
+        setIsGoogleSubmitting(false);
+        clearOauthQueryParamsFromWeb();
+        return;
+      }
+
+      if (!callbackPayload.handoffCode) {
+        return;
+      }
+      if (handledOauthCodeRef.current === callbackPayload.handoffCode) {
+        return;
+      }
+      handledOauthCodeRef.current = callbackPayload.handoffCode;
+
+      setIsGoogleSubmitting(true);
+      setErrorMessage('');
+      setStatusMessage('로그인 정보를 확인하고 있어요...');
+
+      try {
+        const response = await exchangeGoogleOauth({
+          handoffCode: callbackPayload.handoffCode,
+        });
+        signInRef.current({
+          userId: response.user.userId,
+          displayName: response.user.displayName,
+          email: response.user.email,
+          authToken: response.accessToken,
+          refreshToken: response.refreshToken,
+          authProvider: 'google',
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : '구글 로그인 처리를 완료하지 못했어요.';
+        setStatusMessage('');
+        setErrorMessage(message);
+        setIsGoogleSubmitting(false);
+      } finally {
+        clearOauthQueryParamsFromWeb();
+      }
+    };
+
+    void (async () => {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        await processOauthCallback(window.location.href);
+        return;
+      }
+      const initialUrl = await Linking.getInitialURL();
+      await processOauthCallback(initialUrl);
+    })();
+
+    const subscription = Linking.addEventListener('url', (event) => {
+      void processOauthCallback(event.url);
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  const handleGoogleSubmit = async () => {
+    if (isDemoSubmitting || isGoogleSubmitting) {
       return;
     }
 
-    const nextUserId = userId.trim();
-    const nextDeviceId = deviceId.trim();
-    if (!nextUserId) {
-      setErrorMessage('User ID is required.');
-      return;
-    }
-    if (!nextDeviceId) {
-      setErrorMessage('Device ID is required.');
-      return;
-    }
-
-    setIsSubmitting(true);
+    setIsGoogleSubmitting(true);
     setErrorMessage('');
+    setStatusMessage('구글 로그인 화면으로 이동할게요...');
 
     try {
-      await ensureUserDeviceRegistration({
-        userId: nextUserId,
-        deviceId: nextDeviceId,
+      const start = await startGoogleOauth({
+        redirectUri: buildOauthRedirectUri(),
       });
+
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.assign(start.authorizationUrl);
+        return;
+      }
+
+      await Linking.openURL(start.authorizationUrl);
+      setStatusMessage('로그인 완료를 기다리고 있어요...');
+      setIsGoogleSubmitting(false);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '구글 로그인을 시작하지 못했어요.';
+      setStatusMessage('');
+      setErrorMessage(message);
+      setIsGoogleSubmitting(false);
+    }
+  };
+
+  const handleDemoSubmit = async () => {
+    if (isDemoSubmitting || isGoogleSubmitting) {
+      return;
+    }
+
+    setIsDemoSubmitting(true);
+    setErrorMessage('');
+    setStatusMessage('데모 계정으로 들어가는 중이에요...');
+
+    try {
+      await createUser({ userId: selectedDemoAccount.userId });
       signIn({
-        userId: nextUserId,
-        deviceId: nextDeviceId,
-        displayName,
+        userId: selectedDemoAccount.userId,
+        displayName: selectedDemoAccount.displayName,
+        authProvider: 'demo',
       });
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'Failed to register user and device.';
+          : '데모 계정으로 들어가지 못했어요.';
+      setStatusMessage('');
       setErrorMessage(message);
-    } finally {
-      setIsSubmitting(false);
+      setIsDemoSubmitting(false);
     }
-  };
-
-  const applyDemoAccount = (account: (typeof DEMO_ACCOUNTS)[number]) => {
-    setUserId(account.userId);
-    setDisplayName(account.displayName);
-    setDeviceId(account.deviceId);
-    setErrorMessage('');
   };
 
   return (
     <SafeAreaView style={commonStyles.screen}>
+      <View style={commonStyles.header}>
+        <View style={styles.headerSide} />
+        <View style={styles.headerCenter}>
+          <Image source={logo} style={styles.headerLogo} />
+        </View>
+        <View style={styles.headerBadge}>
+          <Text style={styles.headerBadgeText}>로그인</Text>
+        </View>
+      </View>
+
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.brandBlock}>
-          <View style={styles.logoCircle}>
-            <Image source={logo} style={styles.logo} />
+        <View style={[commonStyles.card, styles.heroCard]}>
+          <View style={styles.heroTopRow}>
+            <View style={styles.logoCircle}>
+              <Image source={logo} style={styles.logo} />
+            </View>
+            <View style={styles.heroCopy}>
+              <Text style={styles.heroEyebrow}>1단계</Text>
+              <Text style={styles.heroTitle}>로그인</Text>
+              <Text style={styles.heroSubtitle}>
+                로그인 후, 기기 등록은 프로필에서 진행해요
+              </Text>
+            </View>
           </View>
-          <Text style={styles.brandTitle}>Smart Glass</Text>
-          <Text style={styles.brandSubtitle}>
-            Sign in with a demo user and registered device before opening the
-            memory experience.
-          </Text>
+
+          {statusMessage ? (
+            <View style={[styles.feedbackBanner, styles.feedbackBannerSuccess]}>
+              <Text style={styles.feedbackSuccessText}>{statusMessage}</Text>
+            </View>
+          ) : null}
+          {errorMessage ? (
+            <View style={[styles.feedbackBanner, styles.feedbackBannerError]}>
+              <Text style={styles.feedbackErrorText}>{errorMessage}</Text>
+            </View>
+          ) : null}
         </View>
 
-        <View style={[commonStyles.card, styles.card]}>
-          <Text style={styles.cardTitle}>Demo Login</Text>
-          <Text style={styles.cardDescription}>
-            This step now creates the user and registers the smart-glass device
-            on the API server before entering the app.
-          </Text>
+        <View style={[commonStyles.card, styles.sectionCard]}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>구글</Text>
+              <Text style={styles.sectionDescription}>
+                로그인 후 프로필에서 기기를 등록하세요!
+              </Text>
+            </View>
+            <View style={styles.sectionChip}>
+              <Text style={styles.sectionChipText}>권장</Text>
+            </View>
+          </View>
+
+          <Pressable
+            style={[
+              styles.primaryButton,
+              isGoogleSubmitting && styles.primaryButtonDisabled,
+            ]}
+            onPress={() => {
+              void handleGoogleSubmit();
+            }}
+            disabled={isGoogleSubmitting}
+          >
+            {isGoogleSubmitting ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <Text style={styles.primaryButtonText}>이동 중...</Text>
+              </View>
+            ) : (
+              <View style={styles.primaryButtonRow}>
+                <View style={styles.primaryButtonBadge}>
+                  <Text style={styles.primaryButtonBadgeText}>G</Text>
+                </View>
+                <Text style={styles.primaryButtonText}>구글로 시작하기</Text>
+              </View>
+            )}
+          </Pressable>
+        </View>
+
+        <View style={[commonStyles.card, styles.sectionCard]}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>데모 로그인</Text>
+              <Text style={styles.sectionDescription}>
+                빠르게 둘러볼 수 있는 테스트용 로그인입니다.
+              </Text>
+            </View>
+            <View style={[styles.sectionChip, styles.sectionChipMuted]}>
+              <Text style={[styles.sectionChipText, styles.sectionChipTextMuted]}>
+                선택
+              </Text>
+            </View>
+          </View>
 
           <View style={styles.demoSection}>
             {DEMO_ACCOUNTS.map((account) => {
-              const isSelected =
-                account.userId === userId && account.deviceId === deviceId;
+              const isSelected = account.userId === selectedDemoAccount.userId;
 
               return (
                 <Pressable
-                  key={`${account.userId}:${account.deviceId}`}
-                  onPress={() => applyDemoAccount(account)}
+                  key={account.userId}
+                  onPress={() => {
+                    setSelectedDemoAccount(account);
+                    setErrorMessage('');
+                    setStatusMessage('');
+                  }}
                   style={[
                     styles.demoCard,
                     isSelected && styles.demoCardSelected,
                   ]}
                 >
-                  <View style={styles.demoCardTop}>
-                    <Text style={styles.demoLabel}>{account.label}</Text>
-                    <Text style={styles.demoId}>{account.userId}</Text>
+                  <View style={styles.demoCardTopRow}>
+                    <View style={styles.demoCardTextBlock}>
+                      <Text style={styles.demoLabel}>{account.label}</Text>
+                      <Text style={styles.demoHint}>{account.hint}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.demoSelectionDot,
+                        isSelected && styles.demoSelectionDotActive,
+                      ]}
+                    />
                   </View>
-                  <Text style={styles.demoHint}>{account.hint}</Text>
-                  <Text style={styles.demoDeviceId}>{account.deviceId}</Text>
+                  <View style={styles.demoMetaRow}>
+                    <Text style={styles.demoMetaLabel}>계정</Text>
+                    <Text style={styles.demoMetaValue}>{account.userId}</Text>
+                  </View>
                 </Pressable>
               );
             })}
           </View>
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>User ID</Text>
-            <TextInput
-              value={userId}
-              onChangeText={setUserId}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="eg. user-1"
-              placeholderTextColor={colors.subText}
-              style={styles.input}
-            />
-          </View>
-
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Display Name</Text>
-            <TextInput
-              value={displayName}
-              onChangeText={setDisplayName}
-              placeholder="eg. Default User"
-              placeholderTextColor={colors.subText}
-              style={styles.input}
-            />
-          </View>
-
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>Device ID</Text>
-            <TextInput
-              value={deviceId}
-              onChangeText={setDeviceId}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="eg. glass-001"
-              placeholderTextColor={colors.subText}
-              style={styles.input}
-            />
-          </View>
-
-          {errorMessage ? (
-            <Text style={styles.errorText}>{errorMessage}</Text>
-          ) : null}
-
           <Pressable
             style={[
-              styles.submitButton,
-              isSubmitting && styles.submitButtonDisabled,
+              styles.secondaryButton,
+              isDemoSubmitting && styles.secondaryButtonDisabled,
             ]}
             onPress={() => {
-              void handleSubmit();
+              void handleDemoSubmit();
             }}
-            disabled={isSubmitting}
+            disabled={isDemoSubmitting || isGoogleSubmitting}
           >
-            {isSubmitting ? (
-              <View style={styles.submitLoadingRow}>
-                <ActivityIndicator size="small" color="#FFFFFF" />
-                <Text style={styles.submitText}>Registering...</Text>
+            {isDemoSubmitting ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.secondaryButtonText}>준비 중...</Text>
               </View>
             ) : (
-              <Text style={styles.submitText}>Get Started</Text>
+              <Text style={styles.secondaryButtonText}>데모로 둘러보기</Text>
             )}
           </Pressable>
         </View>
@@ -207,55 +395,172 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 28,
-    justifyContent: 'center',
-    gap: 20,
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 28,
+    gap: 16,
   },
-  brandBlock: {
+  headerSide: {
+    width: 56,
+  },
+  headerCenter: {
+    flex: 1,
     alignItems: 'center',
-    gap: 10,
   },
-  logoCircle: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  logo: {
-    width: 42,
-    height: 42,
+  headerLogo: {
+    width: 38,
+    height: 38,
     resizeMode: 'contain',
   },
-  brandTitle: {
+  headerBadge: {
+    minWidth: 56,
+    alignItems: 'flex-end',
+  },
+  headerBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  heroCard: {
+    gap: 16,
+    padding: 18,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+  },
+  heroCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  logoCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 18,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logo: {
+    width: 34,
+    height: 34,
+    resizeMode: 'contain',
+  },
+  heroEyebrow: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  heroTitle: {
     fontSize: 24,
     fontWeight: '800',
     color: colors.text,
   },
-  brandSubtitle: {
+  heroSubtitle: {
     fontSize: 14,
     lineHeight: 21,
     color: colors.subText,
-    textAlign: 'center',
-    maxWidth: 320,
   },
-  card: {
-    gap: 18,
-    padding: 20,
+  feedbackBanner: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  cardTitle: {
+  feedbackBannerSuccess: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  feedbackBannerError: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  feedbackSuccessText: {
+    fontSize: 13,
+    color: '#047857',
+    fontWeight: '600',
+  },
+  feedbackErrorText: {
+    fontSize: 13,
+    color: '#B91C1C',
+    fontWeight: '600',
+  },
+  sectionCard: {
+    gap: 16,
+    padding: 18,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  sectionTitle: {
     fontSize: 20,
     fontWeight: '700',
     color: colors.text,
   },
-  cardDescription: {
-    fontSize: 14,
-    lineHeight: 21,
+  sectionDescription: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 19,
     color: colors.subText,
+  },
+  sectionChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#DBEAFE',
+  },
+  sectionChipMuted: {
+    backgroundColor: '#F3F4F6',
+  },
+  sectionChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  sectionChipTextMuted: {
+    color: '#4B5563',
+  },
+  primaryButton: {
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButtonDisabled: {
+    opacity: 0.8,
+  },
+  primaryButtonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  primaryButtonBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButtonBadgeText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  primaryButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   demoSection: {
     gap: 10,
@@ -266,79 +571,80 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
     backgroundColor: '#F8FAFC',
-    gap: 6,
+    gap: 8,
   },
   demoCardSelected: {
     borderColor: colors.primary,
     backgroundColor: '#EFF6FF',
   },
-  demoCardTop: {
+  demoCardTopRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  demoCardTextBlock: {
+    flex: 1,
+    gap: 5,
   },
   demoLabel: {
     fontSize: 15,
     fontWeight: '700',
     color: colors.text,
   },
-  demoId: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.primary,
-  },
   demoHint: {
     fontSize: 13,
     lineHeight: 18,
     color: colors.subText,
   },
-  demoDeviceId: {
+  demoSelectionDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    marginTop: 2,
+  },
+  demoSelectionDotActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  demoMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  demoMetaLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#1D4ED8',
+    color: colors.subText,
   },
-  fieldGroup: {
-    gap: 8,
-  },
-  fieldLabel: {
-    fontSize: 14,
-    fontWeight: '600',
+  demoMetaValue: {
+    fontSize: 12,
+    fontWeight: '700',
     color: colors.text,
   },
-  input: {
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    fontSize: 15,
-    color: colors.text,
-  },
-  errorText: {
-    fontSize: 13,
-    color: '#DC2626',
-    fontWeight: '500',
-  },
-  submitButton: {
+  secondaryButton: {
     height: 50,
     borderRadius: 14,
-    backgroundColor: colors.primary,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitButtonDisabled: {
+  secondaryButtonDisabled: {
     opacity: 0.75,
   },
-  submitLoadingRow: {
+  secondaryButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  loadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-  },
-  submitText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
   },
 });

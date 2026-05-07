@@ -2,19 +2,27 @@ from __future__ import annotations
 
 import unittest
 
-from src.database.user_registry import PostgresUserRegistry, UserRecord
+from src.database.user_registry import DeviceRecord, PostgresUserRegistry, UserRecord
 
 
 class FakeCursor:
-    def __init__(self, row: tuple[object, ...] | None) -> None:
+    def __init__(
+        self,
+        row: tuple[object, ...] | None,
+        rows: list[tuple[object, ...]] | None = None,
+    ) -> None:
         self.row = row
+        self.rows = rows or []
         self.executed: list[tuple[str, tuple[object, ...]]] = []
 
-    def execute(self, query: str, params: tuple[object, ...]) -> None:
-        self.executed.append((query, params))
+    def execute(self, query: str, params: tuple[object, ...] | None = None) -> None:
+        self.executed.append((query, params or ()))
 
     def fetchone(self) -> tuple[object, ...] | None:
         return self.row
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return list(self.rows)
 
     def __enter__(self) -> FakeCursor:
         return self
@@ -51,7 +59,17 @@ class PostgresUserRegistryTests(unittest.TestCase):
         )
 
     def test_register_device_only_updates_same_existing_owner(self) -> None:
-        cursor = FakeCursor(("glass-001", "user-1", "2026-05-05T00:01:00Z"))
+        cursor = FakeCursor(
+            (
+                "glass-001",
+                "user-1",
+                "active",
+                "2026-05-05T00:01:00Z",
+                "2026-05-05T00:01:00Z",
+                None,
+                "2026-05-05T00:01:00Z",
+            )
+        )
         connection = FakeConnection(cursor)
         self.registry._connect = lambda: connection  # type: ignore[method-assign]
 
@@ -59,8 +77,9 @@ class PostgresUserRegistryTests(unittest.TestCase):
 
         self.assertEqual(record.user_id, "user-1")
         self.assertEqual(record.device_id, "glass-001")
+        self.assertEqual(record.status, "active")
         self.assertTrue(connection.committed)
-        self.assertEqual(cursor.executed[0][1], ("glass-001", "user-1"))
+        self.assertEqual(cursor.executed[0][1], ("glass-001", "user-1", "active"))
         normalized_query = " ".join(cursor.executed[0][0].split())
         self.assertIn("ON CONFLICT (device_id) DO UPDATE", normalized_query)
         self.assertIn("WHERE devices.user_id = EXCLUDED.user_id", normalized_query)
@@ -74,6 +93,67 @@ class PostgresUserRegistryTests(unittest.TestCase):
             "deviceId is already registered to another user",
         ):
             self.registry.register_device(user_id="user-2", device_id="glass-001")
+
+    def test_revoke_device_updates_status_and_revoked_at(self) -> None:
+        existing_device = DeviceRecord(
+            device_id="glass-001",
+            user_id="user-1",
+            registered_at="2026-05-05T00:01:00Z",
+            status="active",
+            approved_at="2026-05-05T00:01:00Z",
+        )
+        self.registry.get_device = lambda device_id: existing_device  # type: ignore[method-assign]
+        cursor = FakeCursor(
+            (
+                "glass-001",
+                "user-1",
+                "revoked",
+                "2026-05-05T00:01:00Z",
+                "2026-05-05T00:01:00Z",
+                "2026-05-05T00:03:00Z",
+                "2026-05-05T00:03:00Z",
+            )
+        )
+        connection = FakeConnection(cursor)
+        self.registry._connect = lambda: connection  # type: ignore[method-assign]
+
+        record = self.registry.revoke_device(user_id="user-1", device_id="glass-001")
+
+        self.assertEqual(record.status, "revoked")
+        self.assertEqual(record.revoked_at, "2026-05-05T00:03:00Z")
+        self.assertTrue(connection.committed)
+
+    def test_list_devices_returns_all_rows_for_user(self) -> None:
+        cursor = FakeCursor(
+            None,
+            rows=[
+                (
+                    "glass-001",
+                    "user-1",
+                    "active",
+                    "2026-05-05T00:01:00Z",
+                    "2026-05-05T00:01:00Z",
+                    None,
+                    "2026-05-05T00:01:00Z",
+                ),
+                (
+                    "glass-002",
+                    "user-1",
+                    "revoked",
+                    "2026-05-05T00:02:00Z",
+                    "2026-05-05T00:02:00Z",
+                    "2026-05-05T00:04:00Z",
+                    "2026-05-05T00:04:00Z",
+                ),
+            ],
+        )
+        self.registry._connect = lambda: FakeConnection(cursor)  # type: ignore[method-assign]
+
+        records = self.registry.list_devices(user_id="user-1")
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0].device_id, "glass-001")
+        self.assertEqual(records[1].status, "revoked")
 
 
 if __name__ == "__main__":
