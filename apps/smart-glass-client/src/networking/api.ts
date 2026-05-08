@@ -171,12 +171,6 @@ type MediaBatchAccessUrlResponse = {
   items: MediaAccessUrl[];
 };
 
-export type UserCreateResponse = {
-  status: 'created';
-  userId: string;
-  createdAt: string;
-};
-
 export type DeviceRegistrationResponse = {
   status: 'registered';
   userId: string;
@@ -276,12 +270,6 @@ const postJson = async <TResponse>(
   return response.json();
 };
 
-export const createUser = async ({ userId }: { userId: string }) => {
-  return postJson<UserCreateResponse>('/users', {
-    userId,
-  });
-};
-
 export const registerUserDevice = async ({
   userId,
   deviceId,
@@ -295,24 +283,6 @@ export const registerUserDevice = async ({
       deviceId,
     }
   );
-};
-
-export const ensureUserDeviceRegistration = async ({
-  userId,
-  deviceId,
-}: {
-  userId: string;
-  deviceId: string;
-}) => {
-  const user = await createUser({ userId });
-  const device = await registerUserDevice({
-    userId: user.userId,
-    deviceId,
-  });
-  return {
-    user,
-    device,
-  };
 };
 
 export const listUserDevices = async ({

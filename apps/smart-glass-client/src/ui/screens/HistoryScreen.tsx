@@ -170,7 +170,9 @@ export default function HistoryScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.list}>
+      <ScrollView
+        contentContainerStyle={[styles.list, commonStyles.contentContainer]}
+      >
         <Text style={styles.sectionTitle}>최근에 저장된 기록</Text>
 
         {isLoading ? (

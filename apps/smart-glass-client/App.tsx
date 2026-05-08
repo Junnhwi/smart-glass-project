@@ -1,7 +1,9 @@
 import React from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
+import CaptureScreen from './src/ui/screens/CaptureScreen';
 import ChatScreen from './src/ui/screens/ChatScreen';
 import HistoryScreen from './src/ui/screens/HistoryScreen';
 import LoginScreen from './src/ui/screens/LoginScreen';
@@ -16,8 +18,17 @@ import ItemLocationScreen from './src/ui/screens/ItemLocationScreen';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function AppNavigator() {
-  const { currentUser } = useAuth();
-  const initialRouteName = currentUser?.deviceId ? 'Chat' : 'Profile';
+  const { currentUser, isHydrating } = useAuth();
+  const initialRouteName = currentUser?.deviceId ? 'Capture' : 'Profile';
+
+  if (isHydrating) {
+    return (
+      <View style={styles.loadingShell}>
+        <ActivityIndicator size="small" color="#2563EB" />
+        <Text style={styles.loadingText}>세션을 확인하고 있어요.</Text>
+      </View>
+    );
+  }
 
   if (!currentUser) {
     return (
@@ -35,6 +46,7 @@ function AppNavigator() {
         initialRouteName={initialRouteName}
         screenOptions={{ headerShown: false }}
       >
+        <Stack.Screen name="Capture" component={CaptureScreen} />
         <Stack.Screen name="Chat" component={ChatScreen} />
         <Stack.Screen name="History" component={HistoryScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
@@ -56,3 +68,18 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingShell: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: '#F9FAFB',
+  },
+  loadingText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+});

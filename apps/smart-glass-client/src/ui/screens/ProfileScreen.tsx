@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,14 +18,13 @@ import {
   type UserDevice,
 } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
-import logo from '../icon/logo.png';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
 const formatTimestamp = (value?: string | null) => {
   if (!value) {
-    return '없음';
+    return '정보 없음';
   }
 
   const parsed = new Date(value);
@@ -68,7 +66,7 @@ export default function ProfileScreen() {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 정보를 불러오지 못했어요.';
+          : '기기 목록을 불러오지 못했습니다.';
       setErrorMessage(message);
     } finally {
       setIsLoadingDevices(false);
@@ -79,9 +77,9 @@ export default function ProfileScreen() {
     void loadDevices();
   }, [currentUser?.authToken, currentUser?.userId]);
 
-  const moveToChatWithDevice = (deviceId: string) => {
+  const moveToCaptureWithDevice = (deviceId: string) => {
     setCurrentDevice(deviceId);
-    navigation.navigate('Chat');
+    navigation.navigate('Capture');
   };
 
   const handleRegisterDevice = async () => {
@@ -104,14 +102,14 @@ export default function ProfileScreen() {
         deviceId: nextDeviceId,
       });
       setRegisterDeviceId('');
-      setStatusMessage('기기를 등록했어요.');
+      setStatusMessage('기기를 등록했습니다.');
       await loadDevices();
-      moveToChatWithDevice(nextDeviceId);
+      moveToCaptureWithDevice(nextDeviceId);
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 등록에 실패했어요.';
+          : '기기 등록에 실패했습니다.';
       setErrorMessage(message);
     } finally {
       setIsRegisteringDevice(false);
@@ -152,13 +150,18 @@ export default function ProfileScreen() {
 
       if (nextAction === 'revoke' && currentUser.deviceId === device.deviceId) {
         setCurrentDevice(null);
-        setStatusMessage('현재 기기를 비활성화했어요.');
+        setStatusMessage('현재 선택된 기기를 해제했습니다.');
+        return;
+      }
+
+      if (nextAction === 'approve') {
+        setStatusMessage('기기를 다시 활성화했습니다.');
       }
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 상태를 바꾸지 못했어요.';
+          : '기기 상태를 변경하지 못했습니다.';
       setErrorMessage(message);
     } finally {
       setIsUpdatingDeviceId(null);
@@ -175,22 +178,33 @@ export default function ProfileScreen() {
     );
   }, [currentUser?.deviceId, devices]);
 
+  const handleHeaderPrimaryAction = () => {
+    if (navigation.canGoBack) {
+      navigation.goBack();
+      return;
+    }
+    navigation.navigate('Capture');
+  };
+
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable
-          style={styles.homeButton}
-          onPress={() => navigation.navigate('Chat')}
-        >
-          <Image source={logo} style={styles.homeLogo} />
+        <Pressable onPress={handleHeaderPrimaryAction}>
+          <Text style={styles.headerLink}>
+            {navigation.canGoBack ? '뒤로' : '홈'}
+          </Text>
         </Pressable>
 
         <Text style={commonStyles.headerTitle}>프로필</Text>
 
-        <View style={{ width: 28 }} />
+        <Pressable onPress={() => navigation.navigate('Settings')}>
+          <Text style={styles.headerLink}>설정</Text>
+        </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[styles.content, commonStyles.contentContainer]}
+      >
         <View style={styles.avatar}>
           <Text style={styles.avatarIcon}>
             {(currentUser?.displayName || 'U').slice(0, 1).toUpperCase()}
@@ -201,7 +215,7 @@ export default function ProfileScreen() {
           <Text style={styles.label}>이름</Text>
           <View style={styles.inputBox}>
             <Text style={styles.value}>
-              {currentUser?.displayName || '없음'}
+              {currentUser?.displayName || '정보 없음'}
             </Text>
           </View>
         </View>
@@ -209,14 +223,14 @@ export default function ProfileScreen() {
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>사용자 ID</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.userId || '없음'}</Text>
+            <Text style={styles.value}>{currentUser?.userId || '정보 없음'}</Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>이메일</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.email || '없음'}</Text>
+            <Text style={styles.value}>{currentUser?.email || '정보 없음'}</Text>
           </View>
         </View>
 
@@ -224,22 +238,24 @@ export default function ProfileScreen() {
           <Text style={styles.label}>현재 기기</Text>
           <View style={styles.inputBox}>
             <Text style={styles.value}>
-              {currentUser?.deviceId || '선택된 기기가 없어요'}
+              {currentUser?.deviceId || '선택된 기기 없음'}
             </Text>
           </View>
         </View>
 
         <View style={[commonStyles.card, styles.deviceCard]}>
-          <Text style={styles.deviceTitle}>기기 등록</Text>
+          <Text style={styles.deviceTitle}>기기 관리</Text>
           <Text style={styles.deviceDescription}>
-            기기를 등록하거나, 이미 등록된 기기 중 하나를 선택하세요.
+            스마트글라스 기기를 등록하고 활성화 상태를 관리할 수 있습니다. 기기를
+            선택하면 업로드 홈으로 바로 이동합니다.
           </Text>
 
           {!currentUser?.deviceId ? (
             <View style={styles.calloutBox}>
-              <Text style={styles.calloutTitle}>기기를 먼저 연결해주세요</Text>
+              <Text style={styles.calloutTitle}>선택된 기기가 없습니다</Text>
               <Text style={styles.calloutText}>
-                기기 ID를 등록하거나 아래 목록에서 선택하면 돼요.
+                기기 ID를 등록한 뒤 바로 선택하면 업로드 흐름을 바로 테스트할 수
+                있습니다.
               </Text>
             </View>
           ) : null}
@@ -295,22 +311,22 @@ export default function ProfileScreen() {
           {isLoadingDevices ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.loadingText}>기기 정보를 불러오는 중...</Text>
+              <Text style={styles.loadingText}>기기 정보를 불러오는 중입니다.</Text>
             </View>
           ) : null}
 
           {!isLoadingDevices && devices.length === 0 ? (
-            <Text style={styles.emptyText}>아직 등록된 기기가 없어요.</Text>
+            <Text style={styles.emptyText}>등록된 기기가 없습니다.</Text>
           ) : null}
 
           {currentManagedDevice ? (
             <View style={styles.currentDeviceBanner}>
-              <Text style={styles.currentDeviceBannerLabel}>
-                현재 선택된 기기
-              </Text>
+              <Text style={styles.currentDeviceBannerLabel}>현재 선택된 기기</Text>
               <Text style={styles.currentDeviceBannerValue}>
                 {currentManagedDevice.deviceId} ·{' '}
-                {currentManagedDevice.status === 'active' ? '사용 중' : '비활성'}
+                {currentManagedDevice.status === 'active'
+                  ? '활성'
+                  : '비활성'}
               </Text>
             </View>
           ) : null}
@@ -347,7 +363,7 @@ export default function ProfileScreen() {
                           : styles.statusChipTextRevoked,
                       ]}
                     >
-                      {device.status === 'active' ? '사용 중' : '비활성'}
+                      {device.status === 'active' ? '활성' : '비활성'}
                     </Text>
                   </View>
                 </View>
@@ -356,11 +372,11 @@ export default function ProfileScreen() {
                   등록: {formatTimestamp(device.registeredAt)}
                 </Text>
                 <Text style={styles.deviceMeta}>
-                  수정: {formatTimestamp(device.updatedAt)}
+                  갱신: {formatTimestamp(device.updatedAt)}
                 </Text>
                 {device.revokedAt ? (
                   <Text style={styles.deviceMeta}>
-                    비활성화: {formatTimestamp(device.revokedAt)}
+                    해제: {formatTimestamp(device.revokedAt)}
                   </Text>
                 ) : null}
 
@@ -372,9 +388,9 @@ export default function ProfileScreen() {
                         isCurrentDevice && styles.sessionButtonSelected,
                       ]}
                       onPress={() => {
-                        setStatusMessage('현재 기기를 바꿨어요.');
+                        setStatusMessage('현재 기기를 선택했습니다.');
                         setErrorMessage('');
-                        moveToChatWithDevice(device.deviceId);
+                        moveToCaptureWithDevice(device.deviceId);
                       }}
                     >
                       <Text
@@ -417,7 +433,7 @@ export default function ProfileScreen() {
                               : styles.deviceActionTextPrimary,
                           ]}
                         >
-                          변경 중...
+                          처리 중
                         </Text>
                       </View>
                     ) : (
@@ -429,7 +445,7 @@ export default function ProfileScreen() {
                             : styles.deviceActionTextPrimary,
                         ]}
                       >
-                        {device.status === 'active' ? '비활성화' : '재활성화'}
+                        {device.status === 'active' ? '비활성화' : '다시 활성화'}
                       </Text>
                     )}
                   </Pressable>
@@ -440,7 +456,7 @@ export default function ProfileScreen() {
         </View>
 
         <Text style={styles.syncText}>
-          여기서 고른 기기로 업로드와 추론이 진행돼요.
+          기기 선택 정보는 세션과 함께 저장되어 다음 접속에도 이어집니다.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -450,19 +466,15 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 24,
-    paddingTop: 36,
+    paddingTop: 24,
     paddingBottom: 32,
   },
-  homeButton: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  homeLogo: {
-    width: 28,
-    height: 28,
-    resizeMode: 'contain',
+  headerLink: {
+    minWidth: 40,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+    textAlign: 'center',
   },
   avatar: {
     width: 88,
@@ -472,7 +484,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 36,
+    marginBottom: 28,
   },
   avatarIcon: {
     fontSize: 36,

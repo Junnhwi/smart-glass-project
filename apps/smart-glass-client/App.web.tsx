@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import CaptureScreen from './src/ui/screens/CaptureScreen';
 import ChatScreen from './src/ui/screens/ChatScreen';
 import HistoryScreen from './src/ui/screens/HistoryScreen';
 import ItemLocationScreen from './src/ui/screens/ItemLocationScreen';
@@ -53,9 +54,11 @@ class WebErrorBoundary extends React.Component<
 
 function AuthenticatedWebApp() {
   const navigation = useAppNavigation();
-  const currentRouteName = navigation.currentRoute?.name || 'Chat';
+  const currentRouteName = navigation.currentRoute?.name || 'Capture';
 
   switch (currentRouteName) {
+    case 'Capture':
+      return <CaptureScreen />;
     case 'History':
       return <HistoryScreen />;
     case 'Profile':
@@ -71,8 +74,19 @@ function AuthenticatedWebApp() {
 }
 
 function WebAppRoot() {
-  const { currentUser } = useAuth();
-  const initialRouteName = currentUser?.deviceId ? 'Chat' : 'Profile';
+  const { currentUser, isHydrating } = useAuth();
+  const initialRouteName = currentUser?.deviceId ? 'Capture' : 'Profile';
+
+  if (isHydrating) {
+    return (
+      <View style={styles.loadingShell}>
+        <Text style={styles.loadingTitle}>세션을 확인하고 있어요</Text>
+        <Text style={styles.loadingMessage}>
+          이전에 로그인한 정보를 안전하게 불러오는 중입니다.
+        </Text>
+      </View>
+    );
+  }
 
   if (!currentUser) {
     return <LoginScreen />;
@@ -117,6 +131,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
     color: '#7C2D12',
+    textAlign: 'center',
+  },
+  loadingShell: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#F9FAFB',
+    gap: 10,
+  },
+  loadingTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  loadingMessage: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#6B7280',
     textAlign: 'center',
   },
 });

@@ -269,8 +269,6 @@ class GoogleOauthService:
                 "state": state,
                 "code_challenge": _build_code_challenge(code_verifier),
                 "code_challenge_method": "S256",
-                "access_type": "offline",
-                "prompt": "consent",
             },
         )
         return OauthAuthorizationStart(

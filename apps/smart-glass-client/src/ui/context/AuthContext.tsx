@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useState } from 'react';
+import * as SecureStore from 'expo-secure-store';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
 import { logoutAuthSession } from '../../networking/api';
 
-export type AuthProviderName = 'demo' | 'password' | 'google';
+export type AuthProviderName = 'password' | 'google';
 
 export type AuthUser = {
   userId: string;
@@ -27,6 +28,7 @@ type SignInInput = {
 
 type AuthContextValue = {
   currentUser: AuthUser | null;
+  isHydrating: boolean;
   signIn: (input: SignInInput) => void;
   setCurrentDevice: (deviceId?: string | null) => void;
   signOut: () => Promise<void>;
@@ -42,22 +44,21 @@ const normalizeText = (value: string | null | undefined) =>
     .filter(Boolean)
     .join(' ');
 
-const buildDemoAuthToken = (userId: string) => `demo-user:${userId}`;
-
 const buildAuthUser = (input: SignInInput): AuthUser => {
   const userId = normalizeText(input.userId);
   const deviceId = normalizeText(input.deviceId);
+  const authToken = normalizeText(input.authToken);
+
   if (!userId) {
     throw new Error('userId is required');
   }
+  if (!authToken) {
+    throw new Error('authToken is required');
+  }
 
   const displayName = normalizeText(input.displayName) || userId;
-  const authToken =
-    normalizeText(input.authToken) || buildDemoAuthToken(userId);
   const email = normalizeText(input.email) || null;
   const refreshToken = normalizeText(input.refreshToken) || null;
-  const authProvider =
-    input.authProvider || (input.authToken ? 'password' : 'demo');
 
   return {
     userId,
@@ -66,20 +67,16 @@ const buildAuthUser = (input: SignInInput): AuthUser => {
     authToken,
     refreshToken,
     email,
-    authProvider,
+    authProvider: input.authProvider || 'password',
   };
 };
 
-const readStoredAuthUser = (): AuthUser | null => {
-  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+const parseStoredAuthUser = (rawValue: string | null): AuthUser | null => {
+  if (!rawValue) {
     return null;
   }
 
   try {
-    const rawValue = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!rawValue) {
-      return null;
-    }
     const parsed = JSON.parse(rawValue) as SignInInput | null;
     if (!parsed || typeof parsed !== 'object') {
       return null;
@@ -90,8 +87,30 @@ const readStoredAuthUser = (): AuthUser | null => {
   }
 };
 
-const persistAuthUser = (user: AuthUser | null) => {
+const readStoredAuthUser = (): AuthUser | null => {
   if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    return parseStoredAuthUser(window.localStorage.getItem(AUTH_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+};
+
+const persistAuthUser = async (user: AuthUser | null) => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    try {
+      if (!user) {
+        await SecureStore.deleteItemAsync(AUTH_STORAGE_KEY);
+        return;
+      }
+
+      await SecureStore.setItemAsync(AUTH_STORAGE_KEY, JSON.stringify(user));
+    } catch {
+      // Ignore device storage failures in favor of keeping the in-memory session alive.
+    }
     return;
   }
 
@@ -106,15 +125,52 @@ const persistAuthUser = (user: AuthUser | null) => {
   }
 };
 
+const restorePersistedAuthUser = async (): Promise<AuthUser | null> => {
+  if (Platform.OS === 'web') {
+    return readStoredAuthUser();
+  }
+
+  try {
+    const rawValue = await SecureStore.getItemAsync(AUTH_STORAGE_KEY);
+    return parseStoredAuthUser(rawValue);
+  } catch {
+    return null;
+  }
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() =>
     readStoredAuthUser()
   );
+  const [isHydrating, setIsHydrating] = useState(Platform.OS !== 'web');
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      setIsHydrating(false);
+      return;
+    }
+
+    let isActive = true;
+
+    void (async () => {
+      const restoredUser = await restorePersistedAuthUser();
+      if (!isActive) {
+        return;
+      }
+
+      setCurrentUser(restoredUser);
+      setIsHydrating(false);
+    })();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const signIn = (input: SignInInput) => {
     const nextUser = buildAuthUser(input);
     setCurrentUser(nextUser);
-    persistAuthUser(nextUser);
+    void persistAuthUser(nextUser);
   };
 
   const setCurrentDevice = (deviceId?: string | null) => {
@@ -129,7 +185,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         deviceId: normalizedDeviceId || null,
       };
-      persistAuthUser(nextUser);
+      void persistAuthUser(nextUser);
       return nextUser;
     });
   };
@@ -137,16 +193,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     const activeUser = currentUser;
     setCurrentUser(null);
-    persistAuthUser(null);
+    void persistAuthUser(null);
 
     if (!activeUser) {
-      return;
-    }
-
-    const isDemoUser =
-      activeUser.authProvider === 'demo' ||
-      activeUser.authToken.startsWith('demo-user:');
-    if (isDemoUser && !activeUser.refreshToken) {
       return;
     }
 
@@ -162,7 +211,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ currentUser, signIn, setCurrentDevice, signOut }}
+      value={{
+        currentUser,
+        isHydrating,
+        signIn,
+        setCurrentDevice,
+        signOut,
+      }}
     >
       {children}
     </AuthContext.Provider>
