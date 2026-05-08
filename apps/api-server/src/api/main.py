@@ -67,6 +67,7 @@ from src.api.schemas import (
     UserCreateResponse,
     UserDeviceListResponse,
     UserDevicePayload,
+    UserDeviceRenameRequest,
     UserDeviceRegistrationRequest,
     UserDeviceStatusResponse,
     VlmInferenceResultPayload,
@@ -298,6 +299,7 @@ def _map_user_device(device: Any) -> UserDevicePayload:
     return UserDevicePayload(
         userId=device.user_id,
         deviceId=device.device_id,
+        displayName=getattr(device, "display_name", None),
         status=device.status,
         registeredAt=device.registered_at,
         approvedAt=device.approved_at,
@@ -555,11 +557,13 @@ def create_app() -> FastAPI:
                 "POST /users",
                 "GET /users/{userId}/devices",
                 "POST /users/{userId}/devices",
+                "PATCH /users/{userId}/devices/{deviceId}",
                 "POST /users/{userId}/device-pairings",
                 "GET /users/{userId}/device-pairings",
                 "POST /users/{userId}/devices/{deviceId}/approve",
                 "POST /users/{userId}/devices/{deviceId}/revoke",
                 "GET /admin/users/{userId}/devices",
+                "PATCH /admin/users/{userId}/devices/{deviceId}",
                 "GET /admin/device-pairings",
                 "POST /admin/device-pairings/{pairingCode}/approve",
                 "POST /admin/device-pairings/{pairingCode}/reject",
@@ -1240,6 +1244,7 @@ def create_app() -> FastAPI:
         return DeviceRegistrationResponse(
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
         )
 
@@ -1265,7 +1270,39 @@ def create_app() -> FastAPI:
         return DeviceRegistrationResponse(
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
+        )
+
+    @app.patch(
+        "/users/{userId}/devices/{deviceId}",
+        response_model=UserDeviceStatusResponse,
+    )
+    def rename_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+        payload: UserDeviceRenameRequest,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.update_device_display_name(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+                display_name=payload.displayName,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            displayName=device.display_name,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
         )
 
     @app.post(
@@ -1420,6 +1457,7 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1448,6 +1486,38 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
+        )
+
+    @app.patch(
+        "/admin/users/{userId}/devices/{deviceId}",
+        response_model=UserDeviceStatusResponse,
+    )
+    def admin_rename_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+        payload: UserDeviceRenameRequest,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_admin_user_scope(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.update_device_display_name(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+                display_name=payload.displayName,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1476,6 +1546,7 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1504,6 +1575,7 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,

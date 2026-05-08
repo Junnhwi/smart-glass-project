@@ -311,12 +311,14 @@ class DeviceRegistrationResponse(ApiSchema):
     status: Literal["registered"] = "registered"
     userId: str
     deviceId: str
+    displayName: str | None = None
     registeredAt: str
 
 
 class UserDevicePayload(ApiSchema):
     userId: str
     deviceId: str
+    displayName: str | None = None
     status: Literal["active", "revoked"]
     registeredAt: str
     approvedAt: str | None = None
@@ -335,10 +337,22 @@ class UserDeviceStatusResponse(ApiSchema):
     status: Literal["active", "revoked"]
     userId: str
     deviceId: str
+    displayName: str | None = None
     registeredAt: str
     approvedAt: str | None = None
     revokedAt: str | None = None
     updatedAt: str | None = None
+
+
+class UserDeviceRenameRequest(ApiSchema):
+    displayName: str = Field(min_length=1)
+
+    @validator("displayName")
+    def validate_non_blank_user_device_display_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
 
 
 class DevicePairingIssueRequest(ApiSchema):

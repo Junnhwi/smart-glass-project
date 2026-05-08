@@ -369,14 +369,14 @@ export default function App() {
 
   const userSummary = useMemo(() => {
     const activeUsers = users.filter((user) => user.status === 'active').length;
-    const adminUsers = users.filter((user) => user.role === 'admin').length;
+    const failedLogs = memoryLogs.filter((log) => log.totalHits === 0).length;
     return {
       totalUsers: users.length,
       activeUsers,
-      adminUsers,
       pendingPairings: pendingPairings.length,
+      failedLogs,
     };
-  }, [pendingPairings.length, users]);
+  }, [memoryLogs, pendingPairings.length, users]);
 
   return (
     <div className="admin-shell">
@@ -403,8 +403,8 @@ export default function App() {
             <strong>{userSummary.pendingPairings}</strong>
           </div>
           <div className="stat-card">
-            <span className="stat-label">관리자 수</span>
-            <strong>{userSummary.adminUsers}</strong>
+            <span className="stat-label">실패 로그 수</span>
+            <strong>{userSummary.failedLogs}</strong>
           </div>
         </div>
       </header>
@@ -414,7 +414,7 @@ export default function App() {
           <div className="panel-header">
             <div>
               <p className="panel-eyebrow">Shared Admin</p>
-              <h2>공용 관리자 로그인</h2>
+              <h2>{session?.user ? '관리자 세션' : '공용 관리자 로그인'}</h2>
             </div>
             {session?.user ? (
               <button className="ghost-button" onClick={handleLogout}>
@@ -429,30 +429,6 @@ export default function App() {
             <p className="mono">{SHARED_ADMIN_PASSWORD}</p>
           </div>
 
-          <form className="login-form" onSubmit={handleLogin}>
-            <label className="field">
-              <span>이메일</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder={SHARED_ADMIN_EMAIL}
-              />
-            </label>
-            <label className="field">
-              <span>비밀번호</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder={SHARED_ADMIN_PASSWORD}
-              />
-            </label>
-            <button className="primary-button" type="submit" disabled={isLoggingIn}>
-              {isLoggingIn ? '연결 중...' : '관리자 로그인'}
-            </button>
-          </form>
-
           {session?.user ? (
             <div className="session-summary">
               <p className="session-title">{session.user.displayName}</p>
@@ -460,12 +436,41 @@ export default function App() {
               <p>
                 역할: <strong>{session.user.role}</strong>
               </p>
+              <p>
+                상태: <strong>연결됨</strong>
+              </p>
             </div>
           ) : (
-            <p className="muted-copy">
-              위 공용 계정으로 로그인하면 사용자 목록, 기기 승인, 검색/채팅 로그
-              패널이 열립니다.
-            </p>
+            <>
+              <form className="login-form" onSubmit={handleLogin}>
+                <label className="field">
+                  <span>이메일</span>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder={SHARED_ADMIN_EMAIL}
+                  />
+                </label>
+                <label className="field">
+                  <span>비밀번호</span>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder={SHARED_ADMIN_PASSWORD}
+                  />
+                </label>
+                <button className="primary-button" type="submit" disabled={isLoggingIn}>
+                  {isLoggingIn ? '연결 중...' : '관리자 로그인'}
+                </button>
+              </form>
+
+              <p className="muted-copy">
+                위 공용 계정으로 로그인하면 사용자 목록, 기기 승인, 검색/채팅 로그
+                패널이 열립니다.
+              </p>
+            </>
           )}
 
           {feedback ? <div className="feedback success">{feedback}</div> : null}
@@ -630,7 +635,10 @@ export default function App() {
                 <article key={`${device.userId}:${device.deviceId}`} className="device-card">
                   <div className="device-card-top">
                     <div>
-                      <strong>{device.deviceId}</strong>
+                      <strong>{device.displayName || device.deviceId}</strong>
+                      {device.displayName ? (
+                        <p className="meta-line mono">ID: {device.deviceId}</p>
+                      ) : null}
                       <p className="meta-line">등록: {formatTime(device.registeredAt)}</p>
                     </div>
                     <span className={`pill ${device.status === 'active' ? 'active' : 'danger'}`}>

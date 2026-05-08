@@ -15,6 +15,7 @@ import {
   issueUserDevicePairing,
   listUserDevicePairings,
   listUserDevices,
+  renameUserDevice,
   revokeUserDevice,
   type DevicePairing,
   type UserDevice,
@@ -231,8 +232,9 @@ export default function ProfileScreen() {
   };
 
   const startEditingDeviceAlias = (deviceId: string) => {
+    const targetDevice = devices.find((device) => device.deviceId === deviceId);
     setEditingDeviceId(deviceId);
-    setPendingDeviceAlias(getDeviceLabel(deviceId));
+    setPendingDeviceAlias(targetDevice?.displayName || getDeviceLabel(deviceId));
     setErrorMessage('');
     setStatusMessage('');
   };
@@ -242,14 +244,46 @@ export default function ProfileScreen() {
     setPendingDeviceAlias('');
   };
 
-  const handleSaveDeviceAlias = (deviceId: string) => {
+  const handleSaveDeviceAlias = async (deviceId: string) => {
+    if (!currentUser || isUpdatingDeviceId) {
+      return;
+    }
+
     const normalizedAlias = pendingDeviceAlias.trim();
     if (!normalizedAlias) {
       setErrorMessage('기기 이름을 입력해주세요.');
       return;
     }
 
-    setDeviceAlias(deviceId, normalizedAlias);
+    setIsUpdatingDeviceId(deviceId);
+    setErrorMessage('');
+    setStatusMessage('');
+    try {
+      const updatedDevice = await renameUserDevice({
+        authToken: currentUser.authToken,
+        userId: currentUser.userId,
+        deviceId,
+        displayName: normalizedAlias,
+      });
+      setDevices((prev) =>
+        prev.map((item) =>
+          item.deviceId === updatedDevice.deviceId ? updatedDevice : item
+        )
+      );
+      setDeviceAlias(deviceId, normalizedAlias);
+      setStatusMessage('æ¹²ê³Œë¦° ?ëŒ€ì««???Â€?Î½ë»½?ë“¬ë•²??');
+      resetEditingDeviceAlias();
+      return;
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'æ¹²ê³Œë¦° ?ëŒ€ì««??ï§£ì„Žâ”?ì„? ï§ì‚µë»½?ë“¬ë•²??';
+      setErrorMessage(message);
+      return;
+    } finally {
+      setIsUpdatingDeviceId(null);
+    }
     setStatusMessage('기기 이름을 저장했습니다.');
     setErrorMessage('');
     resetEditingDeviceAlias();

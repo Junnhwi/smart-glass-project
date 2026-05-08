@@ -52,6 +52,7 @@ class DeviceRecord:
     user_id: str
     registered_at: str
     status: str = "active"
+    display_name: str | None = None
     approved_at: str | None = None
     revoked_at: str | None = None
     updated_at: str | None = None
@@ -145,6 +146,7 @@ class PostgresUserRegistry:
                                 device_id TEXT PRIMARY KEY,
                                 user_id TEXT NOT NULL REFERENCES {self.users_table_name} (user_id),
                                 status TEXT NOT NULL DEFAULT '{self.active_device_status}',
+                                display_name TEXT,
                                 approved_at TIMESTAMPTZ,
                                 revoked_at TIMESTAMPTZ,
                                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -156,6 +158,12 @@ class PostgresUserRegistry:
                             f"""
                             ALTER TABLE {self.devices_table_name}
                             ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '{self.active_device_status}'
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            ALTER TABLE {self.devices_table_name}
+                            ADD COLUMN IF NOT EXISTS display_name TEXT
                             """
                         )
                         cur.execute(
@@ -289,10 +297,11 @@ class PostgresUserRegistry:
             device_id=str(row[0]),
             user_id=str(row[1]),
             status=_normalize_text(row[2]) or self.active_device_status,
-            registered_at=_normalize_timestamp(row[3]),
-            approved_at=_normalize_timestamp(row[4]) if row[4] is not None else None,
-            revoked_at=_normalize_timestamp(row[5]) if row[5] is not None else None,
-            updated_at=_normalize_timestamp(row[6]) if row[6] is not None else None,
+            display_name=_normalize_text(row[3]) or None,
+            registered_at=_normalize_timestamp(row[4]),
+            approved_at=_normalize_timestamp(row[5]) if row[5] is not None else None,
+            revoked_at=_normalize_timestamp(row[6]) if row[6] is not None else None,
+            updated_at=_normalize_timestamp(row[7]) if row[7] is not None else None,
         )
 
     def _map_pairing_row(self, row: tuple[object, ...]) -> DevicePairingRecord:
@@ -398,11 +407,12 @@ class PostgresUserRegistry:
                 device_id,
                 user_id,
                 status,
+                display_name,
                 approved_at,
                 revoked_at,
                 created_at,
                 updated_at
-            ) VALUES (%s, %s, %s, NOW(), NULL, NOW(), NOW())
+            ) VALUES (%s, %s, %s, %s, NOW(), NULL, NOW(), NOW())
             ON CONFLICT (device_id) DO UPDATE
             SET updated_at = NOW()
             WHERE {self.devices_table_name}.user_id = EXCLUDED.user_id
@@ -410,6 +420,7 @@ class PostgresUserRegistry:
                 device_id,
                 user_id,
                 status,
+                display_name,
                 created_at,
                 approved_at,
                 revoked_at,
@@ -424,6 +435,7 @@ class PostgresUserRegistry:
                             normalized_device_id,
                             normalized_user_id,
                             self.active_device_status,
+                            normalized_device_id,
                         ),
                     )
                     row = cur.fetchone()
@@ -450,6 +462,7 @@ class PostgresUserRegistry:
                 device_id,
                 user_id,
                 status,
+                display_name,
                 created_at,
                 approved_at,
                 revoked_at,
@@ -485,6 +498,7 @@ class PostgresUserRegistry:
                 device_id,
                 user_id,
                 status,
+                display_name,
                 created_at,
                 approved_at,
                 revoked_at,
@@ -506,6 +520,65 @@ class PostgresUserRegistry:
             ) from exc
 
         return [self._map_device_row(row) for row in rows]
+
+    def update_device_display_name(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        display_name: str,
+    ) -> DeviceRecord:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_device_id = _normalize_text(device_id)
+        normalized_display_name = _normalize_text(display_name)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if not normalized_device_id:
+            raise ValueError("deviceId must not be blank")
+        if not normalized_display_name:
+            raise ValueError("displayName must not be blank")
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.devices_table_name}
+            SET
+                display_name = %s,
+                updated_at = NOW()
+            WHERE user_id = %s
+              AND device_id = %s
+            RETURNING
+                device_id,
+                user_id,
+                status,
+                display_name,
+                created_at,
+                approved_at,
+                revoked_at,
+                updated_at
+        """
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_display_name,
+                            normalized_user_id,
+                            normalized_device_id,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except UserRegistryUnavailableError:
+            raise
+        except Exception as exc:
+            raise UserRegistryUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise LookupError("deviceId is not registered")
+        return self._map_device_row(row)
 
     def issue_pairing_code(
         self,
@@ -887,6 +960,7 @@ class PostgresUserRegistry:
                 device_id,
                 user_id,
                 status,
+                display_name,
                 created_at,
                 approved_at,
                 revoked_at,
@@ -943,6 +1017,7 @@ class PostgresUserRegistry:
                 device_id,
                 user_id,
                 status,
+                display_name,
                 created_at,
                 approved_at,
                 revoked_at,

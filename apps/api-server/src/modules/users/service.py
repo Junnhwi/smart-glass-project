@@ -64,6 +64,14 @@ class UserDeviceRepository(Protocol):
 
     def list_devices(self, *, user_id: str) -> list[DeviceRecord]: ...
 
+    def update_device_display_name(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        display_name: str,
+    ) -> DeviceRecord: ...
+
     def issue_pairing_code(
         self,
         *,
@@ -145,6 +153,28 @@ class UserDeviceService:
         if not normalized_user_id:
             raise ValueError("userId must not be blank")
         return self.repository.list_devices(user_id=normalized_user_id)
+
+    def update_device_display_name(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        display_name: str,
+    ) -> DeviceRecord:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_device_id = _normalize_text(device_id)
+        normalized_display_name = _normalize_text(display_name)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if not normalized_device_id:
+            raise ValueError("deviceId must not be blank")
+        if not normalized_display_name:
+            raise ValueError("displayName must not be blank")
+        return self.repository.update_device_display_name(
+            user_id=normalized_user_id,
+            device_id=normalized_device_id,
+            display_name=normalized_display_name,
+        )
 
     def issue_pairing_code(
         self,

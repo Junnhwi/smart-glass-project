@@ -175,12 +175,14 @@ export type DeviceRegistrationResponse = {
   status: 'registered';
   userId: string;
   deviceId: string;
+  displayName?: string | null;
   registeredAt: string;
 };
 
 export type UserDevice = {
   userId: string;
   deviceId: string;
+  displayName?: string | null;
   status: 'active' | 'revoked';
   registeredAt: string;
   approvedAt?: string | null;
@@ -462,6 +464,38 @@ export const logoutAuthSession = async ({
     },
     { authToken: authToken || undefined }
   );
+};
+
+export const renameUserDevice = async ({
+  authToken,
+  userId,
+  deviceId,
+  displayName,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+  displayName: string;
+}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        displayName,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<UserDevice>;
 };
 
 export const refreshAuthToken = async ({
