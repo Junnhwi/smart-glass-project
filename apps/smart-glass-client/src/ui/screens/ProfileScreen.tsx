@@ -12,9 +12,11 @@ import {
 
 import {
   approveUserDevice,
+  issueUserDevicePairing,
+  listUserDevicePairings,
   listUserDevices,
-  registerUserDevice,
   revokeUserDevice,
+  type DevicePairing,
   type UserDevice,
 } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
@@ -35,15 +37,28 @@ const formatTimestamp = (value?: string | null) => {
   return parsed.toLocaleString();
 };
 
+const formatPairingState = (status: DevicePairing['status']) => {
+  if (status === 'approved') {
+    return '승인됨';
+  }
+  if (status === 'rejected') {
+    return '거절됨';
+  }
+  return '대기 중';
+};
+
 export default function ProfileScreen() {
   const navigation = useAppNavigation();
   const { currentUser, getDeviceLabel, setCurrentDevice, setDeviceAlias } =
     useAuth();
+
   const [devices, setDevices] = useState<UserDevice[]>([]);
+  const [pairings, setPairings] = useState<DevicePairing[]>([]);
   const [registerDeviceId, setRegisterDeviceId] = useState('');
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
   const [pendingDeviceAlias, setPendingDeviceAlias] = useState('');
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [isLoadingPairings, setIsLoadingPairings] = useState(false);
   const [isRegisteringDevice, setIsRegisteringDevice] = useState(false);
   const [isUpdatingDeviceId, setIsUpdatingDeviceId] = useState<string | null>(
     null
@@ -76,8 +91,30 @@ export default function ProfileScreen() {
     }
   };
 
+  const loadPairings = async () => {
+    if (!currentUser) {
+      setPairings([]);
+      return;
+    }
+
+    setIsLoadingPairings(true);
+    try {
+      const response = await listUserDevicePairings({
+        authToken: currentUser.authToken,
+        userId: currentUser.userId,
+        limit: 6,
+      });
+      setPairings(response.items);
+    } catch {
+      // Pairing history is helpful, but it should not block the rest of the page.
+    } finally {
+      setIsLoadingPairings(false);
+    }
+  };
+
   useEffect(() => {
     void loadDevices();
+    void loadPairings();
   }, [currentUser?.authToken, currentUser?.userId]);
 
   const moveToCaptureWithDevice = (deviceId: string) => {
@@ -100,19 +137,21 @@ export default function ProfileScreen() {
     setErrorMessage('');
     setStatusMessage('');
     try {
-      await registerUserDevice({
+      const response = await issueUserDevicePairing({
+        authToken: currentUser.authToken,
         userId: currentUser.userId,
         deviceId: nextDeviceId,
       });
       setRegisterDeviceId('');
-      setStatusMessage('기기를 등록했습니다.');
-      await loadDevices();
-      moveToCaptureWithDevice(nextDeviceId);
+      setStatusMessage(
+        `페어링 코드를 발급했어요: ${response.pairing.pairingCode}`
+      );
+      await loadPairings();
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 등록에 실패했습니다.';
+          : '기기 페어링 요청을 만들지 못했습니다.';
       setErrorMessage(message);
     } finally {
       setIsRegisteringDevice(false);
@@ -153,12 +192,14 @@ export default function ProfileScreen() {
 
       if (nextAction === 'revoke' && currentUser.deviceId === device.deviceId) {
         setCurrentDevice(null);
-        setStatusMessage('현재 선택된 기기를 해제했습니다.');
+        setStatusMessage('현재 선택한 기기를 해제했습니다.');
         return;
       }
 
       if (nextAction === 'approve') {
         setStatusMessage('기기를 다시 활성화했습니다.');
+      } else {
+        setStatusMessage('기기를 비활성화했습니다.');
       }
     } catch (error) {
       const message =
@@ -213,6 +254,8 @@ export default function ProfileScreen() {
     setErrorMessage('');
     resetEditingDeviceAlias();
   };
+
+  const latestPendingPairing = pairings.find((pairing) => pairing.status === 'pending');
 
   return (
     <SafeAreaView style={commonStyles.screen}>
@@ -276,18 +319,19 @@ export default function ProfileScreen() {
         </View>
 
         <View style={[commonStyles.card, styles.deviceCard]}>
-          <Text style={styles.deviceTitle}>기기 관리</Text>
+          <Text style={styles.deviceTitle}>기기 페어링</Text>
           <Text style={styles.deviceDescription}>
-            스마트글라스 기기를 등록하고 활성화 상태를 관리할 수 있습니다. 기기를
-            선택하면 업로드 홈으로 바로 이동합니다.
+            이제 기기를 바로 등록하지 않고, 페어링 코드를 먼저 발급한 뒤 승인 후
+            연결합니다. 운영자가 승인하기 전까지는 캡처 업로드 권한이 열리지
+            않습니다.
           </Text>
 
           {!currentUser?.deviceId ? (
             <View style={styles.calloutBox}>
               <Text style={styles.calloutTitle}>선택된 기기가 없습니다</Text>
               <Text style={styles.calloutText}>
-                기기 ID를 등록한 뒤 바로 선택하면 업로드 흐름을 바로 테스트할 수
-                있습니다.
+                먼저 페어링 요청을 만들고 승인이 끝난 뒤 기기를 선택하면 업로드
+                홈으로 바로 이동할 수 있습니다.
               </Text>
             </View>
           ) : null}
@@ -315,10 +359,30 @@ export default function ProfileScreen() {
               {isRegisteringDevice ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <Text style={styles.registerButtonText}>등록</Text>
+                <Text style={styles.registerButtonText}>코드 발급</Text>
               )}
             </Pressable>
           </View>
+
+          {latestPendingPairing ? (
+            <View style={styles.pairingHighlight}>
+              <Text style={styles.pairingHighlightLabel}>최근 페어링 코드</Text>
+              <Text
+                style={[
+                  styles.pairingHighlightCode,
+                  commonStyles.selectableText,
+                ]}
+              >
+                {latestPendingPairing.pairingCode}
+              </Text>
+              <Text style={styles.pairingHighlightMeta}>
+                대상 기기: {latestPendingPairing.deviceId}
+              </Text>
+              <Text style={styles.pairingHighlightMeta}>
+                만료: {formatTimestamp(latestPendingPairing.expiresAt)}
+              </Text>
+            </View>
+          ) : null}
 
           {statusMessage ? (
             <Text style={styles.statusText}>{statusMessage}</Text>
@@ -333,8 +397,9 @@ export default function ProfileScreen() {
               style={styles.refreshButton}
               onPress={() => {
                 void loadDevices();
+                void loadPairings();
               }}
-              disabled={isLoadingDevices}
+              disabled={isLoadingDevices || isLoadingPairings}
             >
               <Text style={styles.refreshButtonText}>새로고침</Text>
             </Pressable>
@@ -343,7 +408,9 @@ export default function ProfileScreen() {
           {isLoadingDevices ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.loadingText}>기기 정보를 불러오는 중입니다.</Text>
+              <Text style={styles.loadingText}>
+                기기 정보를 불러오는 중입니다.
+              </Text>
             </View>
           ) : null}
 
@@ -564,8 +631,75 @@ export default function ProfileScreen() {
           })}
         </View>
 
+        <View style={[commonStyles.card, styles.pairingHistoryCard]}>
+          <View style={styles.deviceHeader}>
+            <Text style={styles.deviceListTitle}>최근 페어링 요청</Text>
+            <Text style={styles.historyHint}>관리자 승인 대기 포함</Text>
+          </View>
+
+          {isLoadingPairings ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.loadingText}>
+                페어링 요청을 불러오는 중입니다.
+              </Text>
+            </View>
+          ) : null}
+
+          {!isLoadingPairings && pairings.length === 0 ? (
+            <Text style={styles.emptyText}>최근 페어링 요청이 없습니다.</Text>
+          ) : null}
+
+          {pairings.map((pairing) => (
+            <View key={pairing.pairingCode} style={styles.pairingRow}>
+              <View style={styles.pairingRowTop}>
+                <View style={styles.deviceTitleBlock}>
+                  <Text style={styles.deviceAliasText}>{pairing.deviceId}</Text>
+                  <Text
+                    style={[
+                      styles.deviceIdSubText,
+                      commonStyles.selectableText,
+                    ]}
+                  >
+                    코드: {pairing.pairingCode}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.statusChip,
+                    pairing.status === 'approved'
+                      ? styles.statusChipActive
+                      : pairing.status === 'rejected'
+                        ? styles.statusChipRevoked
+                        : styles.statusChipPending,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusChipText,
+                      pairing.status === 'approved'
+                        ? styles.statusChipTextActive
+                        : pairing.status === 'rejected'
+                          ? styles.statusChipTextRevoked
+                          : styles.statusChipTextPending,
+                    ]}
+                  >
+                    {formatPairingState(pairing.status)}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.deviceMeta}>
+                생성: {formatTimestamp(pairing.createdAt)}
+              </Text>
+              <Text style={styles.deviceMeta}>
+                만료: {formatTimestamp(pairing.expiresAt)}
+              </Text>
+            </View>
+          ))}
+        </View>
+
         <Text style={styles.syncText}>
-          기기 선택 정보는 세션과 함께 저장되어 다음 접속에도 이어집니다.
+          기기 선택과 표시 이름은 이 계정의 세션과 함께 유지됩니다.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -627,6 +761,10 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 14,
   },
+  pairingHistoryCard: {
+    marginTop: 16,
+    gap: 14,
+  },
   deviceTitle: {
     fontSize: 18,
     fontWeight: '700',
@@ -671,7 +809,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   registerButton: {
-    minWidth: 100,
+    minWidth: 110,
     height: 46,
     borderRadius: 12,
     backgroundColor: colors.primary,
@@ -686,6 +824,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  pairingHighlight: {
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    gap: 4,
+  },
+  pairingHighlightLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  pairingHighlightCode: {
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    color: colors.text,
+  },
+  pairingHighlightMeta: {
+    fontSize: 12,
+    color: colors.subText,
   },
   statusText: {
     fontSize: 13,
@@ -707,6 +868,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: colors.text,
+  },
+  historyHint: {
+    fontSize: 12,
+    color: colors.subText,
   },
   refreshButton: {
     paddingHorizontal: 12,
@@ -758,6 +923,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     gap: 6,
   },
+  pairingRow: {
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F8FAFC',
+    gap: 6,
+  },
   deviceRowCurrent: {
     borderColor: '#93C5FD',
     backgroundColor: '#F8FBFF',
@@ -768,17 +941,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
+  pairingRowTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   deviceTitleBlock: {
     flex: 1,
     gap: 3,
   },
   deviceAliasText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  deviceIdText: {
-    flex: 1,
     fontSize: 15,
     fontWeight: '700',
     color: colors.text,
@@ -795,6 +968,9 @@ const styles = StyleSheet.create({
   statusChipActive: {
     backgroundColor: '#DCFCE7',
   },
+  statusChipPending: {
+    backgroundColor: '#FEF3C7',
+  },
   statusChipRevoked: {
     backgroundColor: '#FEE2E2',
   },
@@ -804,6 +980,9 @@ const styles = StyleSheet.create({
   },
   statusChipTextActive: {
     color: '#166534',
+  },
+  statusChipTextPending: {
+    color: '#92400E',
   },
   statusChipTextRevoked: {
     color: '#991B1B',

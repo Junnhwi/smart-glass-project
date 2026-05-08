@@ -195,6 +195,28 @@ export type UserDeviceListResponse = {
   items: UserDevice[];
 };
 
+export type DevicePairing = {
+  pairingCode: string;
+  userId: string;
+  deviceId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  expiresAt: string;
+  approvedAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type DevicePairingIssueResponse = {
+  status: 'issued';
+  pairing: DevicePairing;
+};
+
+export type DevicePairingListResponse = {
+  status: 'ok';
+  totalPairings: number;
+  items: DevicePairing[];
+};
+
 export type AuthUserPayload = {
   userId: string;
   email: string;
@@ -307,6 +329,58 @@ export const listUserDevices = async ({
   }
 
   return response.json() as Promise<UserDeviceListResponse>;
+};
+
+export const issueUserDevicePairing = async ({
+  authToken,
+  userId,
+  deviceId,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+}) => {
+  return postJson<DevicePairingIssueResponse>(
+    `/users/${encodeURIComponent(userId)}/device-pairings`,
+    {
+      deviceId,
+    },
+    { authToken }
+  );
+};
+
+export const listUserDevicePairings = async ({
+  authToken,
+  userId,
+  status,
+  limit = 20,
+}: {
+  authToken: string;
+  userId: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  limit?: number;
+}) => {
+  const query = new URLSearchParams();
+  if (status) {
+    query.set('status', status);
+  }
+  query.set('limit', String(limit));
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/device-pairings?${query.toString()}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<DevicePairingListResponse>;
 };
 
 export const approveUserDevice = async ({
