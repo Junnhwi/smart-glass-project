@@ -5,6 +5,7 @@ export const commonStyles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
+    userSelect: 'none',
   },
 
   contentContainer: {
@@ -36,5 +37,9 @@ export const commonStyles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+
+  selectableText: {
+    userSelect: 'text',
   },
 });

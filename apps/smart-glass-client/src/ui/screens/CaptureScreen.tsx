@@ -104,7 +104,7 @@ const QUICK_ACTIONS = [
 
 export default function CaptureScreen() {
   const navigation = useAppNavigation();
-  const { currentUser } = useAuth();
+  const { currentUser, getDeviceLabel } = useAuth();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [fileName, setFileName] = useState(DEFAULT_FILE_NAME);
@@ -143,7 +143,7 @@ export default function CaptureScreen() {
     captureTaskStatus?.memoryStore?.status === 'success' ||
     captureTaskStatus?.status === 'completed';
   const hasSelectedDevice = Boolean(currentUser?.deviceId);
-  const selectedDeviceLabel = currentUser?.deviceId || '선택된 기기가 없어요';
+  const selectedDeviceLabel = getDeviceLabel(currentUser?.deviceId);
 
   const workflowSteps = [
     { label: '사진 선택', isDone: Boolean(selectedAsset) },

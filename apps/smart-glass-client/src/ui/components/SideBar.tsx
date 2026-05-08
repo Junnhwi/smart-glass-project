@@ -16,7 +16,7 @@ type SidebarProps = {
 
 export default function Sidebar({ visible, onClose }: SidebarProps) {
   const navigation = useAppNavigation();
-  const { currentUser, signOut } = useAuth();
+  const { currentUser, getDeviceLabel, signOut } = useAuth();
 
   const handleMove = (
     screen: 'Capture' | 'History' | 'Profile' | 'Settings'
@@ -50,7 +50,7 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
                 {currentUser?.userId || '로그인 정보 없음'}
               </Text>
               <Text style={styles.accountDevice}>
-                현재 기기: {currentUser?.deviceId || '선택 안 됨'}
+                현재 기기: {getDeviceLabel(currentUser?.deviceId)}
               </Text>
             </View>
 

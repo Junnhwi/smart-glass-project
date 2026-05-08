@@ -30,7 +30,7 @@ const authProviderLabel = (provider?: string | null) => {
 
 export default function SettingsScreen() {
   const navigation = useAppNavigation();
-  const { currentUser, signOut } = useAuth();
+  const { currentUser, getDeviceLabel, signOut } = useAuth();
 
   const handleHeaderPrimaryAction = () => {
     if (navigation.canGoBack) {
@@ -76,21 +76,21 @@ export default function SettingsScreen() {
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>이름</Text>
-            <Text style={styles.infoValue}>
+            <Text style={[styles.infoValue, commonStyles.selectableText]}>
               {currentUser?.displayName || '정보 없음'}
             </Text>
           </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>사용자 ID</Text>
-            <Text style={styles.infoValue}>
+            <Text style={[styles.infoValue, commonStyles.selectableText]}>
               {currentUser?.userId || '정보 없음'}
             </Text>
           </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>이메일</Text>
-            <Text style={styles.infoValue}>
+            <Text style={[styles.infoValue, commonStyles.selectableText]}>
               {currentUser?.email || '정보 없음'}
             </Text>
           </View>
@@ -104,8 +104,8 @@ export default function SettingsScreen() {
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>현재 기기</Text>
-            <Text style={styles.infoValue}>
-              {currentUser?.deviceId || '선택된 기기 없음'}
+            <Text style={[styles.infoValue, commonStyles.selectableText]}>
+              {getDeviceLabel(currentUser?.deviceId)}
             </Text>
           </View>
         </View>

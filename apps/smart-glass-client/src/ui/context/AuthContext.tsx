@@ -26,11 +26,19 @@ type SignInInput = {
   authProvider?: AuthProviderName;
 };
 
+type StoredAuthSession = {
+  user: SignInInput | null;
+  deviceAliases?: Record<string, string>;
+};
+
 type AuthContextValue = {
   currentUser: AuthUser | null;
   isHydrating: boolean;
+  deviceAliases: Record<string, string>;
   signIn: (input: SignInInput) => void;
   setCurrentDevice: (deviceId?: string | null) => void;
+  setDeviceAlias: (deviceId: string, alias?: string | null) => void;
+  getDeviceLabel: (deviceId?: string | null) => string;
   signOut: () => Promise<void>;
 };
 
@@ -71,43 +79,110 @@ const buildAuthUser = (input: SignInInput): AuthUser => {
   };
 };
 
-const parseStoredAuthUser = (rawValue: string | null): AuthUser | null => {
-  if (!rawValue) {
-    return null;
+const normalizeDeviceAliases = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== 'object') {
+    return {};
   }
 
-  try {
-    const parsed = JSON.parse(rawValue) as SignInInput | null;
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
+  return Object.entries(value as Record<string, unknown>).reduce<
+    Record<string, string>
+  >((acc, [key, rawAlias]) => {
+    const normalizedKey = normalizeText(key);
+    const normalizedAlias =
+      typeof rawAlias === 'string' ? normalizeText(rawAlias) : '';
+    if (normalizedKey && normalizedAlias) {
+      acc[normalizedKey] = normalizedAlias;
     }
-    return buildAuthUser(parsed);
-  } catch {
-    return null;
-  }
+    return acc;
+  }, {});
 };
 
-const readStoredAuthUser = (): AuthUser | null => {
-  if (Platform.OS !== 'web' || typeof window === 'undefined') {
-    return null;
+const parseStoredAuthSession = (
+  rawValue: string | null
+): { user: AuthUser | null; deviceAliases: Record<string, string> } => {
+  if (!rawValue) {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
   }
 
   try {
-    return parseStoredAuthUser(window.localStorage.getItem(AUTH_STORAGE_KEY));
+    const parsed = JSON.parse(rawValue) as StoredAuthSession | SignInInput | null;
+    if (!parsed || typeof parsed !== 'object') {
+      return {
+        user: null,
+        deviceAliases: {},
+      };
+    }
+
+    if ('user' in parsed || 'deviceAliases' in parsed) {
+      const storedSession = parsed as StoredAuthSession;
+      return {
+        user:
+          storedSession.user && typeof storedSession.user === 'object'
+            ? buildAuthUser(storedSession.user)
+            : null,
+        deviceAliases: normalizeDeviceAliases(storedSession.deviceAliases),
+      };
+    }
+
+    return {
+      user: buildAuthUser(parsed as SignInInput),
+      deviceAliases: {},
+    };
   } catch {
-    return null;
+    return {
+      user: null,
+      deviceAliases: {},
+    };
   }
 };
 
-const persistAuthUser = async (user: AuthUser | null) => {
+const readStoredAuthSession = (): {
+  user: AuthUser | null;
+  deviceAliases: Record<string, string>;
+} => {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
+  }
+
+  try {
+    return parseStoredAuthSession(window.localStorage.getItem(AUTH_STORAGE_KEY));
+  } catch {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
+  }
+};
+
+const persistAuthSession = async ({
+  user,
+  deviceAliases,
+}: {
+  user: AuthUser | null;
+  deviceAliases: Record<string, string>;
+}) => {
+  const payload: StoredAuthSession = {
+    user,
+    deviceAliases,
+  };
+
   if (Platform.OS !== 'web' || typeof window === 'undefined') {
     try {
       if (!user) {
-        await SecureStore.deleteItemAsync(AUTH_STORAGE_KEY);
-        return;
+        const hasAliases = Object.keys(deviceAliases).length > 0;
+        if (!hasAliases) {
+          await SecureStore.deleteItemAsync(AUTH_STORAGE_KEY);
+          return;
+        }
       }
 
-      await SecureStore.setItemAsync(AUTH_STORAGE_KEY, JSON.stringify(user));
+      await SecureStore.setItemAsync(AUTH_STORAGE_KEY, JSON.stringify(payload));
     } catch {
       // Ignore device storage failures in favor of keeping the in-memory session alive.
     }
@@ -116,31 +191,44 @@ const persistAuthUser = async (user: AuthUser | null) => {
 
   try {
     if (!user) {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY);
-      return;
+      const hasAliases = Object.keys(deviceAliases).length > 0;
+      if (!hasAliases) {
+        window.localStorage.removeItem(AUTH_STORAGE_KEY);
+        return;
+      }
     }
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // Ignore browser storage failures in favor of keeping the in-memory session alive.
   }
 };
 
-const restorePersistedAuthUser = async (): Promise<AuthUser | null> => {
+const restorePersistedAuthSession = async (): Promise<{
+  user: AuthUser | null;
+  deviceAliases: Record<string, string>;
+}> => {
   if (Platform.OS === 'web') {
-    return readStoredAuthUser();
+    return readStoredAuthSession();
   }
 
   try {
     const rawValue = await SecureStore.getItemAsync(AUTH_STORAGE_KEY);
-    return parseStoredAuthUser(rawValue);
+    return parseStoredAuthSession(rawValue);
   } catch {
-    return null;
+    return {
+      user: null,
+      deviceAliases: {},
+    };
   }
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() =>
-    readStoredAuthUser()
+  const initialSession = readStoredAuthSession();
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(
+    initialSession.user
+  );
+  const [deviceAliases, setDeviceAliases] = useState<Record<string, string>>(
+    initialSession.deviceAliases
   );
   const [isHydrating, setIsHydrating] = useState(Platform.OS !== 'web');
 
@@ -153,12 +241,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let isActive = true;
 
     void (async () => {
-      const restoredUser = await restorePersistedAuthUser();
+      const restoredSession = await restorePersistedAuthSession();
       if (!isActive) {
         return;
       }
 
-      setCurrentUser(restoredUser);
+      setCurrentUser(restoredSession.user);
+      setDeviceAliases(restoredSession.deviceAliases);
       setIsHydrating(false);
     })();
 
@@ -170,7 +259,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = (input: SignInInput) => {
     const nextUser = buildAuthUser(input);
     setCurrentUser(nextUser);
-    void persistAuthUser(nextUser);
+    void persistAuthSession({
+      user: nextUser,
+      deviceAliases,
+    });
   };
 
   const setCurrentDevice = (deviceId?: string | null) => {
@@ -185,15 +277,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         deviceId: normalizedDeviceId || null,
       };
-      void persistAuthUser(nextUser);
+      void persistAuthSession({
+        user: nextUser,
+        deviceAliases,
+      });
       return nextUser;
     });
+  };
+
+  const setDeviceAlias = (deviceId: string, alias?: string | null) => {
+    const normalizedDeviceId = normalizeText(deviceId);
+    const normalizedAlias = normalizeText(alias);
+    if (!normalizedDeviceId) {
+      return;
+    }
+
+    setDeviceAliases((prev) => {
+      const nextAliases = { ...prev };
+      if (normalizedAlias) {
+        nextAliases[normalizedDeviceId] = normalizedAlias;
+      } else {
+        delete nextAliases[normalizedDeviceId];
+      }
+
+      void persistAuthSession({
+        user: currentUser,
+        deviceAliases: nextAliases,
+      });
+      return nextAliases;
+    });
+  };
+
+  const getDeviceLabel = (deviceId?: string | null) => {
+    const normalizedDeviceId = normalizeText(deviceId);
+    if (!normalizedDeviceId) {
+      return '선택된 기기 없음';
+    }
+
+    return deviceAliases[normalizedDeviceId] || normalizedDeviceId;
   };
 
   const signOut = async () => {
     const activeUser = currentUser;
     setCurrentUser(null);
-    void persistAuthUser(null);
+    void persistAuthSession({
+      user: null,
+      deviceAliases,
+    });
 
     if (!activeUser) {
       return;
@@ -214,8 +344,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         currentUser,
         isHydrating,
+        deviceAliases,
         signIn,
         setCurrentDevice,
+        setDeviceAlias,
+        getDeviceLabel,
         signOut,
       }}
     >

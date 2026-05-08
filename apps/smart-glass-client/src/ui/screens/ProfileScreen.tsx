@@ -37,9 +37,12 @@ const formatTimestamp = (value?: string | null) => {
 
 export default function ProfileScreen() {
   const navigation = useAppNavigation();
-  const { currentUser, setCurrentDevice } = useAuth();
+  const { currentUser, getDeviceLabel, setCurrentDevice, setDeviceAlias } =
+    useAuth();
   const [devices, setDevices] = useState<UserDevice[]>([]);
   const [registerDeviceId, setRegisterDeviceId] = useState('');
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [pendingDeviceAlias, setPendingDeviceAlias] = useState('');
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [isRegisteringDevice, setIsRegisteringDevice] = useState(false);
   const [isUpdatingDeviceId, setIsUpdatingDeviceId] = useState<string | null>(
@@ -186,6 +189,31 @@ export default function ProfileScreen() {
     navigation.navigate('Capture');
   };
 
+  const startEditingDeviceAlias = (deviceId: string) => {
+    setEditingDeviceId(deviceId);
+    setPendingDeviceAlias(getDeviceLabel(deviceId));
+    setErrorMessage('');
+    setStatusMessage('');
+  };
+
+  const resetEditingDeviceAlias = () => {
+    setEditingDeviceId(null);
+    setPendingDeviceAlias('');
+  };
+
+  const handleSaveDeviceAlias = (deviceId: string) => {
+    const normalizedAlias = pendingDeviceAlias.trim();
+    if (!normalizedAlias) {
+      setErrorMessage('기기 이름을 입력해주세요.');
+      return;
+    }
+
+    setDeviceAlias(deviceId, normalizedAlias);
+    setStatusMessage('기기 이름을 저장했습니다.');
+    setErrorMessage('');
+    resetEditingDeviceAlias();
+  };
+
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
@@ -214,7 +242,7 @@ export default function ProfileScreen() {
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>이름</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>
+            <Text style={[styles.value, commonStyles.selectableText]}>
               {currentUser?.displayName || '정보 없음'}
             </Text>
           </View>
@@ -223,22 +251,26 @@ export default function ProfileScreen() {
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>사용자 ID</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.userId || '정보 없음'}</Text>
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {currentUser?.userId || '정보 없음'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>이메일</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.email || '정보 없음'}</Text>
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {currentUser?.email || '정보 없음'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>현재 기기</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>
-              {currentUser?.deviceId || '선택된 기기 없음'}
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {getDeviceLabel(currentUser?.deviceId)}
             </Text>
           </View>
         </View>
@@ -322,8 +354,13 @@ export default function ProfileScreen() {
           {currentManagedDevice ? (
             <View style={styles.currentDeviceBanner}>
               <Text style={styles.currentDeviceBannerLabel}>현재 선택된 기기</Text>
-              <Text style={styles.currentDeviceBannerValue}>
-                {currentManagedDevice.deviceId} ·{' '}
+              <Text
+                style={[
+                  styles.currentDeviceBannerValue,
+                  commonStyles.selectableText,
+                ]}
+              >
+                {getDeviceLabel(currentManagedDevice.deviceId)} ·{' '}
                 {currentManagedDevice.status === 'active'
                   ? '활성'
                   : '비활성'}
@@ -346,7 +383,19 @@ export default function ProfileScreen() {
                 ]}
               >
                 <View style={styles.deviceRowTop}>
-                  <Text style={styles.deviceIdText}>{device.deviceId}</Text>
+                  <View style={styles.deviceTitleBlock}>
+                    <Text style={styles.deviceAliasText}>
+                      {getDeviceLabel(device.deviceId)}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.deviceIdSubText,
+                        commonStyles.selectableText,
+                      ]}
+                    >
+                      ID: {device.deviceId}
+                    </Text>
+                  </View>
                   <View
                     style={[
                       styles.statusChip,
@@ -367,6 +416,66 @@ export default function ProfileScreen() {
                     </Text>
                   </View>
                 </View>
+
+                {editingDeviceId === device.deviceId ? (
+                  <View style={styles.renameEditor}>
+                    <TextInput
+                      value={pendingDeviceAlias}
+                      onChangeText={setPendingDeviceAlias}
+                      autoCorrect={false}
+                      placeholder="기기 이름"
+                      placeholderTextColor={colors.subText}
+                      style={styles.renameInput}
+                    />
+                    <View style={styles.renameActions}>
+                      <Pressable
+                        style={[
+                          styles.renameButton,
+                          styles.renameButtonPrimary,
+                        ]}
+                        onPress={() => {
+                          handleSaveDeviceAlias(device.deviceId);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.renameButtonText,
+                            styles.renameButtonTextPrimary,
+                          ]}
+                        >
+                          저장
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.renameButton,
+                          styles.renameButtonSecondary,
+                        ]}
+                        onPress={resetEditingDeviceAlias}
+                      >
+                        <Text
+                          style={[
+                            styles.renameButtonText,
+                            styles.renameButtonTextSecondary,
+                          ]}
+                        >
+                          취소
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.renameInlineRow}>
+                    <Pressable
+                      style={styles.renameShortcut}
+                      onPress={() => {
+                        startEditingDeviceAlias(device.deviceId);
+                      }}
+                    >
+                      <Text style={styles.renameShortcutText}>이름 수정</Text>
+                    </Pressable>
+                  </View>
+                )}
 
                 <Text style={styles.deviceMeta}>
                   등록: {formatTimestamp(device.registeredAt)}
@@ -655,15 +764,28 @@ const styles = StyleSheet.create({
   },
   deviceRowTop: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  deviceTitleBlock: {
+    flex: 1,
+    gap: 3,
+  },
+  deviceAliasText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.text,
   },
   deviceIdText: {
     flex: 1,
     fontSize: 15,
     fontWeight: '700',
     color: colors.text,
+  },
+  deviceIdSubText: {
+    fontSize: 12,
+    color: colors.subText,
   },
   statusChip: {
     paddingHorizontal: 10,
@@ -689,6 +811,69 @@ const styles = StyleSheet.create({
   deviceMeta: {
     fontSize: 12,
     color: colors.subText,
+  },
+  renameInlineRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+  },
+  renameShortcut: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  renameShortcutText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  renameEditor: {
+    gap: 10,
+    marginTop: 2,
+  },
+  renameInput: {
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    fontSize: 14,
+    color: colors.text,
+  },
+  renameActions: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  renameButton: {
+    minHeight: 38,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  renameButtonPrimary: {
+    backgroundColor: colors.primary,
+  },
+  renameButtonSecondary: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  renameButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  renameButtonTextPrimary: {
+    color: '#FFFFFF',
+  },
+  renameButtonTextSecondary: {
+    color: colors.text,
   },
   deviceActions: {
     marginTop: 8,

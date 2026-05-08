@@ -12,6 +12,7 @@ import {
 
 import Sidebar from '../components/SideBar';
 import logo from '../icon/logo.png';
+import micIcon from '../icon/mic.png';
 import { useAuth } from '../context/AuthContext';
 import { useItemContext } from '../context/ItemContext';
 import { useAppNavigation } from '../navigation/appNavigation';
@@ -106,6 +107,7 @@ export default function ChatScreen() {
   const [isBotTyping, setIsBotTyping] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput>(null);
   const messagePositions = useRef<Record<number, number>>({});
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
@@ -291,7 +293,26 @@ export default function ChatScreen() {
   };
 
   const handleSend = () => {
-    void sendQuery(inputText);
+    const draft = inputText.trim();
+    if (!draft) {
+      return;
+    }
+
+    void sendQuery(draft);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
+  };
+
+  const handleMicPress = () => {
+    const botMessage: Message = {
+      id: Date.now(),
+      sender: 'bot',
+      text: '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.',
+    };
+
+    setMessages((prev) => [...prev, botMessage]);
+    scrollToBottom();
   };
 
   return (
@@ -484,31 +505,25 @@ export default function ChatScreen() {
       <View style={styles.inputArea}>
         <View style={styles.inputInner}>
           <TextInput
+            ref={inputRef}
             value={inputText}
             onChangeText={setInputText}
             placeholder="찾고 싶은 물건이나 장면을 입력하세요"
             placeholderTextColor="#9CA3AF"
             style={styles.input}
             onSubmitEditing={handleSend}
+            blurOnSubmit={false}
           />
 
-          <Pressable
-            style={[
-              styles.sendButton,
-              !inputText.trim() && styles.sendButtonDisabled,
-            ]}
-            onPress={handleSend}
-            disabled={!inputText.trim()}
-          >
-            <Text
-              style={[
-                styles.actionButtonText,
-                !inputText.trim() && styles.actionButtonTextDisabled,
-              ]}
-            >
-              전송
-            </Text>
-          </Pressable>
+          {inputText.trim() ? (
+            <Pressable style={styles.sendButton} onPress={handleSend}>
+              <Text style={styles.actionButtonText}>전송</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.micButton} onPress={handleMicPress}>
+              <Image source={micIcon} style={styles.micIcon} />
+            </Pressable>
+          )}
         </View>
       </View>
 
@@ -761,8 +776,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 16,
   },
-  sendButtonDisabled: {
-    backgroundColor: '#E5E7EB',
+  micButton: {
+    minWidth: 64,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  micIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: 'contain',
   },
   headerCenter: {
     flex: 1,
@@ -777,8 +803,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
-  },
-  actionButtonTextDisabled: {
-    color: '#6B7280',
   },
 });
