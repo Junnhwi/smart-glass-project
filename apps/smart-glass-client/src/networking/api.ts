@@ -243,6 +243,16 @@ export type AuthLogoutResponse = {
   revokedRefreshToken: boolean;
 };
 
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
 export type GoogleOauthStartResponse = {
   provider: 'google';
   authorizationUrl: string;
@@ -286,7 +296,7 @@ const postJson = async <TResponse>(
   });
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json();
@@ -377,7 +387,7 @@ export const listUserDevicePairings = async ({
   );
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json() as Promise<DevicePairingListResponse>;
@@ -452,6 +462,16 @@ export const logoutAuthSession = async ({
     },
     { authToken: authToken || undefined }
   );
+};
+
+export const refreshAuthToken = async ({
+  refreshToken,
+}: {
+  refreshToken: string;
+}) => {
+  return postJson<AuthTokenResponse>('/auth/refresh', {
+    refreshToken,
+  });
 };
 
 export const chatWithMemories = async ({
@@ -544,7 +564,7 @@ export const listRecentMemories = async ({
   );
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json() as Promise<MemoryRecentResponse>;
@@ -617,7 +637,7 @@ export const getCaptureTaskStatus = async (taskId: string) => {
   );
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json() as Promise<CaptureTaskStatusResponse>;

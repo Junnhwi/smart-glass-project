@@ -82,8 +82,12 @@ export default function App() {
   const [logFilter, setLogFilter] = useState('all');
 
   const authToken = session?.accessToken || '';
+  const visibleUsers = useMemo(() => {
+    const currentAdminUserId = session?.user?.userId || '';
+    return users.filter((user) => user.userId !== currentAdminUserId);
+  }, [session?.user?.userId, users]);
   const selectedUser =
-    users.find((user) => user.userId === selectedUserId) || null;
+    visibleUsers.find((user) => user.userId === selectedUserId) || null;
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -112,10 +116,13 @@ export default function App() {
       });
       setUsers(response.items || []);
       setSelectedUserId((prev) => {
-        if (prev && response.items?.some((item) => item.userId === prev)) {
+        const visibleItems = (response.items || []).filter(
+          (item) => item.userId !== session?.user?.userId
+        );
+        if (prev && visibleItems.some((item) => item.userId === prev)) {
           return prev;
         }
-        return response.items?.[0]?.userId || '';
+        return visibleItems[0]?.userId || '';
       });
     } catch (nextError) {
       setError(
@@ -487,7 +494,7 @@ export default function App() {
           ) : null}
 
           <div className="user-list">
-            {users.map((user) => (
+            {visibleUsers.map((user) => (
               <button
                 key={user.userId}
                 className={`user-item ${selectedUserId === user.userId ? 'selected' : ''}`}
@@ -507,7 +514,7 @@ export default function App() {
                 </div>
               </button>
             ))}
-            {!isLoadingUsers && users.length === 0 ? (
+            {!isLoadingUsers && visibleUsers.length === 0 ? (
               <p className="muted-copy">관리자 세션을 연결하면 사용자 목록이 표시됩니다.</p>
             ) : null}
           </div>

@@ -18,6 +18,7 @@ import { useItemContext } from '../context/ItemContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import {
+  ApiRequestError,
   chatWithMemories,
   issueMediaAccessUrls,
   type MemorySearchHit,
@@ -96,7 +97,7 @@ const buildRelatedImages = (
 
 export default function ChatScreen() {
   const navigation = useAppNavigation();
-  const { currentUser } = useAuth();
+  const { currentUser, refreshSession, signOut } = useAuth();
   const { addItem } = useItemContext();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -235,12 +236,41 @@ export default function ChatScreen() {
     scrollToBottom();
 
     try {
-      const chatResponse = await chatWithMemories({
-        authToken: currentUser.authToken,
-        userId: currentUser.userId,
-        query: trimmed,
-        topK: 3,
-      });
+      const runChatRequest = async (authToken: string, userId: string) =>
+        chatWithMemories({
+          authToken,
+          userId,
+          query: trimmed,
+          topK: 3,
+        });
+
+      let activeSession = currentUser;
+      let chatResponse;
+
+      try {
+        chatResponse = await runChatRequest(
+          activeSession.authToken,
+          activeSession.userId
+        );
+      } catch (error) {
+        if (
+          error instanceof ApiRequestError &&
+          error.status === 401 &&
+          activeSession.refreshToken
+        ) {
+          const refreshedUser = await refreshSession();
+          if (!refreshedUser) {
+            throw error;
+          }
+          activeSession = refreshedUser;
+          chatResponse = await runChatRequest(
+            refreshedUser.authToken,
+            refreshedUser.userId
+          );
+        } else {
+          throw error;
+        }
+      }
 
       const imageKeys = uniqueImageKeysFromHits(chatResponse.hits);
       let accessUrlByImageKey: Record<string, string> = {};
@@ -248,8 +278,8 @@ export default function ChatScreen() {
       if (imageKeys.length > 0) {
         try {
           const accessUrls = await issueMediaAccessUrls({
-            authToken: currentUser.authToken,
-            userId: currentUser.userId,
+            authToken: activeSession.authToken,
+            userId: activeSession.userId,
             imageKeys,
           });
           accessUrlByImageKey = accessUrls.items.reduce<Record<string, string>>(
@@ -278,7 +308,11 @@ export default function ChatScreen() {
       };
 
       setMessages((prev) => [...prev, botMessage]);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 401) {
+        void signOut();
+      }
+
       const botMessage: Message = {
         id: Date.now() + 1,
         sender: 'bot',

@@ -2,7 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { logoutAuthSession } from '../../networking/api';
+import { logoutAuthSession, refreshAuthToken } from '../../networking/api';
 
 export type AuthProviderName = 'password' | 'google';
 
@@ -36,6 +36,7 @@ type AuthContextValue = {
   isHydrating: boolean;
   deviceAliases: Record<string, string>;
   signIn: (input: SignInInput) => void;
+  refreshSession: () => Promise<AuthUser | null>;
   setCurrentDevice: (deviceId?: string | null) => void;
   setDeviceAlias: (deviceId: string, alias?: string | null) => void;
   getDeviceLabel: (deviceId?: string | null) => string;
@@ -265,6 +266,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  const refreshSession = async () => {
+    const activeUser = currentUser;
+    const refreshTokenValue = normalizeText(activeUser?.refreshToken);
+    if (!activeUser || !refreshTokenValue) {
+      return null;
+    }
+
+    const response = await refreshAuthToken({
+      refreshToken: refreshTokenValue,
+    });
+
+    const nextUser = buildAuthUser({
+      userId: response.user.userId,
+      deviceId: activeUser.deviceId,
+      displayName: response.user.displayName,
+      email: response.user.email,
+      authToken: response.accessToken,
+      refreshToken: response.refreshToken,
+      authProvider: activeUser.authProvider,
+    });
+
+    setCurrentUser(nextUser);
+    await persistAuthSession({
+      user: nextUser,
+      deviceAliases,
+    });
+    return nextUser;
+  };
+
   const setCurrentDevice = (deviceId?: string | null) => {
     const normalizedDeviceId = normalizeText(deviceId);
 
@@ -346,6 +376,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isHydrating,
         deviceAliases,
         signIn,
+        refreshSession,
         setCurrentDevice,
         setDeviceAlias,
         getDeviceLabel,
