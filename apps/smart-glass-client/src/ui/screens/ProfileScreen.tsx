@@ -25,6 +25,8 @@ import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
+const AUTO_REFRESH_INTERVAL_MS = 3000;
+
 const formatTimestamp = (value?: string | null) => {
   if (!value) {
     return '정보 없음';
@@ -67,14 +69,16 @@ export default function ProfileScreen() {
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
-  const loadDevices = async () => {
+  const loadDevices = async ({ silent = false } = {}) => {
     if (!currentUser) {
       setDevices([]);
       return;
     }
 
-    setIsLoadingDevices(true);
-    setErrorMessage('');
+    if (!silent) {
+      setIsLoadingDevices(true);
+      setErrorMessage('');
+    }
     try {
       const response = await listUserDevices({
         authToken: currentUser.authToken,
@@ -86,19 +90,25 @@ export default function ProfileScreen() {
         error instanceof Error && error.message
           ? error.message
           : '기기 목록을 불러오지 못했습니다.';
-      setErrorMessage(message);
+      if (!silent) {
+        setErrorMessage(message);
+      }
     } finally {
-      setIsLoadingDevices(false);
+      if (!silent) {
+        setIsLoadingDevices(false);
+      }
     }
   };
 
-  const loadPairings = async () => {
+  const loadPairings = async ({ silent = false } = {}) => {
     if (!currentUser) {
       setPairings([]);
       return;
     }
 
-    setIsLoadingPairings(true);
+    if (!silent) {
+      setIsLoadingPairings(true);
+    }
     try {
       const response = await listUserDevicePairings({
         authToken: currentUser.authToken,
@@ -109,13 +119,30 @@ export default function ProfileScreen() {
     } catch {
       // Pairing history is helpful, but it should not block the rest of the page.
     } finally {
-      setIsLoadingPairings(false);
+      if (!silent) {
+        setIsLoadingPairings(false);
+      }
     }
   };
 
   useEffect(() => {
     void loadDevices();
     void loadPairings();
+  }, [currentUser?.authToken, currentUser?.userId]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadDevices({ silent: true });
+      void loadPairings({ silent: true });
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(interval);
+    };
   }, [currentUser?.authToken, currentUser?.userId]);
 
   const moveToCaptureWithDevice = (deviceId: string) => {
@@ -284,9 +311,6 @@ export default function ProfileScreen() {
     } finally {
       setIsUpdatingDeviceId(null);
     }
-    setStatusMessage('기기 이름을 저장했습니다.');
-    setErrorMessage('');
-    resetEditingDeviceAlias();
   };
 
   const latestPendingPairing = pairings.find((pairing) => pairing.status === 'pending');

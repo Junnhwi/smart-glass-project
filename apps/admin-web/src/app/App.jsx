@@ -5,6 +5,7 @@ const API_BASE_URL =
 const STORAGE_KEY = 'smart-glass-admin.session';
 const SHARED_ADMIN_EMAIL = 'team-admin@smartglass.local';
 const SHARED_ADMIN_PASSWORD = 'TeamAdmin123!';
+const AUTO_REFRESH_INTERVAL_MS = 3000;
 
 const formatTime = (value) => {
   if (!value) {
@@ -102,14 +103,16 @@ export default function App() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
   }, [session]);
 
-  const loadUsers = async () => {
+  const loadUsers = async ({ silent = false } = {}) => {
     if (!authToken) {
       setUsers([]);
       return;
     }
 
-    setIsLoadingUsers(true);
-    setError('');
+    if (!silent) {
+      setIsLoadingUsers(true);
+      setError('');
+    }
     try {
       const response = await requestJson('/admin/auth/users?limit=100', {
         token: authToken,
@@ -125,24 +128,30 @@ export default function App() {
         return visibleItems[0]?.userId || '';
       });
     } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : '사용자 목록을 불러오지 못했습니다.'
-      );
+      if (!silent) {
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : '사용자 목록을 불러오지 못했습니다.'
+        );
+      }
     } finally {
-      setIsLoadingUsers(false);
+      if (!silent) {
+        setIsLoadingUsers(false);
+      }
     }
   };
 
-  const loadUserDevices = async (userId) => {
+  const loadUserDevices = async (userId, { silent = false } = {}) => {
     if (!authToken || !userId) {
       setSelectedUserDevices([]);
       return;
     }
 
-    setIsLoadingDevices(true);
-    setError('');
+    if (!silent) {
+      setIsLoadingDevices(true);
+      setError('');
+    }
     try {
       const response = await requestJson(
         `/admin/users/${encodeURIComponent(userId)}/devices`,
@@ -150,24 +159,30 @@ export default function App() {
       );
       setSelectedUserDevices(response.items || []);
     } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : '기기 목록을 불러오지 못했습니다.'
-      );
+      if (!silent) {
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : '기기 목록을 불러오지 못했습니다.'
+        );
+      }
     } finally {
-      setIsLoadingDevices(false);
+      if (!silent) {
+        setIsLoadingDevices(false);
+      }
     }
   };
 
-  const loadPendingPairings = async () => {
+  const loadPendingPairings = async ({ silent = false } = {}) => {
     if (!authToken) {
       setPendingPairings([]);
       return;
     }
 
-    setIsLoadingPairings(true);
-    setError('');
+    if (!silent) {
+      setIsLoadingPairings(true);
+      setError('');
+    }
     try {
       const response = await requestJson(
         '/admin/device-pairings?status=pending&limit=100',
@@ -177,17 +192,25 @@ export default function App() {
       );
       setPendingPairings(response.items || []);
     } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : '페어링 요청을 불러오지 못했습니다.'
-      );
+      if (!silent) {
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : '페어링 요청을 불러오지 못했습니다.'
+        );
+      }
     } finally {
-      setIsLoadingPairings(false);
+      if (!silent) {
+        setIsLoadingPairings(false);
+      }
     }
   };
 
-  const loadMemoryLogs = async ({ userId = selectedUserId, type = logFilter } = {}) => {
+  const loadMemoryLogs = async ({
+    userId = selectedUserId,
+    type = logFilter,
+    silent = false,
+  } = {}) => {
     if (!authToken) {
       setMemoryLogs([]);
       return;
@@ -202,8 +225,10 @@ export default function App() {
     }
     query.set('limit', '50');
 
-    setIsLoadingLogs(true);
-    setError('');
+    if (!silent) {
+      setIsLoadingLogs(true);
+      setError('');
+    }
     try {
       const response = await requestJson(
         `/admin/memory-query-logs?${query.toString()}`,
@@ -213,13 +238,17 @@ export default function App() {
       );
       setMemoryLogs(response.items || []);
     } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : '검색 및 채팅 로그를 불러오지 못했습니다.'
-      );
+      if (!silent) {
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : '검색 및 채팅 로그를 불러오지 못했습니다.'
+        );
+      }
     } finally {
-      setIsLoadingLogs(false);
+      if (!silent) {
+        setIsLoadingLogs(false);
+      }
     }
   };
 
@@ -250,6 +279,34 @@ export default function App() {
 
     void loadMemoryLogs({ userId: selectedUserId, type: logFilter });
   }, [authToken, logFilter]);
+
+  useEffect(() => {
+    if (!authToken) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
+
+      void loadUsers({ silent: true });
+      void loadPendingPairings({ silent: true });
+      void loadMemoryLogs({
+        userId: selectedUserId,
+        type: logFilter,
+        silent: true,
+      });
+
+      if (selectedUserId) {
+        void loadUserDevices(selectedUserId, { silent: true });
+      }
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [authToken, logFilter, selectedUserId]);
 
   const handleLogin = async (event) => {
     event.preventDefault();
@@ -368,15 +425,15 @@ export default function App() {
   };
 
   const userSummary = useMemo(() => {
-    const activeUsers = users.filter((user) => user.status === 'active').length;
+    const activeUsers = visibleUsers.filter((user) => user.status === 'active').length;
     const failedLogs = memoryLogs.filter((log) => log.totalHits === 0).length;
     return {
-      totalUsers: users.length,
+      totalUsers: visibleUsers.length,
       activeUsers,
       pendingPairings: pendingPairings.length,
       failedLogs,
     };
-  }, [memoryLogs, pendingPairings.length, users]);
+  }, [memoryLogs, pendingPairings.length, visibleUsers]);
 
   return (
     <div className="admin-shell">

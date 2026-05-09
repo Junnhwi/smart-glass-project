@@ -144,22 +144,6 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
-        <View style={[commonStyles.card, styles.sectionCard]}>
-          <Text style={styles.sectionTitle}>도움말</Text>
-          <Text style={styles.helpText}>
-            Google 로그인 버튼은 로그인 화면에서 계속 유지됩니다. 현재 화면은
-            세션 복원 때문에 바로 진입한 상태일 수 있습니다.
-          </Text>
-          <Text style={styles.helpText}>
-            웹에서는 이제 브라우저 뒤로가기와 앱 내부 뒤로가기가 함께 동작하도록
-            연결되어, 직전 화면으로 더 자연스럽게 이동할 수 있습니다.
-          </Text>
-          <Text style={styles.helpText}>
-            뒤로갈 곳이 없는 화면에는 홈이나 프로필로 바로 이동할 수 있는 버튼을
-            같이 남겨두었습니다.
-          </Text>
-        </View>
-
         <Pressable
           style={styles.logoutButton}
           onPress={() => {
@@ -244,11 +228,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: colors.primary,
-  },
-  helpText: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: colors.subText,
   },
   logoutButton: {
     minHeight: 50,
