@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8002';
@@ -53,6 +53,15 @@ const requestJson = async (path, { method = 'GET', token, body } = {}) => {
   return response.json();
 };
 
+const requestRefreshToken = async (refreshToken) => {
+  return requestJson('/auth/refresh', {
+    method: 'POST',
+    body: {
+      refreshToken,
+    },
+  });
+};
+
 export default function App() {
   const [email, setEmail] = useState(SHARED_ADMIN_EMAIL);
   const [password, setPassword] = useState(SHARED_ADMIN_PASSWORD);
@@ -81,8 +90,87 @@ export default function App() {
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [busyActionKey, setBusyActionKey] = useState('');
   const [logFilter, setLogFilter] = useState('all');
+  const refreshPromiseRef = useRef(null);
 
   const authToken = session?.accessToken || '';
+  const buildSessionBundle = (response) => {
+    const now = Date.now();
+    return {
+      accessToken: response.accessToken,
+      refreshToken: response.refreshToken,
+      accessTokenExpiresAt: new Date(
+        now + (response.expiresInSec || 0) * 1000
+      ).toISOString(),
+      refreshTokenExpiresAt: new Date(
+        now + (response.refreshExpiresInSec || 0) * 1000
+      ).toISOString(),
+      user: response.user,
+    };
+  };
+  const clearSessionState = (feedbackMessage = '', errorMessage = '') => {
+    setSession(null);
+    setUsers([]);
+    setSelectedUserId('');
+    setSelectedUserDevices([]);
+    setPendingPairings([]);
+    setMemoryLogs([]);
+    setFeedback(feedbackMessage);
+    setError(errorMessage);
+  };
+  const refreshSession = async () => {
+    if (!session?.refreshToken) {
+      clearSessionState('', '세션이 만료되었습니다. 다시 로그인해 주세요.');
+      throw new Error('세션이 만료되었습니다. 다시 로그인해 주세요.');
+    }
+
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    refreshPromiseRef.current = requestRefreshToken(session.refreshToken)
+      .then((response) => {
+        if (response.user?.role !== 'admin') {
+          throw new Error('관리자 세션만 자동 연장할 수 있습니다.');
+        }
+        const nextSession = buildSessionBundle(response);
+        setSession(nextSession);
+        return nextSession;
+      })
+      .catch((nextError) => {
+        clearSessionState('', '세션이 만료되었습니다. 다시 로그인해 주세요.');
+        throw nextError;
+      })
+      .finally(() => {
+        refreshPromiseRef.current = null;
+      });
+
+    return refreshPromiseRef.current;
+  };
+  const authRequest = async (path, options = {}) => {
+    const perform = async (token) =>
+      requestJson(path, {
+        ...options,
+        token,
+      });
+
+    try {
+      return await perform(authToken);
+    } catch (nextError) {
+      const message =
+        nextError instanceof Error ? nextError.message.toLowerCase() : '';
+      const shouldRefresh =
+        message.includes('401') ||
+        message.includes('unauthorized') ||
+        message.includes('invalid or expired token');
+
+      if (!shouldRefresh) {
+        throw nextError;
+      }
+
+      const nextSession = await refreshSession();
+      return perform(nextSession.accessToken);
+    }
+  };
   const visibleUsers = useMemo(() => {
     const currentAdminUserId = session?.user?.userId || '';
     return users.filter((user) => user.userId !== currentAdminUserId);
@@ -103,6 +191,34 @@ export default function App() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
   }, [session]);
 
+  useEffect(() => {
+    if (!session?.refreshToken) {
+      return;
+    }
+
+    const expiresAt = session.accessTokenExpiresAt
+      ? new Date(session.accessTokenExpiresAt).getTime()
+      : NaN;
+    if (!Number.isFinite(expiresAt)) {
+      return;
+    }
+
+    const refreshDelayMs = Math.max(expiresAt - Date.now() - 60_000, 5_000);
+    const timer = window.setTimeout(() => {
+      void refreshSession().catch((nextError) => {
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : '세션을 자동으로 연장하지 못했습니다.'
+        );
+      });
+    }, refreshDelayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [session?.accessTokenExpiresAt, session?.refreshToken]);
+
   const loadUsers = async ({ silent = false } = {}) => {
     if (!authToken) {
       setUsers([]);
@@ -114,9 +230,7 @@ export default function App() {
       setError('');
     }
     try {
-      const response = await requestJson('/admin/auth/users?limit=100', {
-        token: authToken,
-      });
+      const response = await authRequest('/admin/auth/users?limit=100');
       setUsers(response.items || []);
       setSelectedUserId((prev) => {
         const visibleItems = (response.items || []).filter(
@@ -153,9 +267,8 @@ export default function App() {
       setError('');
     }
     try {
-      const response = await requestJson(
-        `/admin/users/${encodeURIComponent(userId)}/devices`,
-        { token: authToken }
+      const response = await authRequest(
+        `/admin/users/${encodeURIComponent(userId)}/devices`
       );
       setSelectedUserDevices(response.items || []);
     } catch (nextError) {
@@ -184,11 +297,8 @@ export default function App() {
       setError('');
     }
     try {
-      const response = await requestJson(
-        '/admin/device-pairings?status=pending&limit=100',
-        {
-          token: authToken,
-        }
+      const response = await authRequest(
+        '/admin/device-pairings?status=pending&limit=100'
       );
       setPendingPairings(response.items || []);
     } catch (nextError) {
@@ -230,11 +340,8 @@ export default function App() {
       setError('');
     }
     try {
-      const response = await requestJson(
-        `/admin/memory-query-logs?${query.toString()}`,
-        {
-          token: authToken,
-        }
+      const response = await authRequest(
+        `/admin/memory-query-logs?${query.toString()}`
       );
       setMemoryLogs(response.items || []);
     } catch (nextError) {
@@ -331,11 +438,7 @@ export default function App() {
         throw new Error('관리자 권한이 있는 계정으로 로그인해주세요.');
       }
 
-      setSession({
-        accessToken: response.accessToken,
-        refreshToken: response.refreshToken,
-        user: response.user,
-      });
+      setSession(buildSessionBundle(response));
       setFeedback('관리자 세션이 연결되었습니다.');
     } catch (nextError) {
       setError(
@@ -349,14 +452,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    setSession(null);
-    setUsers([]);
-    setSelectedUserId('');
-    setSelectedUserDevices([]);
-    setPendingPairings([]);
-    setMemoryLogs([]);
-    setFeedback('관리자 세션을 종료했습니다.');
-    setError('');
+    clearSessionState('관리자 세션을 종료했습니다.');
   };
 
   const handleDeviceAction = async (userId, deviceId, action) => {
@@ -365,11 +461,10 @@ export default function App() {
     setError('');
     setFeedback('');
     try {
-      await requestJson(
+      await authRequest(
         `/admin/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/${action}`,
         {
           method: 'POST',
-          token: authToken,
           body: {},
         }
       );
@@ -395,11 +490,10 @@ export default function App() {
     setError('');
     setFeedback('');
     try {
-      await requestJson(
+      await authRequest(
         `/admin/device-pairings/${encodeURIComponent(pairingCode)}/${action}`,
         {
           method: 'POST',
-          token: authToken,
           body: {},
         }
       );

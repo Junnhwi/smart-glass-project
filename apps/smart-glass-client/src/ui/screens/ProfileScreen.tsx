@@ -319,9 +319,11 @@ export default function ProfileScreen() {
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
         <Pressable onPress={handleHeaderPrimaryAction}>
-          <Text style={styles.headerLink}>
-            {navigation.canGoBack ? '뒤로' : '홈'}
-          </Text>
+          {navigation.canGoBack ? (
+            <Text style={styles.headerIcon}>{'<'}</Text>
+          ) : (
+            <Text style={styles.headerLink}>홈</Text>
+          )}
         </Pressable>
 
         <Text style={commonStyles.headerTitle}>프로필</Text>
@@ -775,6 +777,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: colors.primary,
+    textAlign: 'center',
+  },
+  headerIcon: {
+    width: 24,
+    fontSize: 24,
+    color: colors.text,
     textAlign: 'center',
   },
   avatar: {

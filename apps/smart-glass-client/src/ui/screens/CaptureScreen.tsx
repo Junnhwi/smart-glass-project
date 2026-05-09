@@ -164,7 +164,7 @@ export default function CaptureScreen() {
           style={styles.headerAction}
           onPress={() => setSidebarVisible(true)}
         >
-          <Text style={styles.headerActionText}>☰</Text>
+          <Text style={styles.headerActionText}>≡</Text>
         </Pressable>
 
         <Text style={commonStyles.headerTitle}>자동 동기화 홈</Text>
@@ -181,14 +181,13 @@ export default function CaptureScreen() {
         contentContainerStyle={[styles.content, commonStyles.contentContainer]}
       >
         <View style={[commonStyles.card, styles.heroCard]}>
-          <Text style={styles.heroEyebrow}>AUTO PIPELINE</Text>
+          <Text style={styles.heroEyebrow}>SMART GLASS</Text>
           <Text style={styles.heroTitle}>
-            촬영 이후 업로드와 추론은 자동으로 이어지도록 맞췄습니다
+            촬영한 장면이 자동으로 정리되고 있습니다
           </Text>
           <Text style={styles.heroDescription}>
-            이제 이 화면은 수동 업로드가 아니라 자동 동기화 상태를 확인하는 용도입니다.
-            하드웨어에서 사진이 들어오면 서버 업로드, 추론, 캡션과 메타데이터 저장까지
-            순서대로 자동 처리되는 흐름을 기준으로 두었습니다.
+            연결된 기기에서 들어온 사진은 순서대로 정리되어 저장됩니다.
+            최근 상태를 확인하고, 저장된 기억은 채팅과 기록 화면에서 바로 이어서 볼 수 있습니다.
           </Text>
 
           <View style={styles.metaRow}>
@@ -216,7 +215,7 @@ export default function CaptureScreen() {
                 : styles.statusCardMuted,
           ]}
         >
-          <Text style={styles.statusLabel}>자동 처리 상태</Text>
+          <Text style={styles.statusLabel}>상태</Text>
           <Text style={styles.statusTitle}>{syncStatus.label}</Text>
           <Text style={styles.statusDescription}>{syncStatus.description}</Text>
           {!hasSelectedDevice ? (
@@ -230,10 +229,9 @@ export default function CaptureScreen() {
         </View>
 
         <View style={[commonStyles.card, styles.workflowCard]}>
-          <Text style={styles.sectionTitle}>자동 처리 순서</Text>
+          <Text style={styles.sectionTitle}>처리 흐름</Text>
           <Text style={styles.sectionDescription}>
-            하드웨어가 붙으면 아래 순서가 사용자 개입 없이 자연스럽게 이어지도록 두는 게
-            핵심입니다.
+            연결된 기기에서 사진이 들어오면 아래 흐름으로 자동 정리됩니다.
           </Text>
           <View style={styles.stepList}>
             {AUTO_FLOW_STEPS.map((step, index) => (
@@ -264,9 +262,9 @@ export default function CaptureScreen() {
         <View style={[commonStyles.card, styles.recentCard]}>
           <View style={styles.sectionHeader}>
             <View>
-              <Text style={styles.sectionTitle}>최근 저장된 기억</Text>
+              <Text style={styles.sectionTitle}>최근 장면</Text>
               <Text style={styles.sectionDescription}>
-                자동 업로드가 성공하면 여기에 최신 장면들이 반영됩니다.
+                최근에 정리된 장면을 여기에서 바로 확인할 수 있습니다.
               </Text>
             </View>
             <Pressable
@@ -291,7 +289,7 @@ export default function CaptureScreen() {
 
           {!isLoadingRecent && recentMemories.length === 0 ? (
             <Text style={styles.emptyText}>
-              아직 저장된 최근 기억이 없습니다. 하드웨어에서 사진이 들어오면 자동으로 여기에 나타납니다.
+              아직 정리된 장면이 없습니다.
             </Text>
           ) : null}
 
