@@ -64,6 +64,7 @@ class PostgresUserRegistryTests(unittest.TestCase):
                 "glass-001",
                 "user-1",
                 "active",
+                None,
                 "2026-05-05T00:01:00Z",
                 "2026-05-05T00:01:00Z",
                 None,
@@ -79,7 +80,10 @@ class PostgresUserRegistryTests(unittest.TestCase):
         self.assertEqual(record.device_id, "glass-001")
         self.assertEqual(record.status, "active")
         self.assertTrue(connection.committed)
-        self.assertEqual(cursor.executed[0][1], ("glass-001", "user-1", "active"))
+        self.assertEqual(
+            cursor.executed[0][1],
+            ("glass-001", "user-1", "active", "glass-001"),
+        )
         normalized_query = " ".join(cursor.executed[0][0].split())
         self.assertIn("ON CONFLICT (device_id) DO UPDATE", normalized_query)
         self.assertIn("WHERE devices.user_id = EXCLUDED.user_id", normalized_query)
@@ -108,6 +112,7 @@ class PostgresUserRegistryTests(unittest.TestCase):
                 "glass-001",
                 "user-1",
                 "revoked",
+                None,
                 "2026-05-05T00:01:00Z",
                 "2026-05-05T00:01:00Z",
                 "2026-05-05T00:03:00Z",
@@ -131,6 +136,7 @@ class PostgresUserRegistryTests(unittest.TestCase):
                     "glass-001",
                     "user-1",
                     "active",
+                    "Living Room Glass",
                     "2026-05-05T00:01:00Z",
                     "2026-05-05T00:01:00Z",
                     None,
@@ -140,6 +146,7 @@ class PostgresUserRegistryTests(unittest.TestCase):
                     "glass-002",
                     "user-1",
                     "revoked",
+                    None,
                     "2026-05-05T00:02:00Z",
                     "2026-05-05T00:02:00Z",
                     "2026-05-05T00:04:00Z",
@@ -153,6 +160,7 @@ class PostgresUserRegistryTests(unittest.TestCase):
 
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0].device_id, "glass-001")
+        self.assertEqual(records[0].display_name, "Living Room Glass")
         self.assertEqual(records[1].status, "revoked")
 
 

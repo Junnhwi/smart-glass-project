@@ -298,14 +298,14 @@ export default function ProfileScreen() {
         )
       );
       setDeviceAlias(deviceId, normalizedAlias);
-      setStatusMessage('æ¹²ê³Œë¦° ?ëŒ€ì««???Â€?Î½ë»½?ë“¬ë•²??');
+      setStatusMessage('기기 이름을 저장했습니다.');
       resetEditingDeviceAlias();
       return;
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : 'æ¹²ê³Œë¦° ?ëŒ€ì««??ï§£ì„Žâ”?ì„? ï§ì‚µë»½?ë“¬ë•²??';
+          : '기기 이름을 저장하지 못했습니다.';
       setErrorMessage(message);
       return;
     } finally {
@@ -512,7 +512,7 @@ export default function ProfileScreen() {
                 <View style={styles.deviceRowTop}>
                   <View style={styles.deviceTitleBlock}>
                     <Text style={styles.deviceAliasText}>
-                      {getDeviceLabel(device.deviceId)}
+                      {device.displayName || getDeviceLabel(device.deviceId)}
                     </Text>
                     <Text
                       style={[
