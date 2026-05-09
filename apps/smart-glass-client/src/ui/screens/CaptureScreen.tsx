@@ -1,28 +1,17 @@
-import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  buildCaptureRegistrationPayload,
-  getCaptureTaskStatus,
-  registerMediaCapture,
-  requestMediaUploadAuthorization,
-  uploadAuthorizedCaptureSource,
-  type CaptureAcceptedResponse,
-  type CaptureRegistrationPayload,
-  type CaptureTaskStatusResponse,
-  type UploadAuthorizationResponse,
+  listRecentMemories,
+  type MemoryRecentItem,
 } from '../../networking/api';
 import SideBar from '../components/SideBar';
 import { useAuth } from '../context/AuthContext';
@@ -30,314 +19,143 @@ import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
-const DEFAULT_FILE_NAME = 'smart-glass-photo.jpg';
-const TASK_POLL_INTERVAL_MS = 2500;
-
-const isTerminalTaskStatus = (
-  status?: CaptureTaskStatusResponse['status'] | null
-) => {
-  return status === 'completed' || status === 'partial' || status === 'failed';
-};
-
-const inferMimeTypeFromFileName = (value: string) => {
-  const normalized = value.trim().toLowerCase();
-  if (normalized.endsWith('.png')) {
-    return 'image/png';
-  }
-  if (normalized.endsWith('.webp')) {
-    return 'image/webp';
-  }
-  if (normalized.endsWith('.gif')) {
-    return 'image/gif';
-  }
-  if (normalized.endsWith('.heic')) {
-    return 'image/heic';
-  }
-  if (normalized.endsWith('.heif')) {
-    return 'image/heif';
-  }
-  return 'image/jpeg';
-};
-
-const formatFileSize = (value?: number) => {
-  if (!value || value <= 0) {
-    return null;
-  }
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-};
-
-const buildUploadBody = async (asset: ImagePicker.ImagePickerAsset) => {
-  if (asset.file) {
-    return asset.file;
-  }
-
-  const localResponse = await fetch(asset.uri);
-  if (!localResponse.ok) {
-    throw new Error('선택한 사진을 읽지 못했어요.');
-  }
-  return localResponse.blob();
-};
+const AUTO_SYNC_REFRESH_MS = 3000;
 
 const QUICK_ACTIONS = [
   {
     route: 'Chat' as const,
-    label: '기억에게 묻기',
-    description: '지갑, 이어폰, 가방처럼 찾고 싶은 물건을 바로 질문해보세요.',
+    label: '채팅으로 바로 질문',
+    description: '저장된 기억이 생기면 채팅에서 바로 위치나 물건을 물어볼 수 있습니다.',
   },
   {
     route: 'History' as const,
-    label: '최근 기록 보기',
-    description: '방금 저장된 장면과 이전 추론 결과를 시간순으로 확인할 수 있어요.',
+    label: '최근 기억 확인',
+    description: '방금 저장된 장면과 이전 기록을 시간순으로 빠르게 확인할 수 있습니다.',
   },
   {
     route: 'Profile' as const,
     label: '기기 연결 관리',
-    description: '현재 사용할 기기를 바꾸거나 새 기기를 등록할 수 있어요.',
+    description: '현재 기기 선택, 등록 상태, 페어링 상태를 여기서 바로 관리할 수 있습니다.',
   },
 ];
+
+const AUTO_FLOW_STEPS = [
+  '안경 촬영',
+  '블루투스 또는 앱 전송',
+  '서버 업로드',
+  '자동 추론',
+  '캡션/객체/위치 저장',
+  '채팅에서 질의',
+];
+
+const formatTimestamp = (value?: string | null) => {
+  if (!value) {
+    return '아직 기록 없음';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString();
+};
 
 export default function CaptureScreen() {
   const navigation = useAppNavigation();
   const { currentUser, getDeviceLabel } = useAuth();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
-  const [fileName, setFileName] = useState(DEFAULT_FILE_NAME);
-  const [selectedAsset, setSelectedAsset] =
-    useState<ImagePicker.ImagePickerAsset | null>(null);
-  const [isPicking, setIsPicking] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [isPollingTask, setIsPollingTask] = useState(false);
+  const [isLoadingRecent, setIsLoadingRecent] = useState(false);
+  const [recentMemories, setRecentMemories] = useState<MemoryRecentItem[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
-  const [uploadMessage, setUploadMessage] = useState('');
-  const [uploadAuthorization, setUploadAuthorization] =
-    useState<UploadAuthorizationResponse | null>(null);
-  const [capturePayload, setCapturePayload] =
-    useState<CaptureRegistrationPayload | null>(null);
-  const [captureResponse, setCaptureResponse] =
-    useState<CaptureAcceptedResponse | null>(null);
-  const [captureTaskStatus, setCaptureTaskStatus] =
-    useState<CaptureTaskStatusResponse | null>(null);
 
-  const resolvedFileName = useMemo(() => {
-    const normalized = fileName.trim();
-    return normalized || DEFAULT_FILE_NAME;
-  }, [fileName]);
-
-  const resolvedContentType = useMemo(() => {
-    return (
-      selectedAsset?.mimeType?.trim() ||
-      inferMimeTypeFromFileName(resolvedFileName)
-    );
-  }, [resolvedFileName, selectedAsset?.mimeType]);
-
-  const workerMetadata = captureTaskStatus?.worker.result?.metadata || null;
-  const captureIsFinished = isTerminalTaskStatus(captureTaskStatus?.status);
-  const captureCompleted =
-    captureTaskStatus?.memoryStore?.status === 'success' ||
-    captureTaskStatus?.status === 'completed';
   const hasSelectedDevice = Boolean(currentUser?.deviceId);
   const selectedDeviceLabel = getDeviceLabel(currentUser?.deviceId);
+  const latestMemory = recentMemories[0] || null;
 
-  const workflowSteps = [
-    { label: '사진 선택', isDone: Boolean(selectedAsset) },
-    { label: '스토리지 업로드', isDone: Boolean(capturePayload) },
-    { label: '캡처 등록', isDone: Boolean(captureResponse) },
-    { label: '기억 저장', isDone: Boolean(captureCompleted) },
-  ];
+  const syncStatus = useMemo(() => {
+    if (!currentUser) {
+      return {
+        label: '로그인 필요',
+        tone: 'muted' as const,
+        description: '로그인 후 자동 동기화 상태를 확인할 수 있습니다.',
+      };
+    }
 
-  const choosePhoto = async () => {
-    if (isPicking) {
+    if (!hasSelectedDevice) {
+      return {
+        label: '기기 선택 필요',
+        tone: 'warning' as const,
+        description: '자동 업로드를 시작하려면 먼저 현재 사용할 기기를 선택해야 합니다.',
+      };
+    }
+
+    if (!latestMemory) {
+      return {
+        label: '자동 동기화 대기 중',
+        tone: 'ready' as const,
+        description: '하드웨어에서 사진이 들어오면 자동으로 업로드와 추론이 진행됩니다.',
+      };
+    }
+
+    return {
+      label: '자동 처리 정상',
+      tone: 'ready' as const,
+      description: '최근 저장된 기억이 확인되었습니다. 새 촬영이 들어오면 같은 흐름으로 자동 처리됩니다.',
+    };
+  }, [currentUser, hasSelectedDevice, latestMemory]);
+
+  const loadRecentMemories = async ({ silent = false } = {}) => {
+    if (!currentUser?.authToken || !currentUser.userId) {
+      setRecentMemories([]);
       return;
     }
 
-    setIsPicking(true);
-    setErrorMessage('');
-
-    try {
-      if (Platform.OS !== 'web') {
-        const permission =
-          await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permission.granted) {
-          throw new Error('사진을 선택하려면 앨범 권한이 필요해요.');
-        }
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 1,
-      });
-
-      if (result.canceled) {
-        return;
-      }
-
-      const asset = result.assets[0];
-      if (!asset) {
-        throw new Error('선택한 사진이 없어요.');
-      }
-
-      if (asset.type && asset.type !== 'image') {
-        throw new Error('이미지 파일만 선택할 수 있어요.');
-      }
-
-      setSelectedAsset(asset);
-      setUploadAuthorization(null);
-      setCapturePayload(null);
-      setCaptureResponse(null);
-      setCaptureTaskStatus(null);
-      setUploadMessage('');
-      if (asset.fileName?.trim()) {
-        setFileName(asset.fileName.trim());
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : '사진을 고르지 못했어요.';
-      setErrorMessage(message);
-    } finally {
-      setIsPicking(false);
-    }
-  };
-
-  const uploadSelectedPhoto = async () => {
-    if (!currentUser || !currentUser.deviceId || !selectedAsset || isUploading) {
-      return;
-    }
-
-    setIsUploading(true);
-    setErrorMessage('');
-    setUploadMessage('');
-    setCaptureResponse(null);
-    setCaptureTaskStatus(null);
-
-    try {
-      const authorization = await requestMediaUploadAuthorization({
-        deviceId: currentUser.deviceId,
-        fileName: resolvedFileName,
-        contentType: resolvedContentType,
-      });
-
-      if (authorization.status !== 'allowed' || !authorization.userId) {
-        throw new Error('이 기기로는 업로드할 수 없어요.');
-      }
-      if (!authorization.upload?.uploadUrl) {
-        throw new Error('업로드 주소를 받지 못했어요.');
-      }
-
-      const body = await buildUploadBody(selectedAsset);
-      await uploadAuthorizedCaptureSource({
-        uploadPlan: authorization.upload,
-        body,
-        contentType: resolvedContentType,
-      });
-
-      const payload = buildCaptureRegistrationPayload({
-        userId: authorization.userId,
-        deviceId: authorization.deviceId,
-        uploadPlan: authorization.upload,
-      });
-
-      setUploadAuthorization(authorization);
-      setCapturePayload(payload);
-      setUploadMessage(
-        '사진 업로드가 끝났어요. 아래에서 캡처 등록을 눌러 기억 저장을 이어가세요.'
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : '사진 업로드에 실패했어요.';
-      setErrorMessage(message);
-      setUploadAuthorization(null);
-      setCapturePayload(null);
-      setUploadMessage('');
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const queueCapture = async () => {
-    if (!capturePayload || isRegistering) {
-      return;
-    }
-
-    setIsRegistering(true);
-    setErrorMessage('');
-
-    try {
-      const response = await registerMediaCapture(capturePayload);
-      setCaptureResponse(response);
-      setCaptureTaskStatus(null);
-      setUploadMessage('캡처를 등록했어요. 추론이 끝나면 자동으로 상태를 갱신할게요.');
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : '캡처 등록에 실패했어요.';
-      setErrorMessage(message);
-      setCaptureResponse(null);
-    } finally {
-      setIsRegistering(false);
-    }
-  };
-
-  const refreshTaskStatus = async (options?: { silent?: boolean }) => {
-    if (!captureResponse?.taskId || isPollingTask) {
-      return;
-    }
-
-    setIsPollingTask(true);
-    if (!options?.silent) {
+    if (!silent) {
+      setIsLoadingRecent(true);
       setErrorMessage('');
     }
 
     try {
-      const response = await getCaptureTaskStatus(captureResponse.taskId);
-      setCaptureTaskStatus(response);
-      if (response.memoryStore?.status === 'success') {
-        setUploadMessage('기억 저장까지 완료됐어요. 이제 채팅에서 바로 질문할 수 있어요.');
-      }
+      const response = await listRecentMemories({
+        authToken: currentUser.authToken,
+        userId: currentUser.userId,
+        limit: 4,
+      });
+      setRecentMemories(response.items);
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '처리 상태를 불러오지 못했어요.';
-      setErrorMessage(message);
+          : '최근 기억을 불러오지 못했습니다.';
+      if (!silent) {
+        setErrorMessage(message);
+      }
     } finally {
-      setIsPollingTask(false);
+      if (!silent) {
+        setIsLoadingRecent(false);
+      }
     }
   };
 
   useEffect(() => {
-    if (!captureResponse?.taskId) {
-      return;
-    }
-    if (isPollingTask || captureIsFinished) {
+    void loadRecentMemories();
+  }, [currentUser?.authToken, currentUser?.userId]);
+
+  useEffect(() => {
+    if (!currentUser?.authToken || !currentUser.userId) {
       return;
     }
 
-    const timer = setTimeout(() => {
-      void refreshTaskStatus({ silent: true });
-    }, captureTaskStatus ? TASK_POLL_INTERVAL_MS : 1000);
+    const interval = setInterval(() => {
+      void loadRecentMemories({ silent: true });
+    }, AUTO_SYNC_REFRESH_MS);
 
     return () => {
-      clearTimeout(timer);
+      clearInterval(interval);
     };
-  }, [
-    captureIsFinished,
-    captureResponse?.taskId,
-    captureTaskStatus,
-    isPollingTask,
-  ]);
+  }, [currentUser?.authToken, currentUser?.userId]);
 
   return (
     <SafeAreaView style={commonStyles.screen}>
@@ -346,16 +164,16 @@ export default function CaptureScreen() {
           style={styles.headerAction}
           onPress={() => setSidebarVisible(true)}
         >
-          <Text style={styles.headerActionText}>≡</Text>
+          <Text style={styles.headerActionText}>☰</Text>
         </Pressable>
 
-        <Text style={commonStyles.headerTitle}>업로드 홈</Text>
+        <Text style={commonStyles.headerTitle}>자동 동기화 홈</Text>
 
         <Pressable
           style={[styles.headerAction, styles.headerActionSecondary]}
           onPress={() => navigation.navigate('Chat')}
         >
-          <Text style={styles.headerActionSecondaryText}>질문</Text>
+          <Text style={styles.headerActionSecondaryText}>채팅</Text>
         </Pressable>
       </View>
 
@@ -363,16 +181,19 @@ export default function CaptureScreen() {
         contentContainerStyle={[styles.content, commonStyles.contentContainer]}
       >
         <View style={[commonStyles.card, styles.heroCard]}>
-          <Text style={styles.heroEyebrow}>핵심 작업</Text>
-          <Text style={styles.heroTitle}>사진을 올리고 바로 기억으로 저장하세요</Text>
+          <Text style={styles.heroEyebrow}>AUTO PIPELINE</Text>
+          <Text style={styles.heroTitle}>
+            촬영 이후 업로드와 추론은 자동으로 이어지도록 맞췄습니다
+          </Text>
           <Text style={styles.heroDescription}>
-            현재 선택된 기기로 업로드 권한을 확인하고, 캡처 등록과 결과 확인까지
-            한 화면에서 이어서 진행할 수 있어요.
+            이제 이 화면은 수동 업로드가 아니라 자동 동기화 상태를 확인하는 용도입니다.
+            하드웨어에서 사진이 들어오면 서버 업로드, 추론, 캡션과 메타데이터 저장까지
+            순서대로 자동 처리되는 흐름을 기준으로 두었습니다.
           </Text>
 
           <View style={styles.metaRow}>
             <View style={styles.metaChip}>
-              <Text style={styles.metaLabel}>사용자</Text>
+              <Text style={styles.metaLabel}>현재 계정</Text>
               <Text style={styles.metaValue}>
                 {currentUser?.displayName || currentUser?.userId || '로그인 필요'}
               </Text>
@@ -384,21 +205,46 @@ export default function CaptureScreen() {
           </View>
         </View>
 
-        {!hasSelectedDevice ? (
-          <View style={[commonStyles.card, styles.warningCard]}>
-            <Text style={styles.warningTitle}>먼저 기기를 연결해주세요</Text>
-            <Text style={styles.warningDescription}>
-              업로드 권한은 선택된 기기를 기준으로 발급돼요. 프로필에서 사용할
-              기기를 고른 뒤 다시 돌아오면 바로 업로드를 시작할 수 있어요.
-            </Text>
+        <View
+          style={[
+            commonStyles.card,
+            styles.statusCard,
+            syncStatus.tone === 'warning'
+              ? styles.statusCardWarning
+              : syncStatus.tone === 'ready'
+                ? styles.statusCardReady
+                : styles.statusCardMuted,
+          ]}
+        >
+          <Text style={styles.statusLabel}>자동 처리 상태</Text>
+          <Text style={styles.statusTitle}>{syncStatus.label}</Text>
+          <Text style={styles.statusDescription}>{syncStatus.description}</Text>
+          {!hasSelectedDevice ? (
             <Pressable
               style={styles.inlinePrimaryButton}
               onPress={() => navigation.navigate('Profile')}
             >
-              <Text style={styles.inlinePrimaryButtonText}>기기 연결하러 가기</Text>
+              <Text style={styles.inlinePrimaryButtonText}>기기 선택하러 가기</Text>
             </Pressable>
+          ) : null}
+        </View>
+
+        <View style={[commonStyles.card, styles.workflowCard]}>
+          <Text style={styles.sectionTitle}>자동 처리 순서</Text>
+          <Text style={styles.sectionDescription}>
+            하드웨어가 붙으면 아래 순서가 사용자 개입 없이 자연스럽게 이어지도록 두는 게
+            핵심입니다.
+          </Text>
+          <View style={styles.stepList}>
+            {AUTO_FLOW_STEPS.map((step, index) => (
+              <View key={step} style={styles.stepChip}>
+                <Text style={styles.stepChipText}>
+                  {index + 1}. {step}
+                </Text>
+              </View>
+            ))}
           </View>
-        ) : null}
+        </View>
 
         <View style={styles.quickActionGrid}>
           {QUICK_ACTIONS.map((action) => (
@@ -415,243 +261,62 @@ export default function CaptureScreen() {
           ))}
         </View>
 
-        <View style={[commonStyles.card, styles.workflowCard]}>
-          <Text style={styles.sectionTitle}>업로드 진행 상태</Text>
-          <View style={styles.stepList}>
-            {workflowSteps.map((step) => (
-              <View
-                key={step.label}
-                style={[
-                  styles.stepChip,
-                  step.isDone && styles.stepChipCompleted,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.stepChipText,
-                    step.isDone && styles.stepChipTextCompleted,
-                  ]}
-                >
-                  {step.label}
-                </Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <View style={[commonStyles.card, styles.workflowCard]}>
-          <Text style={styles.sectionTitle}>1. 사진 선택</Text>
-          <Text style={styles.sectionDescription}>
-            저장하고 싶은 장면이나 물건 사진을 선택해 주세요. 선택 후 파일명은
-            수정할 수 있어요.
-          </Text>
-
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>선택한 사진</Text>
-            {selectedAsset ? (
-              <View style={styles.assetCard}>
-                <Image
-                  source={{ uri: selectedAsset.uri }}
-                  style={styles.previewImage}
-                  resizeMode="cover"
-                />
-                <Text style={styles.resultText}>
-                  파일명: {selectedAsset.fileName || resolvedFileName}
-                </Text>
-                <Text style={styles.resultText}>형식: {resolvedContentType}</Text>
-                <Text style={styles.resultText}>
-                  크기: {formatFileSize(selectedAsset.fileSize) || '알 수 없음'}
-                </Text>
-              </View>
-            ) : (
-              <Text style={styles.emptyStateText}>
-                아직 선택한 사진이 없어요. 먼저 사진을 골라 주세요.
+        <View style={[commonStyles.card, styles.recentCard]}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>최근 저장된 기억</Text>
+              <Text style={styles.sectionDescription}>
+                자동 업로드가 성공하면 여기에 최신 장면들이 반영됩니다.
               </Text>
-            )}
+            </View>
+            <Pressable
+              style={styles.refreshButton}
+              onPress={() => {
+                void loadRecentMemories();
+              }}
+              disabled={isLoadingRecent}
+            >
+              <Text style={styles.refreshButtonText}>새로고침</Text>
+            </Pressable>
           </View>
 
-          <Pressable
-            style={[
-              styles.secondaryButton,
-              isPicking && styles.secondaryButtonDisabled,
-            ]}
-            onPress={() => {
-              void choosePhoto();
-            }}
-            disabled={isPicking}
-          >
-            {isPicking ? (
-              <View style={styles.loadingRow}>
-                <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>불러오는 중...</Text>
-              </View>
-            ) : (
-              <Text style={styles.secondaryButtonText}>사진 선택</Text>
-            )}
-          </Pressable>
-
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>업로드 파일명</Text>
-            <TextInput
-              value={fileName}
-              onChangeText={setFileName}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder={DEFAULT_FILE_NAME}
-              placeholderTextColor={colors.subText}
-              style={styles.input}
-            />
-          </View>
-        </View>
-
-        <View style={[commonStyles.card, styles.workflowCard]}>
-          <Text style={styles.sectionTitle}>2. 업로드와 캡처 등록</Text>
-          <Text style={styles.sectionDescription}>
-            사진을 스토리지에 올린 뒤 캡처로 등록하면 추론 작업이 큐에 들어가요.
-          </Text>
-
-          <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>현재 기기</Text>
-            <Text style={styles.readonlyValue}>{selectedDeviceLabel}</Text>
-          </View>
-
-          <Pressable
-            style={[
-              styles.primaryButton,
-              (!selectedAsset || isUploading || !hasSelectedDevice) &&
-                styles.primaryButtonDisabled,
-            ]}
-            onPress={() => {
-              void uploadSelectedPhoto();
-            }}
-            disabled={!selectedAsset || isUploading || !currentUser || !hasSelectedDevice}
-          >
-            {isUploading ? (
-              <View style={styles.loadingRow}>
-                <ActivityIndicator size="small" color="#FFFFFF" />
-                <Text style={styles.primaryButtonText}>업로드 중...</Text>
-              </View>
-            ) : (
-              <Text style={styles.primaryButtonText}>스토리지 업로드</Text>
-            )}
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.secondaryButton,
-              (!capturePayload || isRegistering) && styles.secondaryButtonDisabled,
-            ]}
-            onPress={() => {
-              void queueCapture();
-            }}
-            disabled={!capturePayload || isRegistering}
-          >
-            {isRegistering ? (
-              <View style={styles.loadingRow}>
-                <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>등록 중...</Text>
-              </View>
-            ) : (
-              <Text style={styles.secondaryButtonText}>캡처 등록</Text>
-            )}
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.secondaryButton,
-              (!captureResponse?.taskId || isPollingTask) &&
-                styles.secondaryButtonDisabled,
-            ]}
-            onPress={() => {
-              void refreshTaskStatus();
-            }}
-            disabled={!captureResponse?.taskId || isPollingTask}
-          >
-            {isPollingTask ? (
-              <View style={styles.loadingRow}>
-                <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>상태 확인 중...</Text>
-              </View>
-            ) : (
-              <Text style={styles.secondaryButtonText}>상태 새로고침</Text>
-            )}
-          </Pressable>
+          {isLoadingRecent ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.loadingText}>최근 기억을 확인하는 중입니다.</Text>
+            </View>
+          ) : null}
 
           {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-          {uploadMessage ? (
-            <Text style={styles.successText}>{uploadMessage}</Text>
+
+          {!isLoadingRecent && recentMemories.length === 0 ? (
+            <Text style={styles.emptyText}>
+              아직 저장된 최근 기억이 없습니다. 하드웨어에서 사진이 들어오면 자동으로 여기에 나타납니다.
+            </Text>
           ) : null}
-        </View>
 
-        {uploadAuthorization?.upload ? (
-          <View style={[commonStyles.card, styles.resultBox]}>
-            <Text style={styles.resultTitle}>업로드 정보</Text>
-            <Text style={styles.resultText}>사용자: {uploadAuthorization.userId}</Text>
-            <Text style={styles.resultText}>
-              캡처 ID: {uploadAuthorization.upload.captureId}
-            </Text>
-            <Text style={styles.resultText}>
-              이미지 키: {uploadAuthorization.upload.sourceImage.imageKey}
-            </Text>
-            <Text style={styles.resultText}>만료: {uploadAuthorization.upload.expiresAt}</Text>
-          </View>
-        ) : null}
-
-        {captureResponse ? (
-          <View style={[commonStyles.card, styles.resultBox]}>
-            <Text style={styles.resultTitle}>작업 상태</Text>
-            <Text style={styles.resultText}>작업 ID: {captureResponse.taskId}</Text>
-            <Text style={styles.resultText}>
-              워커 상태: {captureTaskStatus?.worker.status || captureResponse.worker.status}
-            </Text>
-            <Text style={styles.resultText}>
-              처리 상태: {captureTaskStatus?.status || 'queued'}
-            </Text>
-            {captureTaskStatus?.memoryStore?.storedCount !== undefined ? (
-              <Text style={styles.resultText}>
-                저장 수: {captureTaskStatus.memoryStore.storedCount ?? 0}
+          {recentMemories.map((memory) => (
+            <View key={memory.memoryId} style={styles.memoryRow}>
+              <Text style={styles.memoryTitle}>
+                {memory.caption || memory.sceneSummary || '캡션 생성 대기 중'}
               </Text>
-            ) : null}
-            {workerMetadata?.caption ? (
-              <Text style={styles.resultText}>설명: {workerMetadata.caption}</Text>
-            ) : null}
-            {workerMetadata?.sceneSummary ? (
-              <Text style={styles.resultText}>
-                장면 요약: {workerMetadata.sceneSummary}
+              {memory.sceneSummary ? (
+                <Text style={styles.memorySummary}>{memory.sceneSummary}</Text>
+              ) : null}
+              <Text style={styles.memoryMeta}>
+                저장 시각: {formatTimestamp(memory.capturedAt)}
               </Text>
-            ) : null}
-            {workerMetadata?.detectedObjects?.length ? (
-              <Text style={styles.resultText}>
-                물체: {workerMetadata.detectedObjects.join(', ')}
-              </Text>
-            ) : null}
-            {workerMetadata?.positionHint ? (
-              <Text style={styles.resultText}>
-                위치 힌트: {workerMetadata.positionHint}
-              </Text>
-            ) : null}
-            {captureTaskStatus?.worker.error ? (
-              <Text style={styles.errorText}>
-                워커 오류: {captureTaskStatus.worker.error}
-              </Text>
-            ) : null}
-            {captureTaskStatus?.memoryStore?.error ? (
-              <Text style={styles.errorText}>
-                저장 오류: {captureTaskStatus.memoryStore.error}
-              </Text>
-            ) : null}
-            {captureCompleted ? (
-              <Pressable
-                style={styles.inlinePrimaryButton}
-                onPress={() => navigation.navigate('Chat')}
-              >
-                <Text style={styles.inlinePrimaryButtonText}>
-                  방금 저장한 기억 질문하기
+              {memory.positionHint ? (
+                <Text style={styles.memoryMeta}>위치 힌트: {memory.positionHint}</Text>
+              ) : null}
+              {memory.detectedObjects.length ? (
+                <Text style={styles.memoryMeta}>
+                  감지 객체: {memory.detectedObjects.join(', ')}
                 </Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
+              ) : null}
+            </View>
+          ))}
+        </View>
       </ScrollView>
 
       <SideBar
@@ -734,34 +399,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.text,
   },
-  warningCard: {
-    gap: 12,
+  statusCard: {
+    gap: 10,
+  },
+  statusCardReady: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  statusCardWarning: {
     backgroundColor: '#FFF7ED',
     borderColor: '#FED7AA',
   },
-  warningTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#9A3412',
+  statusCardMuted: {
+    backgroundColor: '#F8FAFC',
+    borderColor: colors.border,
   },
-  warningDescription: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: '#9A3412',
-  },
-  quickActionGrid: {
-    gap: 12,
-  },
-  quickActionCard: {
-    gap: 8,
-    backgroundColor: '#FFFFFF',
-  },
-  quickActionTitle: {
-    fontSize: 16,
+  statusLabel: {
+    fontSize: 12,
     fontWeight: '700',
+    color: colors.primary,
+  },
+  statusTitle: {
+    fontSize: 20,
+    fontWeight: '800',
     color: colors.text,
   },
-  quickActionDescription: {
+  statusDescription: {
     fontSize: 13,
     lineHeight: 19,
     color: colors.subText,
@@ -769,12 +432,19 @@ const styles = StyleSheet.create({
   workflowCard: {
     gap: 14,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: colors.text,
   },
   sectionDescription: {
+    marginTop: 4,
     fontSize: 13,
     lineHeight: 19,
     color: colors.subText,
@@ -788,89 +458,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
-    backgroundColor: '#F3F4F6',
-  },
-  stepChipCompleted: {
-    backgroundColor: '#DBEAFE',
+    backgroundColor: '#EFF6FF',
   },
   stepChipText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#4B5563',
-  },
-  stepChipTextCompleted: {
     color: colors.primary,
   },
-  fieldGroup: {
+  quickActionGrid: {
+    gap: 12,
+  },
+  quickActionCard: {
     gap: 8,
   },
-  fieldLabel: {
-    fontSize: 13,
+  quickActionTitle: {
+    fontSize: 16,
     fontWeight: '700',
     color: colors.text,
   },
-  readonlyValue: {
-    fontSize: 14,
-    color: colors.text,
-  },
-  assetCard: {
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: 6,
-  },
-  previewImage: {
-    width: '100%',
-    height: 200,
-    borderRadius: 12,
-    backgroundColor: colors.border,
-  },
-  emptyStateText: {
+  quickActionDescription: {
     fontSize: 13,
     lineHeight: 19,
     color: colors.subText,
   },
-  input: {
-    height: 48,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    fontSize: 14,
-    color: colors.text,
+  recentCard: {
+    gap: 14,
   },
-  primaryButton: {
-    minHeight: 50,
-    borderRadius: 14,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonDisabled: {
-    opacity: 0.65,
-  },
-  primaryButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  secondaryButton: {
-    minHeight: 50,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
+  refreshButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
     backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  secondaryButtonDisabled: {
-    opacity: 0.65,
-  },
-  secondaryButtonText: {
-    fontSize: 15,
+  refreshButtonText: {
+    fontSize: 12,
     fontWeight: '700',
     color: colors.primary,
   },
@@ -878,6 +499,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+  },
+  loadingText: {
+    fontSize: 13,
+    color: colors.subText,
+  },
+  emptyText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.subText,
+  },
+  memoryRow: {
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F8FAFC',
+    gap: 6,
+  },
+  memoryTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  memorySummary: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.text,
+  },
+  memoryMeta: {
+    fontSize: 12,
+    color: colors.subText,
   },
   inlinePrimaryButton: {
     alignSelf: 'flex-start',
@@ -894,29 +546,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  successText: {
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: '600',
-    color: '#047857',
-  },
   errorText: {
     fontSize: 13,
     lineHeight: 19,
     fontWeight: '600',
     color: '#B91C1C',
-  },
-  resultBox: {
-    gap: 6,
-  },
-  resultTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  resultText: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.text,
   },
 });
