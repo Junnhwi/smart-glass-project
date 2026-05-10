@@ -12,30 +12,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import {
-  createUser,
-  exchangeGoogleOauth,
-  startGoogleOauth,
-} from '../../networking/api';
+import { exchangeGoogleOauth, startGoogleOauth } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
 import logo from '../icon/logo.png';
 import { colors } from '../styles/colors';
 import { commonStyles } from '../styles/commonStyles';
-
-const DEMO_ACCOUNTS = [
-  {
-    label: '기본 데모',
-    hint: '빠르게 확인할 때 사용해요.',
-    userId: 'user-1',
-    displayName: '기본 사용자',
-  },
-  {
-    label: '계약 테스트',
-    hint: '연동 확인용 계정이에요.',
-    userId: 'contract-test-user',
-    displayName: '계약 테스트 사용자',
-  },
-];
 
 const normalizeText = (value: string | null | undefined) =>
   String(value ?? '')
@@ -43,6 +24,11 @@ const normalizeText = (value: string | null | undefined) =>
     .split(/\s+/)
     .filter(Boolean)
     .join(' ');
+
+const canUseBrowserBack = () =>
+  Platform.OS === 'web' &&
+  typeof window !== 'undefined' &&
+  window.history.length > 1;
 
 const buildOauthRedirectUri = () => {
   const baseUrl =
@@ -78,12 +64,9 @@ const clearOauthQueryParamsFromWeb = () => {
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
-  const [selectedDemoAccount, setSelectedDemoAccount] = useState(
-    DEMO_ACCOUNTS[0]
-  );
+  const [canGoBack, setCanGoBack] = useState(canUseBrowserBack);
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
-  const [isDemoSubmitting, setIsDemoSubmitting] = useState(false);
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
 
   const signInRef = useRef(signIn);
@@ -92,6 +75,23 @@ export default function LoginScreen() {
   useEffect(() => {
     signInRef.current = signIn;
   }, [signIn]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return;
+    }
+
+    const syncBackAvailability = () => {
+      setCanGoBack(canUseBrowserBack());
+    };
+
+    syncBackAvailability();
+    window.addEventListener('popstate', syncBackAvailability);
+
+    return () => {
+      window.removeEventListener('popstate', syncBackAvailability);
+    };
+  }, []);
 
   useEffect(() => {
     const processOauthCallback = async (url: string | null) => {
@@ -111,7 +111,7 @@ export default function LoginScreen() {
         setStatusMessage('');
         setErrorMessage(
           callbackPayload.oauthErrorDescription ||
-            '구글 로그인을 완료하지 못했어요.'
+            'Google 로그인을 완료하지 못했습니다.'
         );
         setIsGoogleSubmitting(false);
         clearOauthQueryParamsFromWeb();
@@ -128,7 +128,7 @@ export default function LoginScreen() {
 
       setIsGoogleSubmitting(true);
       setErrorMessage('');
-      setStatusMessage('로그인 정보를 확인하고 있어요...');
+      setStatusMessage('Google 계정을 확인하고 로그인 정보를 마무리하고 있어요...');
 
       try {
         const response = await exchangeGoogleOauth({
@@ -146,7 +146,7 @@ export default function LoginScreen() {
         const message =
           error instanceof Error && error.message
             ? error.message
-            : '구글 로그인 처리를 완료하지 못했어요.';
+            : 'Google 로그인 토큰을 교환하지 못했습니다.';
         setStatusMessage('');
         setErrorMessage(message);
         setIsGoogleSubmitting(false);
@@ -174,13 +174,13 @@ export default function LoginScreen() {
   }, []);
 
   const handleGoogleSubmit = async () => {
-    if (isDemoSubmitting || isGoogleSubmitting) {
+    if (isGoogleSubmitting) {
       return;
     }
 
     setIsGoogleSubmitting(true);
     setErrorMessage('');
-    setStatusMessage('구글 로그인 화면으로 이동할게요...');
+    setStatusMessage('Google 로그인 페이지로 이동하고 있어요...');
 
     try {
       const start = await startGoogleOauth({
@@ -193,60 +193,49 @@ export default function LoginScreen() {
       }
 
       await Linking.openURL(start.authorizationUrl);
-      setStatusMessage('로그인 완료를 기다리고 있어요...');
+      setStatusMessage('브라우저에서 로그인한 뒤 앱으로 다시 돌아오면 이어서 완료됩니다.');
       setIsGoogleSubmitting(false);
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '구글 로그인을 시작하지 못했어요.';
+          : 'Google 로그인 시작에 실패했습니다.';
       setStatusMessage('');
       setErrorMessage(message);
       setIsGoogleSubmitting(false);
     }
   };
 
-  const handleDemoSubmit = async () => {
-    if (isDemoSubmitting || isGoogleSubmitting) {
+  const handleBrowserBack = () => {
+    if (!canUseBrowserBack()) {
       return;
     }
-
-    setIsDemoSubmitting(true);
-    setErrorMessage('');
-    setStatusMessage('데모 계정으로 들어가는 중이에요...');
-
-    try {
-      await createUser({ userId: selectedDemoAccount.userId });
-      signIn({
-        userId: selectedDemoAccount.userId,
-        displayName: selectedDemoAccount.displayName,
-        authProvider: 'demo',
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : '데모 계정으로 들어가지 못했어요.';
-      setStatusMessage('');
-      setErrorMessage(message);
-      setIsDemoSubmitting(false);
-    }
+    window.history.back();
   };
 
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <View style={styles.headerSide} />
+        <View style={styles.headerSide}>
+          {canGoBack ? (
+            <Pressable
+              style={styles.headerBackButton}
+              onPress={handleBrowserBack}
+            >
+              <Text style={styles.headerBackText}>뒤로</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <View style={styles.headerCenter}>
           <Image source={logo} style={styles.headerLogo} />
         </View>
         <View style={styles.headerBadge}>
-          <Text style={styles.headerBadgeText}>로그인</Text>
+          <Text style={styles.headerBadgeText}>Secure</Text>
         </View>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, commonStyles.contentContainer]}
         keyboardShouldPersistTaps="handled"
       >
         <View style={[commonStyles.card, styles.heroCard]}>
@@ -255,10 +244,11 @@ export default function LoginScreen() {
               <Image source={logo} style={styles.logo} />
             </View>
             <View style={styles.heroCopy}>
-              <Text style={styles.heroEyebrow}>1단계</Text>
-              <Text style={styles.heroTitle}>로그인</Text>
+              <Text style={styles.heroEyebrow}>Smart Glass</Text>
+              <Text style={styles.heroTitle}>Google 계정으로 로그인</Text>
               <Text style={styles.heroSubtitle}>
-                로그인 후, 기기 등록은 프로필에서 진행해요
+                실제 Google 계정으로 로그인하면 저장된 기억과 기기 연결 정보를
+                같은 계정으로 이어서 사용할 수 있습니다.
               </Text>
             </View>
           </View>
@@ -278,13 +268,14 @@ export default function LoginScreen() {
         <View style={[commonStyles.card, styles.sectionCard]}>
           <View style={styles.sectionHeader}>
             <View>
-              <Text style={styles.sectionTitle}>구글</Text>
+              <Text style={styles.sectionTitle}>로그인</Text>
               <Text style={styles.sectionDescription}>
-                로그인 후 프로필에서 기기를 등록하세요!
+                버튼을 누르면 Google 인증 페이지로 이동한 뒤 다시 이 화면으로
+                돌아와 로그인이 완료됩니다.
               </Text>
             </View>
             <View style={styles.sectionChip}>
-              <Text style={styles.sectionChipText}>권장</Text>
+              <Text style={styles.sectionChipText}>OAuth</Text>
             </View>
           </View>
 
@@ -301,91 +292,29 @@ export default function LoginScreen() {
             {isGoogleSubmitting ? (
               <View style={styles.loadingRow}>
                 <ActivityIndicator size="small" color="#FFFFFF" />
-                <Text style={styles.primaryButtonText}>이동 중...</Text>
+                <Text style={styles.primaryButtonText}>연결 중...</Text>
               </View>
             ) : (
               <View style={styles.primaryButtonRow}>
                 <View style={styles.primaryButtonBadge}>
                   <Text style={styles.primaryButtonBadgeText}>G</Text>
                 </View>
-                <Text style={styles.primaryButtonText}>구글로 시작하기</Text>
+                <Text style={styles.primaryButtonText}>Google로 계속하기</Text>
               </View>
             )}
           </Pressable>
         </View>
 
         <View style={[commonStyles.card, styles.sectionCard]}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>데모 로그인</Text>
-              <Text style={styles.sectionDescription}>
-                빠르게 둘러볼 수 있는 테스트용 로그인입니다.
-              </Text>
-            </View>
-            <View style={[styles.sectionChip, styles.sectionChipMuted]}>
-              <Text style={[styles.sectionChipText, styles.sectionChipTextMuted]}>
-                선택
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.demoSection}>
-            {DEMO_ACCOUNTS.map((account) => {
-              const isSelected = account.userId === selectedDemoAccount.userId;
-
-              return (
-                <Pressable
-                  key={account.userId}
-                  onPress={() => {
-                    setSelectedDemoAccount(account);
-                    setErrorMessage('');
-                    setStatusMessage('');
-                  }}
-                  style={[
-                    styles.demoCard,
-                    isSelected && styles.demoCardSelected,
-                  ]}
-                >
-                  <View style={styles.demoCardTopRow}>
-                    <View style={styles.demoCardTextBlock}>
-                      <Text style={styles.demoLabel}>{account.label}</Text>
-                      <Text style={styles.demoHint}>{account.hint}</Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.demoSelectionDot,
-                        isSelected && styles.demoSelectionDotActive,
-                      ]}
-                    />
-                  </View>
-                  <View style={styles.demoMetaRow}>
-                    <Text style={styles.demoMetaLabel}>계정</Text>
-                    <Text style={styles.demoMetaValue}>{account.userId}</Text>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Pressable
-            style={[
-              styles.secondaryButton,
-              isDemoSubmitting && styles.secondaryButtonDisabled,
-            ]}
-            onPress={() => {
-              void handleDemoSubmit();
-            }}
-            disabled={isDemoSubmitting || isGoogleSubmitting}
-          >
-            {isDemoSubmitting ? (
-              <View style={styles.loadingRow}>
-                <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.secondaryButtonText}>준비 중...</Text>
-              </View>
-            ) : (
-              <Text style={styles.secondaryButtonText}>데모로 둘러보기</Text>
-            )}
-          </Pressable>
+          <Text style={styles.sectionTitle}>안내</Text>
+          <Text style={styles.helpText}>
+            브라우저 뒤로가기가 필요한 화면에는 같은 테마의 뒤로 버튼을 함께
+            두어 이동 경로를 잃지 않도록 맞춰두었습니다.
+          </Text>
+          <Text style={styles.helpText}>
+            이전 데모 세션이 남아 있더라도 실제 인증 정보가 아니면 자동으로
+            복원하지 않도록 정리했습니다.
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -402,6 +331,22 @@ const styles = StyleSheet.create({
   },
   headerSide: {
     width: 56,
+    justifyContent: 'center',
+  },
+  headerBackButton: {
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerBackText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
   },
   headerCenter: {
     flex: 1,
@@ -518,16 +463,10 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#DBEAFE',
   },
-  sectionChipMuted: {
-    backgroundColor: '#F3F4F6',
-  },
   sectionChipText: {
     fontSize: 11,
     fontWeight: '700',
     color: colors.primary,
-  },
-  sectionChipTextMuted: {
-    color: '#4B5563',
   },
   primaryButton: {
     height: 52,
@@ -562,85 +501,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  demoSection: {
-    gap: 10,
-  },
-  demoCard: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 14,
-    padding: 14,
-    backgroundColor: '#F8FAFC',
-    gap: 8,
-  },
-  demoCardSelected: {
-    borderColor: colors.primary,
-    backgroundColor: '#EFF6FF',
-  },
-  demoCardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  demoCardTextBlock: {
-    flex: 1,
-    gap: 5,
-  },
-  demoLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  demoHint: {
+  helpText: {
     fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 20,
     color: colors.subText,
-  },
-  demoSelectionDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: '#CBD5E1',
-    backgroundColor: '#FFFFFF',
-    marginTop: 2,
-  },
-  demoSelectionDotActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary,
-  },
-  demoMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  demoMetaLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.subText,
-  },
-  demoMetaValue: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  secondaryButton: {
-    height: 50,
-    borderRadius: 14,
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryButtonDisabled: {
-    opacity: 0.75,
-  },
-  secondaryButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.primary,
   },
   loadingRow: {
     flexDirection: 'row',

@@ -4,6 +4,7 @@ import { Modal, View, Text, StyleSheet, Pressable, Image } from 'react-native';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { useAuth } from '../context/AuthContext';
 import historyIcon from '../icon/history.png';
+import logo from '../icon/logo.png';
 import settingsIcon from '../icon/setting.png';
 import userIcon from '../icon/user.png';
 import { colors } from '../styles/colors';
@@ -15,9 +16,11 @@ type SidebarProps = {
 
 export default function Sidebar({ visible, onClose }: SidebarProps) {
   const navigation = useAppNavigation();
-  const { currentUser, signOut } = useAuth();
+  const { currentUser, getDeviceLabel, signOut } = useAuth();
 
-  const handleMove = (screen: 'History' | 'Profile' | 'Settings') => {
+  const handleMove = (
+    screen: 'Capture' | 'History' | 'Profile' | 'Settings'
+  ) => {
     onClose();
     navigation.navigate(screen);
   };
@@ -46,7 +49,18 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
               <Text style={styles.accountId}>
                 {currentUser?.userId || '로그인 정보 없음'}
               </Text>
+              <Text style={styles.accountDevice}>
+                현재 기기: {getDeviceLabel(currentUser?.deviceId)}
+              </Text>
             </View>
+
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => handleMove('Capture')}
+            >
+              <Text style={styles.menuText}>업로드 홈</Text>
+              <Image source={logo} style={styles.menuIconImage} />
+            </Pressable>
 
             <Pressable
               style={styles.menuItem}
@@ -129,6 +143,10 @@ const styles = StyleSheet.create({
   },
   accountId: {
     fontSize: 13,
+    color: colors.subText,
+  },
+  accountDevice: {
+    fontSize: 12,
     color: colors.subText,
   },
   menuItem: {

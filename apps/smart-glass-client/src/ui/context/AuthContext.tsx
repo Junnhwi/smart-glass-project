@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useState } from 'react';
+import * as SecureStore from 'expo-secure-store';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { logoutAuthSession } from '../../networking/api';
+import { logoutAuthSession, refreshAuthToken } from '../../networking/api';
 
-export type AuthProviderName = 'demo' | 'password' | 'google';
+export type AuthProviderName = 'password' | 'google';
 
 export type AuthUser = {
   userId: string;
@@ -25,10 +26,20 @@ type SignInInput = {
   authProvider?: AuthProviderName;
 };
 
+type StoredAuthSession = {
+  user: SignInInput | null;
+  deviceAliases?: Record<string, string>;
+};
+
 type AuthContextValue = {
   currentUser: AuthUser | null;
+  isHydrating: boolean;
+  deviceAliases: Record<string, string>;
   signIn: (input: SignInInput) => void;
+  refreshSession: () => Promise<AuthUser | null>;
   setCurrentDevice: (deviceId?: string | null) => void;
+  setDeviceAlias: (deviceId: string, alias?: string | null) => void;
+  getDeviceLabel: (deviceId?: string | null) => string;
   signOut: () => Promise<void>;
 };
 
@@ -42,22 +53,21 @@ const normalizeText = (value: string | null | undefined) =>
     .filter(Boolean)
     .join(' ');
 
-const buildDemoAuthToken = (userId: string) => `demo-user:${userId}`;
-
 const buildAuthUser = (input: SignInInput): AuthUser => {
   const userId = normalizeText(input.userId);
   const deviceId = normalizeText(input.deviceId);
+  const authToken = normalizeText(input.authToken);
+
   if (!userId) {
     throw new Error('userId is required');
   }
+  if (!authToken) {
+    throw new Error('authToken is required');
+  }
 
   const displayName = normalizeText(input.displayName) || userId;
-  const authToken =
-    normalizeText(input.authToken) || buildDemoAuthToken(userId);
   const email = normalizeText(input.email) || null;
   const refreshToken = normalizeText(input.refreshToken) || null;
-  const authProvider =
-    input.authProvider || (input.authToken ? 'password' : 'demo');
 
   return {
     userId,
@@ -66,55 +76,223 @@ const buildAuthUser = (input: SignInInput): AuthUser => {
     authToken,
     refreshToken,
     email,
-    authProvider,
+    authProvider: input.authProvider || 'password',
   };
 };
 
-const readStoredAuthUser = (): AuthUser | null => {
-  if (Platform.OS !== 'web' || typeof window === 'undefined') {
-    return null;
+const normalizeDeviceAliases = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  return Object.entries(value as Record<string, unknown>).reduce<
+    Record<string, string>
+  >((acc, [key, rawAlias]) => {
+    const normalizedKey = normalizeText(key);
+    const normalizedAlias =
+      typeof rawAlias === 'string' ? normalizeText(rawAlias) : '';
+    if (normalizedKey && normalizedAlias) {
+      acc[normalizedKey] = normalizedAlias;
+    }
+    return acc;
+  }, {});
+};
+
+const parseStoredAuthSession = (
+  rawValue: string | null
+): { user: AuthUser | null; deviceAliases: Record<string, string> } => {
+  if (!rawValue) {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
   }
 
   try {
-    const rawValue = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!rawValue) {
-      return null;
-    }
-    const parsed = JSON.parse(rawValue) as SignInInput | null;
+    const parsed = JSON.parse(rawValue) as StoredAuthSession | SignInInput | null;
     if (!parsed || typeof parsed !== 'object') {
-      return null;
+      return {
+        user: null,
+        deviceAliases: {},
+      };
     }
-    return buildAuthUser(parsed);
+
+    if ('user' in parsed || 'deviceAliases' in parsed) {
+      const storedSession = parsed as StoredAuthSession;
+      return {
+        user:
+          storedSession.user && typeof storedSession.user === 'object'
+            ? buildAuthUser(storedSession.user)
+            : null,
+        deviceAliases: normalizeDeviceAliases(storedSession.deviceAliases),
+      };
+    }
+
+    return {
+      user: buildAuthUser(parsed as SignInInput),
+      deviceAliases: {},
+    };
   } catch {
-    return null;
+    return {
+      user: null,
+      deviceAliases: {},
+    };
   }
 };
 
-const persistAuthUser = (user: AuthUser | null) => {
+const readStoredAuthSession = (): {
+  user: AuthUser | null;
+  deviceAliases: Record<string, string>;
+} => {
   if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
+  }
+
+  try {
+    return parseStoredAuthSession(window.localStorage.getItem(AUTH_STORAGE_KEY));
+  } catch {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
+  }
+};
+
+const persistAuthSession = async ({
+  user,
+  deviceAliases,
+}: {
+  user: AuthUser | null;
+  deviceAliases: Record<string, string>;
+}) => {
+  const payload: StoredAuthSession = {
+    user,
+    deviceAliases,
+  };
+
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    try {
+      if (!user) {
+        const hasAliases = Object.keys(deviceAliases).length > 0;
+        if (!hasAliases) {
+          await SecureStore.deleteItemAsync(AUTH_STORAGE_KEY);
+          return;
+        }
+      }
+
+      await SecureStore.setItemAsync(AUTH_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore device storage failures in favor of keeping the in-memory session alive.
+    }
     return;
   }
 
   try {
     if (!user) {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY);
-      return;
+      const hasAliases = Object.keys(deviceAliases).length > 0;
+      if (!hasAliases) {
+        window.localStorage.removeItem(AUTH_STORAGE_KEY);
+        return;
+      }
     }
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // Ignore browser storage failures in favor of keeping the in-memory session alive.
   }
 };
 
+const restorePersistedAuthSession = async (): Promise<{
+  user: AuthUser | null;
+  deviceAliases: Record<string, string>;
+}> => {
+  if (Platform.OS === 'web') {
+    return readStoredAuthSession();
+  }
+
+  try {
+    const rawValue = await SecureStore.getItemAsync(AUTH_STORAGE_KEY);
+    return parseStoredAuthSession(rawValue);
+  } catch {
+    return {
+      user: null,
+      deviceAliases: {},
+    };
+  }
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() =>
-    readStoredAuthUser()
+  const initialSession = readStoredAuthSession();
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(
+    initialSession.user
   );
+  const [deviceAliases, setDeviceAliases] = useState<Record<string, string>>(
+    initialSession.deviceAliases
+  );
+  const [isHydrating, setIsHydrating] = useState(Platform.OS !== 'web');
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      setIsHydrating(false);
+      return;
+    }
+
+    let isActive = true;
+
+    void (async () => {
+      const restoredSession = await restorePersistedAuthSession();
+      if (!isActive) {
+        return;
+      }
+
+      setCurrentUser(restoredSession.user);
+      setDeviceAliases(restoredSession.deviceAliases);
+      setIsHydrating(false);
+    })();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const signIn = (input: SignInInput) => {
     const nextUser = buildAuthUser(input);
     setCurrentUser(nextUser);
-    persistAuthUser(nextUser);
+    void persistAuthSession({
+      user: nextUser,
+      deviceAliases,
+    });
+  };
+
+  const refreshSession = async () => {
+    const activeUser = currentUser;
+    const refreshTokenValue = normalizeText(activeUser?.refreshToken);
+    if (!activeUser || !refreshTokenValue) {
+      return null;
+    }
+
+    const response = await refreshAuthToken({
+      refreshToken: refreshTokenValue,
+    });
+
+    const nextUser = buildAuthUser({
+      userId: response.user.userId,
+      deviceId: activeUser.deviceId,
+      displayName: response.user.displayName,
+      email: response.user.email,
+      authToken: response.accessToken,
+      refreshToken: response.refreshToken,
+      authProvider: activeUser.authProvider,
+    });
+
+    setCurrentUser(nextUser);
+    await persistAuthSession({
+      user: nextUser,
+      deviceAliases,
+    });
+    return nextUser;
   };
 
   const setCurrentDevice = (deviceId?: string | null) => {
@@ -129,24 +307,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         deviceId: normalizedDeviceId || null,
       };
-      persistAuthUser(nextUser);
+      void persistAuthSession({
+        user: nextUser,
+        deviceAliases,
+      });
       return nextUser;
     });
+  };
+
+  const setDeviceAlias = (deviceId: string, alias?: string | null) => {
+    const normalizedDeviceId = normalizeText(deviceId);
+    const normalizedAlias = normalizeText(alias);
+    if (!normalizedDeviceId) {
+      return;
+    }
+
+    setDeviceAliases((prev) => {
+      const nextAliases = { ...prev };
+      if (normalizedAlias) {
+        nextAliases[normalizedDeviceId] = normalizedAlias;
+      } else {
+        delete nextAliases[normalizedDeviceId];
+      }
+
+      void persistAuthSession({
+        user: currentUser,
+        deviceAliases: nextAliases,
+      });
+      return nextAliases;
+    });
+  };
+
+  const getDeviceLabel = (deviceId?: string | null) => {
+    const normalizedDeviceId = normalizeText(deviceId);
+    if (!normalizedDeviceId) {
+      return '선택된 기기 없음';
+    }
+
+    return deviceAliases[normalizedDeviceId] || normalizedDeviceId;
   };
 
   const signOut = async () => {
     const activeUser = currentUser;
     setCurrentUser(null);
-    persistAuthUser(null);
+    void persistAuthSession({
+      user: null,
+      deviceAliases,
+    });
 
     if (!activeUser) {
-      return;
-    }
-
-    const isDemoUser =
-      activeUser.authProvider === 'demo' ||
-      activeUser.authToken.startsWith('demo-user:');
-    if (isDemoUser && !activeUser.refreshToken) {
       return;
     }
 
@@ -162,7 +371,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ currentUser, signIn, setCurrentDevice, signOut }}
+      value={{
+        currentUser,
+        isHydrating,
+        deviceAliases,
+        signIn,
+        refreshSession,
+        setCurrentDevice,
+        setDeviceAlias,
+        getDeviceLabel,
+        signOut,
+      }}
     >
       {children}
     </AuthContext.Provider>

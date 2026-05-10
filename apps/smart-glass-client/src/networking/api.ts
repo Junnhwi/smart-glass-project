@@ -171,22 +171,18 @@ type MediaBatchAccessUrlResponse = {
   items: MediaAccessUrl[];
 };
 
-export type UserCreateResponse = {
-  status: 'created';
-  userId: string;
-  createdAt: string;
-};
-
 export type DeviceRegistrationResponse = {
   status: 'registered';
   userId: string;
   deviceId: string;
+  displayName?: string | null;
   registeredAt: string;
 };
 
 export type UserDevice = {
   userId: string;
   deviceId: string;
+  displayName?: string | null;
   status: 'active' | 'revoked';
   registeredAt: string;
   approvedAt?: string | null;
@@ -199,6 +195,28 @@ export type UserDeviceListResponse = {
   userId: string;
   totalDevices: number;
   items: UserDevice[];
+};
+
+export type DevicePairing = {
+  pairingCode: string;
+  userId: string;
+  deviceId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  expiresAt: string;
+  approvedAt?: string | null;
+  updatedAt?: string | null;
+};
+
+export type DevicePairingIssueResponse = {
+  status: 'issued';
+  pairing: DevicePairing;
+};
+
+export type DevicePairingListResponse = {
+  status: 'ok';
+  totalPairings: number;
+  items: DevicePairing[];
 };
 
 export type AuthUserPayload = {
@@ -226,6 +244,16 @@ export type AuthLogoutResponse = {
   revokedAccessToken: boolean;
   revokedRefreshToken: boolean;
 };
+
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
 
 export type GoogleOauthStartResponse = {
   provider: 'google';
@@ -270,16 +298,10 @@ const postJson = async <TResponse>(
   });
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json();
-};
-
-export const createUser = async ({ userId }: { userId: string }) => {
-  return postJson<UserCreateResponse>('/users', {
-    userId,
-  });
 };
 
 export const registerUserDevice = async ({
@@ -295,24 +317,6 @@ export const registerUserDevice = async ({
       deviceId,
     }
   );
-};
-
-export const ensureUserDeviceRegistration = async ({
-  userId,
-  deviceId,
-}: {
-  userId: string;
-  deviceId: string;
-}) => {
-  const user = await createUser({ userId });
-  const device = await registerUserDevice({
-    userId: user.userId,
-    deviceId,
-  });
-  return {
-    user,
-    device,
-  };
 };
 
 export const listUserDevices = async ({
@@ -337,6 +341,58 @@ export const listUserDevices = async ({
   }
 
   return response.json() as Promise<UserDeviceListResponse>;
+};
+
+export const issueUserDevicePairing = async ({
+  authToken,
+  userId,
+  deviceId,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+}) => {
+  return postJson<DevicePairingIssueResponse>(
+    `/users/${encodeURIComponent(userId)}/device-pairings`,
+    {
+      deviceId,
+    },
+    { authToken }
+  );
+};
+
+export const listUserDevicePairings = async ({
+  authToken,
+  userId,
+  status,
+  limit = 20,
+}: {
+  authToken: string;
+  userId: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  limit?: number;
+}) => {
+  const query = new URLSearchParams();
+  if (status) {
+    query.set('status', status);
+  }
+  query.set('limit', String(limit));
+
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/device-pairings?${query.toString()}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<DevicePairingListResponse>;
 };
 
 export const approveUserDevice = async ({
@@ -408,6 +464,48 @@ export const logoutAuthSession = async ({
     },
     { authToken: authToken || undefined }
   );
+};
+
+export const renameUserDevice = async ({
+  authToken,
+  userId,
+  deviceId,
+  displayName,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+  displayName: string;
+}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        displayName,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<UserDevice>;
+};
+
+export const refreshAuthToken = async ({
+  refreshToken,
+}: {
+  refreshToken: string;
+}) => {
+  return postJson<AuthTokenResponse>('/auth/refresh', {
+    refreshToken,
+  });
 };
 
 export const chatWithMemories = async ({
@@ -500,7 +598,7 @@ export const listRecentMemories = async ({
   );
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json() as Promise<MemoryRecentResponse>;
@@ -573,7 +671,7 @@ export const getCaptureTaskStatus = async (taskId: string) => {
   );
 
   if (!response.ok) {
-    throw new Error(await buildErrorMessage(response));
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
   }
 
   return response.json() as Promise<CaptureTaskStatusResponse>;

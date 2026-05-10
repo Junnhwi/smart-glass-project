@@ -18,6 +18,7 @@ import { useItemContext } from '../context/ItemContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import {
+  ApiRequestError,
   chatWithMemories,
   issueMediaAccessUrls,
   type MemorySearchHit,
@@ -42,6 +43,11 @@ type Message = {
 };
 
 const knownItems = ['지갑', '이어폰', '노트북', '가방', '열쇠', '안경', '카드'];
+const suggestedQueries = [
+  '내 지갑 어디 있었지?',
+  '이어폰 마지막으로 본 곳 알려줘',
+  '노트북이 있던 장면 찾아줘',
+];
 
 const uniqueImageKeysFromHits = (hits: MemorySearchHit[]) => {
   const seen = new Set<string>();
@@ -91,7 +97,7 @@ const buildRelatedImages = (
 
 export default function ChatScreen() {
   const navigation = useAppNavigation();
-  const { currentUser } = useAuth();
+  const { currentUser, refreshSession, signOut } = useAuth();
   const { addItem } = useItemContext();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -102,6 +108,7 @@ export default function ChatScreen() {
   const [isBotTyping, setIsBotTyping] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput>(null);
   const messagePositions = useRef<Record<number, number>>({});
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
@@ -202,12 +209,12 @@ export default function ChatScreen() {
     return <Text style={baseTextStyle}>{parts}</Text>;
   };
 
-  const handleSend = async () => {
+  const sendQuery = async (rawText: string) => {
     if (!currentUser) {
       return;
     }
 
-    const trimmed = inputText.trim();
+    const trimmed = rawText.trim();
     if (!trimmed) {
       return;
     }
@@ -229,12 +236,41 @@ export default function ChatScreen() {
     scrollToBottom();
 
     try {
-      const chatResponse = await chatWithMemories({
-        authToken: currentUser.authToken,
-        userId: currentUser.userId,
-        query: trimmed,
-        topK: 3,
-      });
+      const runChatRequest = async (authToken: string, userId: string) =>
+        chatWithMemories({
+          authToken,
+          userId,
+          query: trimmed,
+          topK: 3,
+        });
+
+      let activeSession = currentUser;
+      let chatResponse;
+
+      try {
+        chatResponse = await runChatRequest(
+          activeSession.authToken,
+          activeSession.userId
+        );
+      } catch (error) {
+        if (
+          error instanceof ApiRequestError &&
+          error.status === 401 &&
+          activeSession.refreshToken
+        ) {
+          const refreshedUser = await refreshSession();
+          if (!refreshedUser) {
+            throw error;
+          }
+          activeSession = refreshedUser;
+          chatResponse = await runChatRequest(
+            refreshedUser.authToken,
+            refreshedUser.userId
+          );
+        } else {
+          throw error;
+        }
+      }
 
       const imageKeys = uniqueImageKeysFromHits(chatResponse.hits);
       let accessUrlByImageKey: Record<string, string> = {};
@@ -242,8 +278,8 @@ export default function ChatScreen() {
       if (imageKeys.length > 0) {
         try {
           const accessUrls = await issueMediaAccessUrls({
-            authToken: currentUser.authToken,
-            userId: currentUser.userId,
+            authToken: activeSession.authToken,
+            userId: activeSession.userId,
             imageKeys,
           });
           accessUrlByImageKey = accessUrls.items.reduce<Record<string, string>>(
@@ -272,7 +308,11 @@ export default function ChatScreen() {
       };
 
       setMessages((prev) => [...prev, botMessage]);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 401) {
+        void signOut();
+      }
+
       const botMessage: Message = {
         id: Date.now() + 1,
         sender: 'bot',
@@ -284,6 +324,29 @@ export default function ChatScreen() {
       setIsBotTyping(false);
       scrollToBottom();
     }
+  };
+
+  const handleSend = () => {
+    const draft = inputText.trim();
+    if (!draft) {
+      return;
+    }
+
+    void sendQuery(draft);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
+  };
+
+  const handleMicPress = () => {
+    const botMessage: Message = {
+      id: Date.now(),
+      sender: 'bot',
+      text: '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.',
+    };
+
+    setMessages((prev) => [...prev, botMessage]);
+    scrollToBottom();
   };
 
   return (
@@ -357,14 +420,36 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
-      <ScrollView ref={scrollViewRef} contentContainerStyle={styles.chatArea}>
+      <ScrollView
+        ref={scrollViewRef}
+        contentContainerStyle={[styles.chatArea, commonStyles.contentContainer]}
+      >
         {messages.length === 0 ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyTitle}>무엇을 찾고 있나요?</Text>
-            <Text style={styles.emptyText}>
-              예: 내 지갑 어디 있었지?, 이어폰 마지막으로 본 곳 알려줘
-            </Text>
-          </View>
+          <>
+            <View style={styles.emptyBox}>
+              <Text style={styles.emptyTitle}>무엇을 찾고 있나요?</Text>
+              <Text style={styles.emptyText}>
+                예: 내 지갑 어디 있었지?, 이어폰 마지막으로 본 곳 알려줘
+              </Text>
+            </View>
+
+            <View style={styles.suggestionSection}>
+              <Text style={styles.suggestionTitle}>바로 질문해보기</Text>
+              <View style={styles.suggestionList}>
+                {suggestedQueries.map((query) => (
+                  <Pressable
+                    key={query}
+                    style={styles.suggestionChip}
+                    onPress={() => {
+                      void sendQuery(query);
+                    }}
+                  >
+                    <Text style={styles.suggestionChipText}>{query}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          </>
         ) : null}
 
         {messages.map((message) => {
@@ -452,22 +537,28 @@ export default function ChatScreen() {
       </ScrollView>
 
       <View style={styles.inputArea}>
-        <TextInput
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder="찾고 싶은 물건이나 장면을 입력하세요"
-          placeholderTextColor="#9CA3AF"
-          style={styles.input}
-          onSubmitEditing={handleSend}
-        />
+        <View style={styles.inputInner}>
+          <TextInput
+            ref={inputRef}
+            value={inputText}
+            onChangeText={setInputText}
+            placeholder="찾고 싶은 물건이나 장면을 입력하세요"
+            placeholderTextColor="#9CA3AF"
+            style={styles.input}
+            onSubmitEditing={handleSend}
+            blurOnSubmit={false}
+          />
 
-        <Pressable style={styles.sendButton} onPress={handleSend}>
           {inputText.trim() ? (
-            <Text style={styles.actionButtonText}>전송</Text>
+            <Pressable style={styles.sendButton} onPress={handleSend}>
+              <Text style={styles.actionButtonText}>전송</Text>
+            </Pressable>
           ) : (
-            <Image source={micIcon} style={styles.micIcon} />
+            <Pressable style={styles.micButton} onPress={handleMicPress}>
+              <Image source={micIcon} style={styles.micIcon} />
+            </Pressable>
           )}
-        </Pressable>
+        </View>
       </View>
 
       <Sidebar
@@ -567,6 +658,32 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
+  suggestionSection: {
+    gap: 10,
+  },
+  suggestionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4B5563',
+  },
+  suggestionList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  suggestionChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  suggestionChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1D4ED8',
+  },
   botMessage: {
     alignSelf: 'flex-start',
     backgroundColor: '#FFFFFF',
@@ -660,14 +777,19 @@ const styles = StyleSheet.create({
     color: '#2563EB',
   },
   inputArea: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 20,
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
     backgroundColor: '#FFFFFF',
+  },
+  inputInner: {
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 10,
   },
   input: {
@@ -683,10 +805,24 @@ const styles = StyleSheet.create({
     minWidth: 64,
     height: 48,
     borderRadius: 24,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  micButton: {
+    minWidth: 64,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
+  },
+  micIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: 'contain',
   },
   headerCenter: {
     flex: 1,
@@ -700,11 +836,6 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#111827',
-  },
-  micIcon: {
-    width: 22,
-    height: 22,
-    resizeMode: 'contain',
+    color: '#FFFFFF',
   },
 });

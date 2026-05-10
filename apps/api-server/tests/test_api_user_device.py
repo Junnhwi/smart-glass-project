@@ -238,6 +238,7 @@ class ApiServerUserDeviceTests(unittest.TestCase):
         response = self.client.post(
             "/users/user-2/devices",
             json={"deviceId": "glass-002"},
+            headers={"Authorization": build_bearer_authorization_header("user-2")},
         )
 
         self.assertEqual(response.status_code, 201)
