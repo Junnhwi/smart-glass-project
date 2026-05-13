@@ -11,7 +11,7 @@ async function bootstrap() {
 
   // CORS 허용
   app.enableCors({
-    origin: 'http://localhost:5173', // Vite dev 서버
+    origin: true, 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true, // 쿠키/세션 사용
   });
