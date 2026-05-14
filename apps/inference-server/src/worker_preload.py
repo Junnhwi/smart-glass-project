@@ -80,12 +80,14 @@ def preload_configured_model() -> Dict[str, Any]:
         },
     }
     model_key = "unknown"
+    model_id = "unknown"
     model_mode = "unknown"
 
     try:
         settings = _configured_model_settings()
         descriptor = resolve_inference_model(settings["model_key"])
         model_key = descriptor.key
+        model_id = descriptor.model_id
         model_mode = descriptor.mode
         device_name = (
             DEFAULT_QWEN_DEVICE if descriptor.mode == "vlm" else DEFAULT_CAPTION_DEVICE
@@ -132,6 +134,7 @@ def preload_configured_model() -> Dict[str, Any]:
             extra={
                 "task_name": "worker_preload",
                 "model_key": model_key,
+                "model_id": model_id,
                 "model_mode": model_mode,
                 "quantization": settings["quantization"],
                 "dtype_name": settings["dtype_name"],
@@ -153,6 +156,7 @@ def preload_configured_model() -> Dict[str, Any]:
         extra={
             "task_name": "worker_preload",
             "model_key": model_key,
+            "model_id": model_id,
             "model_mode": model_mode,
             "quantization": settings["quantization"],
             "dtype_name": settings["dtype_name"],

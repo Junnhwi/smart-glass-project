@@ -215,6 +215,53 @@ class S3MediaUrlSigner:
             expires_in_sec=resolved_expiration,
         )
 
+    def sign_put_object(
+        self,
+        image_key: str,
+        *,
+        content_type: str | None = None,
+        expires_in_sec: int | None = None,
+        bucket_name: str | None = None,
+    ) -> MediaAccessUrl:
+        normalized_key = normalize_storage_object_key(image_key)
+
+        resolved_expiration = self._resolve_expiration(expires_in_sec)
+        resolved_bucket_name = self._resolve_bucket_name(bucket_name)
+        params: dict[str, Any] = {
+            "Bucket": resolved_bucket_name,
+            "Key": normalized_key,
+        }
+        normalized_content_type = _normalize_text(content_type)
+        if normalized_content_type:
+            params["ContentType"] = normalized_content_type
+
+        try:
+            access_url = self._get_client().generate_presigned_url(
+                "put_object",
+                Params=params,
+                ExpiresIn=resolved_expiration,
+            )
+        except (ClientError, BotoCoreError, MediaUrlSignerError) as exc:
+            raise MediaUrlSignerUnavailableError(
+                f"Failed to generate media upload URL: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise MediaUrlSignerUnavailableError(
+                f"Unexpected error while generating media upload URL: {exc}"
+            ) from exc
+
+        expires_at = (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            + timedelta(seconds=resolved_expiration)
+        ).isoformat().replace("+00:00", "Z")
+        return MediaAccessUrl(
+            image_key=normalized_key,
+            access_url=access_url,
+            expires_at=expires_at,
+            expires_in_sec=resolved_expiration,
+        )
+
     def check_health(self) -> None:
         self._resolve_bucket_name()
         self._get_client()
@@ -253,6 +300,19 @@ class MediaAccessService:
             raise PermissionError("imageKey does not belong to the requested user")
         return self.signer.sign_get_object(
             record.image_key or normalized_image_key,
+            expires_in_sec=expires_in_sec,
+        )
+
+    def issue_upload_url(
+        self,
+        *,
+        image_key: str,
+        content_type: str | None = None,
+        expires_in_sec: int | None = None,
+    ) -> MediaAccessUrl:
+        return self.signer.sign_put_object(
+            image_key,
+            content_type=content_type,
             expires_in_sec=expires_in_sec,
         )
 

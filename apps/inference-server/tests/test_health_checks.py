@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.health.checks import build_health_summary, check_model_config, check_storage
+from src.health.checks import (
+    build_health_summary,
+    check_model_config,
+    check_storage,
+    run_timed_health_check,
+)
 from src.storage.s3 import StorageAccessError
 
 
@@ -167,6 +172,29 @@ class StorageHealthCheckTestCase(unittest.TestCase):
         self.assertEqual(summary["failing"], 2)
         self.assertEqual(summary["failingChecks"], ["queue", "storage"])
         self.assertEqual(summary["statuses"]["queue"], "unknown")
+
+    def test_build_health_summary_includes_total_duration_when_available(self) -> None:
+        summary = build_health_summary(
+            {
+                "queue": {"status": "ok", "durationMs": 1.25},
+                "storage": {"status": "ok", "durationMs": 2.5},
+            }
+        )
+
+        self.assertEqual(summary["durationMs"], 3.75)
+
+    def test_run_timed_health_check_preserves_detail_and_adds_duration(self) -> None:
+        def check() -> tuple[str, dict[str, object]]:
+            return "ok", {"status": "ok", "component": "queue"}
+
+        status, detail = run_timed_health_check(check)
+
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail["status"], "ok")
+        self.assertEqual(detail["component"], "queue")
+        self.assertIn("durationMs", detail)
+        self.assertIsInstance(detail["durationMs"], (int, float))
+        self.assertGreaterEqual(detail["durationMs"], 0)
 
 
 if __name__ == "__main__":

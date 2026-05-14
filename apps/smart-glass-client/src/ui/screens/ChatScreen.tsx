@@ -1,67 +1,142 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  View,
-  Text,
-  StyleSheet,
+  Image,
   Pressable,
-  TextInput,
   ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
-import Sidebar from '../components/SideBar';
 
-import { Image } from 'react-native';
+import Sidebar from '../components/SideBar';
 import logo from '../icon/logo.png';
 import micIcon from '../icon/mic.png';
-
-import { commonStyles } from '../styles/commonStyles';
-
+import { useAuth } from '../context/AuthContext';
 import { useItemContext } from '../context/ItemContext';
+import { useAppNavigation } from '../navigation/appNavigation';
+import { commonStyles } from '../styles/commonStyles';
+import {
+  ApiRequestError,
+  chatWithMemories,
+  issueMediaAccessUrls,
+  type MemorySearchHit,
+} from '../../networking/api';
+
+type RelatedImage = {
+  imageKey: string;
+  accessUrl: string;
+  itemName: string;
+  locationText?: string | null;
+  capturedAt?: string | null;
+  caption?: string | null;
+  sceneSummary?: string | null;
+  positionHint?: string | null;
+};
 
 type Message = {
   id: number;
   sender: 'bot' | 'user';
   text: string;
+  relatedImages?: RelatedImage[];
 };
 
-const getDummyReply = (input: string) => {
-  return `"${input}"에 대한 더미 응답입니다. 나중에 여기에 실제 AI 응답이 연결될 예정입니다.`;
-  //TODO: AI 응답과 연동하여 실제 답변이 나오도록 수정 필요
+const knownItems = ['지갑', '이어폰', '노트북', '가방', '열쇠', '안경', '카드'];
+const suggestedQueries = [
+  '내 지갑 어디 있었지?',
+  '이어폰 마지막으로 본 곳 알려줘',
+  '노트북이 있던 장면 찾아줘',
+];
+
+const uniqueImageKeysFromHits = (hits: MemorySearchHit[]) => {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+
+  hits.forEach((hit) => {
+    if (!hit.imageKey || seen.has(hit.imageKey)) {
+      return;
+    }
+    seen.add(hit.imageKey);
+    keys.push(hit.imageKey);
+  });
+
+  return keys;
+};
+
+const buildRelatedImages = (
+  hits: MemorySearchHit[],
+  accessUrlByImageKey: Record<string, string>,
+  fallbackQuery: string
+) => {
+  return hits
+    .map((hit) => {
+      if (!hit.imageKey) {
+        return null;
+      }
+
+      const accessUrl = accessUrlByImageKey[hit.imageKey] || hit.imageUrl;
+      if (!accessUrl) {
+        return null;
+      }
+
+      return {
+        imageKey: hit.imageKey,
+        accessUrl,
+        itemName:
+          hit.detectedObjects[0] || hit.tags[0] || fallbackQuery || '기록',
+        locationText: hit.location?.name || hit.location?.address || null,
+        capturedAt: hit.capturedAt,
+        caption: hit.caption,
+        sceneSummary: hit.sceneSummary,
+        positionHint: hit.positionHint,
+      };
+    })
+    .filter(Boolean) as RelatedImage[];
 };
 
 export default function ChatScreen() {
+  const navigation = useAppNavigation();
+  const { currentUser, refreshSession, signOut } = useAuth();
   const { addItem } = useItemContext();
-  const knownItems = ['지갑', '이어폰', '열쇠', '가방', '안경', '충전기', '텀블러'];
-  //히스토리 확인을 위한 더미 데이터
-  //TODO: 실제 AI 응답과 연동하여 사용자가 언급한 아이템을 기록하도록 수정 필요
+
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [searchText, setSearchText] = useState('');
-
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isBotTyping, setIsBotTyping] = useState(false);
 
   const scrollViewRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput>(null);
   const messagePositions = useRef<Record<number, number>>({});
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
   const matchedMessageIds = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
-    if (!keyword) return [];
+    if (!keyword) {
+      return [];
+    }
 
     return messages
       .filter((message) => message.text.toLowerCase().includes(keyword))
       .map((message) => message.id);
-  }, [searchText, messages]);
+  }, [messages, searchText]);
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+  };
 
   const goToMatch = (index: number) => {
-    if (matchedMessageIds.length === 0) return;
+    if (matchedMessageIds.length === 0) {
+      return;
+    }
 
     const safeIndex =
       ((index % matchedMessageIds.length) + matchedMessageIds.length) %
       matchedMessageIds.length;
-
     const targetId = matchedMessageIds[safeIndex];
     const y = messagePositions.current[targetId] ?? 0;
 
@@ -73,62 +148,18 @@ export default function ChatScreen() {
     setCurrentMatchIndex(safeIndex);
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (matchedMessageIds.length > 0) {
       setCurrentMatchIndex(0);
       setTimeout(() => goToMatch(0), 50);
-    } else {
-      setCurrentMatchIndex(0);
-    }
-  }, [searchText, messages]);
-
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-  };
-
-  const handleSend = () => {
-    
-    const trimmed = inputText.trim();
-    if (!trimmed) return;
-
-    const foundItem = knownItems.find((item) => trimmed.includes(item));
-
-    if (foundItem) {
-      addItem(foundItem); 
+      return;
     }
 
-    const userMessage: Message = {
-      id: Date.now(),
-      sender: 'user',
-      text: trimmed,
-    };
+    setCurrentMatchIndex(0);
+  }, [matchedMessageIds.length, searchText, messages]);
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInputText('');
-    setIsBotTyping(true);
-    scrollToBottom();
-
-    setTimeout(() => {
-      const botMessage: Message = {
-        id: Date.now() + 1,
-        sender: 'bot',
-        text: getDummyReply(trimmed),
-      };
-
-      setMessages((prev) => [...prev, botMessage]);
-      setIsBotTyping(false);
-      scrollToBottom();
-    }, 700);
-  };
-
-  const renderHighlightedText = (
-    text: string,
-    sender: 'bot' | 'user'
-  ) => {
+  const renderHighlightedText = (text: string, sender: 'bot' | 'user') => {
     const keyword = searchText.trim();
-
     const baseTextStyle =
       sender === 'user' ? styles.userMessageText : styles.botMessageText;
 
@@ -178,6 +209,146 @@ export default function ChatScreen() {
     return <Text style={baseTextStyle}>{parts}</Text>;
   };
 
+  const sendQuery = async (rawText: string) => {
+    if (!currentUser) {
+      return;
+    }
+
+    const trimmed = rawText.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const foundItem = knownItems.find((item) => trimmed.includes(item));
+    if (foundItem) {
+      addItem(foundItem);
+    }
+
+    const userMessage: Message = {
+      id: Date.now(),
+      sender: 'user',
+      text: trimmed,
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInputText('');
+    setIsBotTyping(true);
+    scrollToBottom();
+
+    try {
+      const runChatRequest = async (authToken: string, userId: string) =>
+        chatWithMemories({
+          authToken,
+          userId,
+          query: trimmed,
+          topK: 3,
+        });
+
+      let activeSession = currentUser;
+      let chatResponse;
+
+      try {
+        chatResponse = await runChatRequest(
+          activeSession.authToken,
+          activeSession.userId
+        );
+      } catch (error) {
+        if (
+          error instanceof ApiRequestError &&
+          error.status === 401 &&
+          activeSession.refreshToken
+        ) {
+          const refreshedUser = await refreshSession();
+          if (!refreshedUser) {
+            throw error;
+          }
+          activeSession = refreshedUser;
+          chatResponse = await runChatRequest(
+            refreshedUser.authToken,
+            refreshedUser.userId
+          );
+        } else {
+          throw error;
+        }
+      }
+
+      const imageKeys = uniqueImageKeysFromHits(chatResponse.hits);
+      let accessUrlByImageKey: Record<string, string> = {};
+
+      if (imageKeys.length > 0) {
+        try {
+          const accessUrls = await issueMediaAccessUrls({
+            authToken: activeSession.authToken,
+            userId: activeSession.userId,
+            imageKeys,
+          });
+          accessUrlByImageKey = accessUrls.items.reduce<Record<string, string>>(
+            (acc, item) => {
+              acc[item.imageKey] = item.accessUrl;
+              return acc;
+            },
+            {}
+          );
+        } catch {
+          accessUrlByImageKey = {};
+        }
+      }
+
+      const relatedImages = buildRelatedImages(
+        chatResponse.hits,
+        accessUrlByImageKey,
+        trimmed
+      );
+
+      const botMessage: Message = {
+        id: Date.now() + 1,
+        sender: 'bot',
+        text: chatResponse.answer || '관련 기록을 찾지 못했어요.',
+        relatedImages,
+      };
+
+      setMessages((prev) => [...prev, botMessage]);
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 401) {
+        void signOut();
+      }
+
+      const botMessage: Message = {
+        id: Date.now() + 1,
+        sender: 'bot',
+        text: '답변을 불러오지 못했어요. 잠시 후 다시 시도해주세요.',
+      };
+
+      setMessages((prev) => [...prev, botMessage]);
+    } finally {
+      setIsBotTyping(false);
+      scrollToBottom();
+    }
+  };
+
+  const handleSend = () => {
+    const draft = inputText.trim();
+    if (!draft) {
+      return;
+    }
+
+    void sendQuery(draft);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
+  };
+
+  const handleMicPress = () => {
+    const botMessage: Message = {
+      id: Date.now(),
+      sender: 'bot',
+      text: '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.',
+    };
+
+    setMessages((prev) => [...prev, botMessage]);
+    scrollToBottom();
+  };
+
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
@@ -186,7 +357,7 @@ export default function ChatScreen() {
             <TextInput
               value={searchText}
               onChangeText={setSearchText}
-              placeholder="채팅 내용 검색"
+              placeholder="대화 내용 검색"
               placeholderTextColor="#9CA3AF"
               style={styles.searchInput}
               autoFocus
@@ -197,7 +368,7 @@ export default function ChatScreen() {
                 setSearchText('');
               }}
             >
-              <Text style={styles.cancel}>취소</Text>
+              <Text style={styles.cancel}>닫기</Text>
             </Pressable>
           </>
         ) : (
@@ -206,7 +377,7 @@ export default function ChatScreen() {
               style={styles.menuButton}
               onPress={() => setSidebarVisible(true)}
             >
-              <Text style={styles.menuText}>☰</Text>
+              <Text style={styles.menuText}>≡</Text>
             </Pressable>
 
             <View style={styles.headerCenter}>
@@ -251,15 +422,34 @@ export default function ChatScreen() {
 
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={styles.chatArea}
+        contentContainerStyle={[styles.chatArea, commonStyles.contentContainer]}
       >
         {messages.length === 0 ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyTitle}>환영합니다</Text>
-            <Text style={styles.emptyText}>
-              찾고자 하는 물건이 있으시다면 말씀해주세요
-            </Text>
-          </View>
+          <>
+            <View style={styles.emptyBox}>
+              <Text style={styles.emptyTitle}>무엇을 찾고 있나요?</Text>
+              <Text style={styles.emptyText}>
+                예: 내 지갑 어디 있었지?, 이어폰 마지막으로 본 곳 알려줘
+              </Text>
+            </View>
+
+            <View style={styles.suggestionSection}>
+              <Text style={styles.suggestionTitle}>바로 질문해보기</Text>
+              <View style={styles.suggestionList}>
+                {suggestedQueries.map((query) => (
+                  <Pressable
+                    key={query}
+                    style={styles.suggestionChip}
+                    onPress={() => {
+                      void sendQuery(query);
+                    }}
+                  >
+                    <Text style={styles.suggestionChipText}>{query}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          </>
         ) : null}
 
         {messages.map((message) => {
@@ -283,49 +473,92 @@ export default function ChatScreen() {
               ]}
             >
               {renderHighlightedText(message.text, message.sender)}
+
+              {message.relatedImages?.length ? (
+                <View style={styles.relatedImagesBlock}>
+                  <Text style={styles.relatedImagesTitle}>관련 이미지</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.relatedImagesList}
+                  >
+                    {message.relatedImages.map((image) => (
+                      <Pressable
+                        key={image.imageKey}
+                        style={styles.relatedImageCard}
+                        onPress={() =>
+                          navigation.navigate('ItemLocation', {
+                            itemName: image.itemName,
+                          })
+                        }
+                      >
+                        <Image
+                          source={{ uri: image.accessUrl }}
+                          style={styles.relatedImage}
+                        />
+                        <View style={styles.relatedImageMeta}>
+                          <Text
+                            numberOfLines={1}
+                            style={styles.relatedImageItemName}
+                          >
+                            {image.itemName}
+                          </Text>
+                          <Text
+                            numberOfLines={1}
+                            style={styles.relatedImageLocation}
+                          >
+                            {image.locationText || image.capturedAt || '기록 보기'}
+                          </Text>
+                        </View>
+                        <Text
+                          numberOfLines={2}
+                          style={styles.relatedImageCaption}
+                        >
+                          {image.positionHint ||
+                            image.sceneSummary ||
+                            image.caption ||
+                            '눌러서 위치 기록 보기'}
+                        </Text>
+                        <Text style={styles.relatedImageAction}>위치 보기</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
             </View>
           );
         })}
 
         {isBotTyping ? (
           <View style={styles.botMessage}>
-            <Text style={styles.botMessageText}>입력 중...</Text>
+            <Text style={styles.botMessageText}>답변을 준비하고 있어요...</Text>
           </View>
         ) : null}
       </ScrollView>
 
-      {/* <View style={styles.frequentQuestionsSection}>
-        <Text style={styles.frequentQuestionsTitle}>최근 자주 물어본 질문</Text>
-        <View style={styles.quickQuestions}>
-          {frequentQuestions.map((question) => (
-            <Pressable
-              key={question}
-              style={styles.quickButton}
-              onPress={() => setInputText(question)}
-            >
-              <Text style={styles.quickButtonText}>{question}</Text>
-            </Pressable>
-          ))}
-        </View>
-      </View> */}
-
       <View style={styles.inputArea}>
-        <TextInput
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder="메시지를 입력하세요"
-          placeholderTextColor="#9CA3AF"
-          style={styles.input}
-          onSubmitEditing={handleSend}
-        />
+        <View style={styles.inputInner}>
+          <TextInput
+            ref={inputRef}
+            value={inputText}
+            onChangeText={setInputText}
+            placeholder="찾고 싶은 물건이나 장면을 입력하세요"
+            placeholderTextColor="#9CA3AF"
+            style={styles.input}
+            onSubmitEditing={handleSend}
+            blurOnSubmit={false}
+          />
 
-        <Pressable style={styles.sendButton} onPress={handleSend}>
           {inputText.trim() ? (
-            <Text style={styles.actionButtonText}>전송</Text>
+            <Pressable style={styles.sendButton} onPress={handleSend}>
+              <Text style={styles.actionButtonText}>전송</Text>
+            </Pressable>
           ) : (
-            <Image source={micIcon} style={styles.micIcon} />
+            <Pressable style={styles.micButton} onPress={handleMicPress}>
+              <Image source={micIcon} style={styles.micIcon} />
+            </Pressable>
           )}
-        </Pressable>
+        </View>
       </View>
 
       <Sidebar
@@ -343,24 +576,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   menuText: {
     fontSize: 20,
     color: '#111827',
   },
-
   searchButton: {
     width: 36,
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   searchIcon: {
     fontSize: 20,
     color: '#111827',
   },
-
   searchInput: {
     flex: 1,
     height: 40,
@@ -370,14 +599,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
-
   cancel: {
     marginLeft: 10,
     color: '#2563EB',
     fontWeight: '500',
     fontSize: 16,
   },
-
   searchInfoBar: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -386,18 +613,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-
   searchInfoText: {
     fontSize: 13,
     color: '#7C5E10',
     fontWeight: '600',
   },
-
   searchActions: {
     flexDirection: 'row',
     gap: 8,
   },
-
   searchMoveButton: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -406,18 +630,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-
   searchMoveText: {
     fontSize: 12,
     color: '#374151',
     fontWeight: '600',
   },
-
   chatArea: {
     padding: 16,
     gap: 12,
   },
-
   emptyBox: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -425,108 +646,152 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
-
   emptyTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 6,
   },
-
   emptyText: {
     fontSize: 14,
     color: '#6B7280',
     textAlign: 'center',
     lineHeight: 20,
   },
-
+  suggestionSection: {
+    gap: 10,
+  },
+  suggestionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4B5563',
+  },
+  suggestionList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  suggestionChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  suggestionChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1D4ED8',
+  },
   botMessage: {
     alignSelf: 'flex-start',
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 16,
-    maxWidth: '80%',
+    maxWidth: '82%',
   },
-
   botMessageText: {
     fontSize: 15,
     color: '#111827',
     lineHeight: 22,
   },
-
   userMessage: {
     alignSelf: 'flex-end',
     backgroundColor: '#2563EB',
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 16,
-    maxWidth: '80%',
+    maxWidth: '82%',
   },
-
   userMessageText: {
     fontSize: 15,
     color: '#FFFFFF',
     lineHeight: 22,
   },
-
   matchedMessage: {
     borderWidth: 2,
     borderColor: '#FACC15',
   },
-
   activeMatchedMessage: {
     borderColor: '#EAB308',
   },
-
   highlightText: {
     backgroundColor: '#FDE68A',
     color: '#111827',
     fontWeight: '700',
   },
-
-  frequentQuestionsSection: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-
-  frequentQuestionsTitle: {
-    fontSize: 13,
-    color: '#6B7280',
-    marginBottom: 8,
-    fontWeight: '600',
-  },
-
-  quickQuestions: {
-    flexDirection: 'row',
+  relatedImagesBlock: {
+    marginTop: 12,
     gap: 8,
-    flexWrap: 'wrap',
   },
-
-  quickButton: {
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 999,
+  relatedImagesTitle: {
+    fontSize: 12,
+    color: '#4B5563',
+    fontWeight: '700',
   },
-
-  quickButtonText: {
-    fontSize: 13,
+  relatedImagesList: {
+    gap: 10,
+  },
+  relatedImageCard: {
+    width: 152,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+  },
+  relatedImage: {
+    width: '100%',
+    height: 104,
+    backgroundColor: '#E5E7EB',
+  },
+  relatedImageMeta: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    gap: 2,
+  },
+  relatedImageItemName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  relatedImageLocation: {
+    fontSize: 11,
+    color: '#6B7280',
+  },
+  relatedImageCaption: {
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    fontSize: 12,
+    lineHeight: 16,
     color: '#374151',
+    minHeight: 48,
   },
-
+  relatedImageAction: {
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
   inputArea: {
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 20,
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
     backgroundColor: '#FFFFFF',
+  },
+  inputInner: {
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 10,
   },
-
   input: {
     flex: 1,
     height: 48,
@@ -536,43 +801,41 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
   },
-
   sendButton: {
     minWidth: 64,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#f1f1f1',
+    backgroundColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
   },
-
-  sendButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
+  micButton: {
+    minWidth: 64,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
   },
-
+  micIcon: {
+    width: 22,
+    height: 22,
+    resizeMode: 'contain',
+  },
   headerCenter: {
     flex: 1,
     alignItems: 'center',
   },
-
   headerLogo: {
     width: 40,
     height: 40,
     resizeMode: 'contain',
   },
-
   actionButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#111827',
-  },
-
-  micIcon: {
-    width: 22,
-    height: 22,
-    resizeMode: 'contain',
+    color: '#FFFFFF',
   },
 });

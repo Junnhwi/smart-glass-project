@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,11 @@ from src.api.main import app
 class ApiTaskRoutesTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
+
+    def _assert_enqueued_at(self, value: object) -> None:
+        self.assertIsInstance(value, str)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        self.assertIsNotNone(parsed.tzinfo)
 
     def test_enqueue_vision_inference_returns_task_id(self) -> None:
         fake_async_result = MagicMock()
@@ -34,10 +40,12 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.json()["requestId"], "req-1")
         self.assertEqual(response.json()["taskType"], "metadata")
         self.assertEqual(response.json()["statusUrl"], "/tasks/task-123")
+        task_kwargs = mocked_apply_async.call_args.kwargs["kwargs"]
         self.assertEqual(
-            mocked_apply_async.call_args.kwargs["kwargs"]["request_id"],
+            task_kwargs["request_id"],
             "req-1",
         )
+        self._assert_enqueued_at(task_kwargs["enqueued_at"])
 
     def test_enqueue_vision_inference_uses_middleware_request_id_when_payload_omits_it(
         self,
@@ -65,10 +73,12 @@ class ApiTaskRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.json()["requestId"], "req-from-header")
         self.assertEqual(response.json()["taskType"], "metadata")
         self.assertEqual(response.json()["statusUrl"], "/tasks/task-456")
+        task_kwargs = mocked_apply_async.call_args.kwargs["kwargs"]
         self.assertEqual(
-            mocked_apply_async.call_args.kwargs["kwargs"]["request_id"],
+            task_kwargs["request_id"],
             "req-from-header",
         )
+        self._assert_enqueued_at(task_kwargs["enqueued_at"])
 
     def test_enqueue_vision_inference_rejects_unknown_task_type(self) -> None:
         response = self.client.post(

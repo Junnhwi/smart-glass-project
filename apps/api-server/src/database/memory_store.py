@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -697,3 +698,10 @@ class PostgresMemoryStoreClient:
             raise MemoryStoreUnavailableError(
                 f"Postgres health check failed: {exc}"
             ) from exc
+
+
+def build_default_memory_store_client() -> PostgresMemoryStoreClient:
+    database_url = os.getenv("API_CAPTURE_DATABASE_URL", "").strip()
+    if not database_url:
+        raise ValueError("API_CAPTURE_DATABASE_URL is required for memory storage")
+    return PostgresMemoryStoreClient(database_url)

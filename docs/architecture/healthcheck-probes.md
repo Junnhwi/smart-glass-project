@@ -31,9 +31,14 @@ Readiness payloads also include:
 - `summary.failing`: number of checks that are not `ok`
 - `summary.failingChecks`: check names that are currently blocking readiness
 - `summary.statuses`: compact check-name to status map
+- `summary.durationMs`: total measured duration for checks that report timing
 
 `GET /health/live` also includes `summary` for consistency, but does not use
 `ready` because it only answers whether the API process can respond.
+
+Each readiness check detail includes `durationMs` when the service measured the
+probe locally. This value is intended for operator diagnostics and should be
+treated as process-local timing, not external request latency.
 
 ## Storage Readiness Modes
 
