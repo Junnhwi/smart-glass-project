@@ -1,6 +1,6 @@
 import pytest
 
-from clients.ollama_client import OllamaClient
+from src.clients.ollama_client import OllamaClient
 
 
 def test_make_client():

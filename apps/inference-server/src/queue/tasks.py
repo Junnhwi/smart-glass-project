@@ -298,29 +298,30 @@ def process_vision_inference(
 
         model_inference_started_at = time.perf_counter()
         try:
-                if model_descriptor.mode == "vlm":
+            # If VISION_USE_OLLAMA=1, forward to Ollama adapter regardless of local model mode
+            use_ollama = os.getenv("VISION_USE_OLLAMA", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if use_ollama:
+                result = generate_ollama_vlm_metadata(
+                    image=raw_image,
+                    model_key=model_key,
+                    quantization=quantization,
+                    dtype_name=dtype_name,
+                )
+                metadata = result["metadata"]
+                pipeline_output = result.get("pipeline_output")
+            elif model_descriptor.mode == "vlm":
                 try:
-                    # If VISION_USE_OLLAMA=1, forward to Ollama adapter instead
-                    use_ollama = os.getenv("VISION_USE_OLLAMA", "").strip().lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "on",
-                    }
-                    if use_ollama:
-                        result = generate_ollama_vlm_metadata(
-                            image=raw_image,
-                            model_key=model_key,
-                            quantization=quantization,
-                            dtype_name=dtype_name,
-                        )
-                    else:
-                        result = generate_qwen_vlm_metadata(
-                            image=raw_image,
-                            model_key=model_key,
-                            quantization=quantization,
-                            dtype_name=dtype_name,
-                        )
+                    result = generate_qwen_vlm_metadata(
+                        image=raw_image,
+                        model_key=model_key,
+                        quantization=quantization,
+                        dtype_name=dtype_name,
+                    )
                 except Exception as primary_error:
                     fallback_model_key = None
                     if _should_retry_with_qwen_fallback(primary_error):
@@ -349,12 +350,12 @@ def process_vision_inference(
                     )
                     model_key = fallback_model_key
                     model_descriptor = resolve_inference_model(model_key)
-                    model_id = model_descriptor.model_id  # 팀원분이 추가하신 로직 살림!
+                    model_id = model_descriptor.model_id
                     fallback_triggered = True
                     execution_policy_payload = execution_policy.to_payload(
                         fallback_triggered=True
                     )
-                metadata = result["metadata"]
+                metadata = result.get("metadata")
                 pipeline_output = result.get("pipeline_output")
             else:
                 result = generate_caption(
