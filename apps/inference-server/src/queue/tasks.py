@@ -16,6 +16,7 @@ from src.contracts.vlm import (
 from src.core.logging import configure_logging, get_logger
 from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
+from src.adapters.ollama_adapter import generate_ollama_vlm_metadata
 from src.models.registry import resolve_inference_model
 from src.models.serving_profile import (
     resolve_runtime_execution_policy,
@@ -297,14 +298,29 @@ def process_vision_inference(
 
         model_inference_started_at = time.perf_counter()
         try:
-            if model_descriptor.mode == "vlm":
+                if model_descriptor.mode == "vlm":
                 try:
-                    result = generate_qwen_vlm_metadata(
-                        image=raw_image,
-                        model_key=model_key,
-                        quantization=quantization,
-                        dtype_name=dtype_name,
-                    )
+                    # If VISION_USE_OLLAMA=1, forward to Ollama adapter instead
+                    use_ollama = os.getenv("VISION_USE_OLLAMA", "").strip().lower() in {
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    }
+                    if use_ollama:
+                        result = generate_ollama_vlm_metadata(
+                            image=raw_image,
+                            model_key=model_key,
+                            quantization=quantization,
+                            dtype_name=dtype_name,
+                        )
+                    else:
+                        result = generate_qwen_vlm_metadata(
+                            image=raw_image,
+                            model_key=model_key,
+                            quantization=quantization,
+                            dtype_name=dtype_name,
+                        )
                 except Exception as primary_error:
                     fallback_model_key = None
                     if _should_retry_with_qwen_fallback(primary_error):

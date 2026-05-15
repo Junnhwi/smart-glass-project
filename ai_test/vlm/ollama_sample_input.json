@@ -1,0 +1,14 @@
+{
+  "requestId": "req-ollama-001",
+  "taskType": "metadata",
+  "memoryId": "mem-ollama-001",
+  "userId": "user-1",
+  "capturedAt": "2026-05-15T10:00:00Z",
+  "sourceImage": {
+    "imageKey": "tests/sample.jpg",
+    "contentType": "image/jpeg"
+  },
+  "generation": {
+    "instructions": "Describe the scene and list detected objects."
+  }
+}
