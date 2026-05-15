@@ -178,7 +178,9 @@ export default function ItemLocationScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[styles.content, commonStyles.contentContainer]}
+      >
         <View style={styles.titleBox}>
           <Text style={styles.itemName}>{itemName || '선택한 물건'}</Text>
           <Text style={styles.description}>

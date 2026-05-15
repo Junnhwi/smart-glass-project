@@ -311,12 +311,14 @@ class DeviceRegistrationResponse(ApiSchema):
     status: Literal["registered"] = "registered"
     userId: str
     deviceId: str
+    displayName: str | None = None
     registeredAt: str
 
 
 class UserDevicePayload(ApiSchema):
     userId: str
     deviceId: str
+    displayName: str | None = None
     status: Literal["active", "revoked"]
     registeredAt: str
     approvedAt: str | None = None
@@ -335,10 +337,55 @@ class UserDeviceStatusResponse(ApiSchema):
     status: Literal["active", "revoked"]
     userId: str
     deviceId: str
+    displayName: str | None = None
     registeredAt: str
     approvedAt: str | None = None
     revokedAt: str | None = None
     updatedAt: str | None = None
+
+
+class UserDeviceRenameRequest(ApiSchema):
+    displayName: str = Field(min_length=1)
+
+    @validator("displayName")
+    def validate_non_blank_user_device_display_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class DevicePairingIssueRequest(ApiSchema):
+    deviceId: str = Field(min_length=1)
+
+    @validator("deviceId")
+    def validate_non_blank_device_pairing_device_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("must not be blank")
+        return normalized
+
+
+class DevicePairingPayload(ApiSchema):
+    pairingCode: str
+    userId: str
+    deviceId: str
+    status: Literal["pending", "approved", "rejected"]
+    createdAt: str
+    expiresAt: str
+    approvedAt: str | None = None
+    updatedAt: str | None = None
+
+
+class DevicePairingIssueResponse(ApiSchema):
+    status: Literal["issued"] = "issued"
+    pairing: DevicePairingPayload
+
+
+class DevicePairingListResponse(ApiSchema):
+    status: Literal["ok"] = "ok"
+    totalPairings: int
+    items: list[DevicePairingPayload]
 
 
 class AuthUserPayload(ApiSchema):
@@ -758,6 +805,24 @@ class MemoryChatResponse(ApiSchema):
     citedMemoryIds: list[str] = Field(default_factory=list)
     confidence: float | None = None
     reason: str | None = None
+
+
+class AdminMemoryQueryLogPayload(ApiSchema):
+    logId: int
+    userId: str
+    queryType: Literal["search", "chat"]
+    queryText: str
+    totalHits: int
+    answerText: str | None = None
+    answerMode: str | None = None
+    citedMemoryIds: list[str] = Field(default_factory=list)
+    createdAt: str
+
+
+class AdminMemoryQueryLogListResponse(ApiSchema):
+    status: Literal["ok"] = "ok"
+    totalLogs: int
+    items: list[AdminMemoryQueryLogPayload]
 
 
 class HealthPayload(ApiSchema):

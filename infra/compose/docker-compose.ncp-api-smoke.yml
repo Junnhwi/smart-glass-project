@@ -1,0 +1,84 @@
+services:
+  object-storage-smoke:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api-server.Dockerfile
+    restart: "no"
+    env_file:
+      - ../../.env
+    environment:
+      STORAGE_REGION: ${STORAGE_REGION:-kr-standard}
+      STORAGE_ENDPOINT_URL: ${STORAGE_ENDPOINT_URL:-https://kr.object.ncloudstorage.com}
+      STORAGE_ADDRESSING_STYLE: ${STORAGE_ADDRESSING_STYLE:-path}
+    command:
+      [
+        "python",
+        "-c",
+        "import os; import boto3; from botocore.config import Config; bucket=os.environ['STORAGE_BUCKET_NAME']; client=boto3.client('s3', aws_access_key_id=os.environ['STORAGE_ACCESS_KEY_ID'], aws_secret_access_key=os.environ['STORAGE_SECRET_ACCESS_KEY'], region_name=os.getenv('STORAGE_REGION','kr-standard'), endpoint_url=os.getenv('STORAGE_ENDPOINT_URL'), config=Config(s3={'addressing_style': os.getenv('STORAGE_ADDRESSING_STYLE','path')})); client.head_bucket(Bucket=bucket); print(f'object storage ok: {bucket}')"
+      ]
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: smart_glass
+      POSTGRES_USER: api_server
+      POSTGRES_PASSWORD: api_server
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api-server.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    depends_on:
+      object-storage-smoke:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      API_CAPTURE_ENABLE_MEMORY_STORE: "1"
+      API_CAPTURE_DATABASE_URL: postgresql://api_server:api_server@postgres:5432/smart_glass
+      API_MEMORY_DEFAULT_TOP_K: "5"
+      API_CAPTURE_WORKER_TIMEOUT_SEC: "30"
+      STORAGE_REGION: ${STORAGE_REGION:-kr-standard}
+      STORAGE_ENDPOINT_URL: ${STORAGE_ENDPOINT_URL:-https://kr.object.ncloudstorage.com}
+      STORAGE_ADDRESSING_STYLE: ${STORAGE_ADDRESSING_STYLE:-path}
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready').read()"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  postgres-data:

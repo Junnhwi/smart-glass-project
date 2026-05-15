@@ -268,6 +268,8 @@ class GoogleOauthServiceTests(unittest.TestCase):
         self.assertEqual(query["redirect_uri"][0], "http://localhost:8002/auth/oauth/google/callback")
         self.assertEqual(query["state"][0], start.state)
         self.assertEqual(query["code_challenge_method"][0], "S256")
+        self.assertNotIn("prompt", query)
+        self.assertNotIn("access_type", query)
 
     def test_start_rejects_redirect_uri_outside_allowlist(self) -> None:
         with self.assertRaisesRegex(ValueError, "redirectUri is not allowed"):

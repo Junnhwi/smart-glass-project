@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,20 +12,24 @@ import {
 
 import {
   approveUserDevice,
+  issueUserDevicePairing,
+  listUserDevicePairings,
   listUserDevices,
-  registerUserDevice,
+  renameUserDevice,
   revokeUserDevice,
+  type DevicePairing,
   type UserDevice,
 } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
-import logo from '../icon/logo.png';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
+const AUTO_REFRESH_INTERVAL_MS = 3000;
+
 const formatTimestamp = (value?: string | null) => {
   if (!value) {
-    return '없음';
+    return '정보 없음';
   }
 
   const parsed = new Date(value);
@@ -37,12 +40,28 @@ const formatTimestamp = (value?: string | null) => {
   return parsed.toLocaleString();
 };
 
+const formatPairingState = (status: DevicePairing['status']) => {
+  if (status === 'approved') {
+    return '승인됨';
+  }
+  if (status === 'rejected') {
+    return '거절됨';
+  }
+  return '대기 중';
+};
+
 export default function ProfileScreen() {
   const navigation = useAppNavigation();
-  const { currentUser, setCurrentDevice } = useAuth();
+  const { currentUser, getDeviceLabel, setCurrentDevice, setDeviceAlias } =
+    useAuth();
+
   const [devices, setDevices] = useState<UserDevice[]>([]);
+  const [pairings, setPairings] = useState<DevicePairing[]>([]);
   const [registerDeviceId, setRegisterDeviceId] = useState('');
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [pendingDeviceAlias, setPendingDeviceAlias] = useState('');
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [isLoadingPairings, setIsLoadingPairings] = useState(false);
   const [isRegisteringDevice, setIsRegisteringDevice] = useState(false);
   const [isUpdatingDeviceId, setIsUpdatingDeviceId] = useState<string | null>(
     null
@@ -50,14 +69,16 @@ export default function ProfileScreen() {
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
-  const loadDevices = async () => {
+  const loadDevices = async ({ silent = false } = {}) => {
     if (!currentUser) {
       setDevices([]);
       return;
     }
 
-    setIsLoadingDevices(true);
-    setErrorMessage('');
+    if (!silent) {
+      setIsLoadingDevices(true);
+      setErrorMessage('');
+    }
     try {
       const response = await listUserDevices({
         authToken: currentUser.authToken,
@@ -68,20 +89,65 @@ export default function ProfileScreen() {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 정보를 불러오지 못했어요.';
-      setErrorMessage(message);
+          : '기기 목록을 불러오지 못했습니다.';
+      if (!silent) {
+        setErrorMessage(message);
+      }
     } finally {
-      setIsLoadingDevices(false);
+      if (!silent) {
+        setIsLoadingDevices(false);
+      }
+    }
+  };
+
+  const loadPairings = async ({ silent = false } = {}) => {
+    if (!currentUser) {
+      setPairings([]);
+      return;
+    }
+
+    if (!silent) {
+      setIsLoadingPairings(true);
+    }
+    try {
+      const response = await listUserDevicePairings({
+        authToken: currentUser.authToken,
+        userId: currentUser.userId,
+        limit: 6,
+      });
+      setPairings(response.items);
+    } catch {
+      // Pairing history is helpful, but it should not block the rest of the page.
+    } finally {
+      if (!silent) {
+        setIsLoadingPairings(false);
+      }
     }
   };
 
   useEffect(() => {
     void loadDevices();
+    void loadPairings();
   }, [currentUser?.authToken, currentUser?.userId]);
 
-  const moveToChatWithDevice = (deviceId: string) => {
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadDevices({ silent: true });
+      void loadPairings({ silent: true });
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [currentUser?.authToken, currentUser?.userId]);
+
+  const moveToCaptureWithDevice = (deviceId: string) => {
     setCurrentDevice(deviceId);
-    navigation.navigate('Chat');
+    navigation.navigate('Capture');
   };
 
   const handleRegisterDevice = async () => {
@@ -99,19 +165,21 @@ export default function ProfileScreen() {
     setErrorMessage('');
     setStatusMessage('');
     try {
-      await registerUserDevice({
+      const response = await issueUserDevicePairing({
+        authToken: currentUser.authToken,
         userId: currentUser.userId,
         deviceId: nextDeviceId,
       });
       setRegisterDeviceId('');
-      setStatusMessage('기기를 등록했어요.');
-      await loadDevices();
-      moveToChatWithDevice(nextDeviceId);
+      setStatusMessage(
+        `페어링 코드를 발급했어요: ${response.pairing.pairingCode}`
+      );
+      await loadPairings();
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 등록에 실패했어요.';
+          : '기기 페어링 요청을 만들지 못했습니다.';
       setErrorMessage(message);
     } finally {
       setIsRegisteringDevice(false);
@@ -152,13 +220,20 @@ export default function ProfileScreen() {
 
       if (nextAction === 'revoke' && currentUser.deviceId === device.deviceId) {
         setCurrentDevice(null);
-        setStatusMessage('현재 기기를 비활성화했어요.');
+        setStatusMessage('현재 선택한 기기를 해제했습니다.');
+        return;
+      }
+
+      if (nextAction === 'approve') {
+        setStatusMessage('기기를 다시 활성화했습니다.');
+      } else {
+        setStatusMessage('기기를 비활성화했습니다.');
       }
     } catch (error) {
       const message =
         error instanceof Error && error.message
           ? error.message
-          : '기기 상태를 바꾸지 못했어요.';
+          : '기기 상태를 변경하지 못했습니다.';
       setErrorMessage(message);
     } finally {
       setIsUpdatingDeviceId(null);
@@ -175,22 +250,92 @@ export default function ProfileScreen() {
     );
   }, [currentUser?.deviceId, devices]);
 
+  const handleHeaderPrimaryAction = () => {
+    if (navigation.canGoBack) {
+      navigation.goBack();
+      return;
+    }
+    navigation.navigate('Capture');
+  };
+
+  const startEditingDeviceAlias = (deviceId: string) => {
+    const targetDevice = devices.find((device) => device.deviceId === deviceId);
+    setEditingDeviceId(deviceId);
+    setPendingDeviceAlias(targetDevice?.displayName || getDeviceLabel(deviceId));
+    setErrorMessage('');
+    setStatusMessage('');
+  };
+
+  const resetEditingDeviceAlias = () => {
+    setEditingDeviceId(null);
+    setPendingDeviceAlias('');
+  };
+
+  const handleSaveDeviceAlias = async (deviceId: string) => {
+    if (!currentUser || isUpdatingDeviceId) {
+      return;
+    }
+
+    const normalizedAlias = pendingDeviceAlias.trim();
+    if (!normalizedAlias) {
+      setErrorMessage('기기 이름을 입력해주세요.');
+      return;
+    }
+
+    setIsUpdatingDeviceId(deviceId);
+    setErrorMessage('');
+    setStatusMessage('');
+    try {
+      const updatedDevice = await renameUserDevice({
+        authToken: currentUser.authToken,
+        userId: currentUser.userId,
+        deviceId,
+        displayName: normalizedAlias,
+      });
+      setDevices((prev) =>
+        prev.map((item) =>
+          item.deviceId === updatedDevice.deviceId ? updatedDevice : item
+        )
+      );
+      setDeviceAlias(deviceId, normalizedAlias);
+      setStatusMessage('기기 이름을 저장했습니다.');
+      resetEditingDeviceAlias();
+      return;
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : '기기 이름을 저장하지 못했습니다.';
+      setErrorMessage(message);
+      return;
+    } finally {
+      setIsUpdatingDeviceId(null);
+    }
+  };
+
+  const latestPendingPairing = pairings.find((pairing) => pairing.status === 'pending');
+
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable
-          style={styles.homeButton}
-          onPress={() => navigation.navigate('Chat')}
-        >
-          <Image source={logo} style={styles.homeLogo} />
+        <Pressable onPress={handleHeaderPrimaryAction}>
+          {navigation.canGoBack ? (
+            <Text style={styles.headerIcon}>{'<'}</Text>
+          ) : (
+            <Text style={styles.headerLink}>홈</Text>
+          )}
         </Pressable>
 
         <Text style={commonStyles.headerTitle}>프로필</Text>
 
-        <View style={{ width: 28 }} />
+        <Pressable onPress={() => navigation.navigate('Settings')}>
+          <Text style={styles.headerLink}>설정</Text>
+        </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[styles.content, commonStyles.contentContainer]}
+      >
         <View style={styles.avatar}>
           <Text style={styles.avatarIcon}>
             {(currentUser?.displayName || 'U').slice(0, 1).toUpperCase()}
@@ -200,8 +345,8 @@ export default function ProfileScreen() {
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>이름</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>
-              {currentUser?.displayName || '없음'}
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {currentUser?.displayName || '정보 없음'}
             </Text>
           </View>
         </View>
@@ -209,37 +354,44 @@ export default function ProfileScreen() {
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>사용자 ID</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.userId || '없음'}</Text>
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {currentUser?.userId || '정보 없음'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>이메일</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>{currentUser?.email || '없음'}</Text>
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {currentUser?.email || '정보 없음'}
+            </Text>
           </View>
         </View>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>현재 기기</Text>
           <View style={styles.inputBox}>
-            <Text style={styles.value}>
-              {currentUser?.deviceId || '선택된 기기가 없어요'}
+            <Text style={[styles.value, commonStyles.selectableText]}>
+              {getDeviceLabel(currentUser?.deviceId)}
             </Text>
           </View>
         </View>
 
         <View style={[commonStyles.card, styles.deviceCard]}>
-          <Text style={styles.deviceTitle}>기기 등록</Text>
+          <Text style={styles.deviceTitle}>기기 페어링</Text>
           <Text style={styles.deviceDescription}>
-            기기를 등록하거나, 이미 등록된 기기 중 하나를 선택하세요.
+            이제 기기를 바로 등록하지 않고, 페어링 코드를 먼저 발급한 뒤 승인 후
+            연결합니다. 운영자가 승인하기 전까지는 캡처 업로드 권한이 열리지
+            않습니다.
           </Text>
 
           {!currentUser?.deviceId ? (
             <View style={styles.calloutBox}>
-              <Text style={styles.calloutTitle}>기기를 먼저 연결해주세요</Text>
+              <Text style={styles.calloutTitle}>선택된 기기가 없습니다</Text>
               <Text style={styles.calloutText}>
-                기기 ID를 등록하거나 아래 목록에서 선택하면 돼요.
+                먼저 페어링 요청을 만들고 승인이 끝난 뒤 기기를 선택하면 업로드
+                홈으로 바로 이동할 수 있습니다.
               </Text>
             </View>
           ) : null}
@@ -267,10 +419,30 @@ export default function ProfileScreen() {
               {isRegisteringDevice ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <Text style={styles.registerButtonText}>등록</Text>
+                <Text style={styles.registerButtonText}>코드 발급</Text>
               )}
             </Pressable>
           </View>
+
+          {latestPendingPairing ? (
+            <View style={styles.pairingHighlight}>
+              <Text style={styles.pairingHighlightLabel}>최근 페어링 코드</Text>
+              <Text
+                style={[
+                  styles.pairingHighlightCode,
+                  commonStyles.selectableText,
+                ]}
+              >
+                {latestPendingPairing.pairingCode}
+              </Text>
+              <Text style={styles.pairingHighlightMeta}>
+                대상 기기: {latestPendingPairing.deviceId}
+              </Text>
+              <Text style={styles.pairingHighlightMeta}>
+                만료: {formatTimestamp(latestPendingPairing.expiresAt)}
+              </Text>
+            </View>
+          ) : null}
 
           {statusMessage ? (
             <Text style={styles.statusText}>{statusMessage}</Text>
@@ -285,8 +457,9 @@ export default function ProfileScreen() {
               style={styles.refreshButton}
               onPress={() => {
                 void loadDevices();
+                void loadPairings();
               }}
-              disabled={isLoadingDevices}
+              disabled={isLoadingDevices || isLoadingPairings}
             >
               <Text style={styles.refreshButtonText}>새로고침</Text>
             </Pressable>
@@ -295,22 +468,29 @@ export default function ProfileScreen() {
           {isLoadingDevices ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.loadingText}>기기 정보를 불러오는 중...</Text>
+              <Text style={styles.loadingText}>
+                기기 정보를 불러오는 중입니다.
+              </Text>
             </View>
           ) : null}
 
           {!isLoadingDevices && devices.length === 0 ? (
-            <Text style={styles.emptyText}>아직 등록된 기기가 없어요.</Text>
+            <Text style={styles.emptyText}>등록된 기기가 없습니다.</Text>
           ) : null}
 
           {currentManagedDevice ? (
             <View style={styles.currentDeviceBanner}>
-              <Text style={styles.currentDeviceBannerLabel}>
-                현재 선택된 기기
-              </Text>
-              <Text style={styles.currentDeviceBannerValue}>
-                {currentManagedDevice.deviceId} ·{' '}
-                {currentManagedDevice.status === 'active' ? '사용 중' : '비활성'}
+              <Text style={styles.currentDeviceBannerLabel}>현재 선택된 기기</Text>
+              <Text
+                style={[
+                  styles.currentDeviceBannerValue,
+                  commonStyles.selectableText,
+                ]}
+              >
+                {getDeviceLabel(currentManagedDevice.deviceId)} ·{' '}
+                {currentManagedDevice.status === 'active'
+                  ? '활성'
+                  : '비활성'}
               </Text>
             </View>
           ) : null}
@@ -330,7 +510,19 @@ export default function ProfileScreen() {
                 ]}
               >
                 <View style={styles.deviceRowTop}>
-                  <Text style={styles.deviceIdText}>{device.deviceId}</Text>
+                  <View style={styles.deviceTitleBlock}>
+                    <Text style={styles.deviceAliasText}>
+                      {device.displayName || getDeviceLabel(device.deviceId)}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.deviceIdSubText,
+                        commonStyles.selectableText,
+                      ]}
+                    >
+                      ID: {device.deviceId}
+                    </Text>
+                  </View>
                   <View
                     style={[
                       styles.statusChip,
@@ -347,20 +539,80 @@ export default function ProfileScreen() {
                           : styles.statusChipTextRevoked,
                       ]}
                     >
-                      {device.status === 'active' ? '사용 중' : '비활성'}
+                      {device.status === 'active' ? '활성' : '비활성'}
                     </Text>
                   </View>
                 </View>
+
+                {editingDeviceId === device.deviceId ? (
+                  <View style={styles.renameEditor}>
+                    <TextInput
+                      value={pendingDeviceAlias}
+                      onChangeText={setPendingDeviceAlias}
+                      autoCorrect={false}
+                      placeholder="기기 이름"
+                      placeholderTextColor={colors.subText}
+                      style={styles.renameInput}
+                    />
+                    <View style={styles.renameActions}>
+                      <Pressable
+                        style={[
+                          styles.renameButton,
+                          styles.renameButtonPrimary,
+                        ]}
+                        onPress={() => {
+                          handleSaveDeviceAlias(device.deviceId);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.renameButtonText,
+                            styles.renameButtonTextPrimary,
+                          ]}
+                        >
+                          저장
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.renameButton,
+                          styles.renameButtonSecondary,
+                        ]}
+                        onPress={resetEditingDeviceAlias}
+                      >
+                        <Text
+                          style={[
+                            styles.renameButtonText,
+                            styles.renameButtonTextSecondary,
+                          ]}
+                        >
+                          취소
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.renameInlineRow}>
+                    <Pressable
+                      style={styles.renameShortcut}
+                      onPress={() => {
+                        startEditingDeviceAlias(device.deviceId);
+                      }}
+                    >
+                      <Text style={styles.renameShortcutText}>이름 수정</Text>
+                    </Pressable>
+                  </View>
+                )}
 
                 <Text style={styles.deviceMeta}>
                   등록: {formatTimestamp(device.registeredAt)}
                 </Text>
                 <Text style={styles.deviceMeta}>
-                  수정: {formatTimestamp(device.updatedAt)}
+                  갱신: {formatTimestamp(device.updatedAt)}
                 </Text>
                 {device.revokedAt ? (
                   <Text style={styles.deviceMeta}>
-                    비활성화: {formatTimestamp(device.revokedAt)}
+                    해제: {formatTimestamp(device.revokedAt)}
                   </Text>
                 ) : null}
 
@@ -372,9 +624,9 @@ export default function ProfileScreen() {
                         isCurrentDevice && styles.sessionButtonSelected,
                       ]}
                       onPress={() => {
-                        setStatusMessage('현재 기기를 바꿨어요.');
+                        setStatusMessage('현재 기기를 선택했습니다.');
                         setErrorMessage('');
-                        moveToChatWithDevice(device.deviceId);
+                        moveToCaptureWithDevice(device.deviceId);
                       }}
                     >
                       <Text
@@ -417,7 +669,7 @@ export default function ProfileScreen() {
                               : styles.deviceActionTextPrimary,
                           ]}
                         >
-                          변경 중...
+                          처리 중
                         </Text>
                       </View>
                     ) : (
@@ -429,7 +681,7 @@ export default function ProfileScreen() {
                             : styles.deviceActionTextPrimary,
                         ]}
                       >
-                        {device.status === 'active' ? '비활성화' : '재활성화'}
+                        {device.status === 'active' ? '비활성화' : '다시 활성화'}
                       </Text>
                     )}
                   </Pressable>
@@ -439,8 +691,75 @@ export default function ProfileScreen() {
           })}
         </View>
 
+        <View style={[commonStyles.card, styles.pairingHistoryCard]}>
+          <View style={styles.deviceHeader}>
+            <Text style={styles.deviceListTitle}>최근 페어링 요청</Text>
+            <Text style={styles.historyHint}>관리자 승인 대기 포함</Text>
+          </View>
+
+          {isLoadingPairings ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.loadingText}>
+                페어링 요청을 불러오는 중입니다.
+              </Text>
+            </View>
+          ) : null}
+
+          {!isLoadingPairings && pairings.length === 0 ? (
+            <Text style={styles.emptyText}>최근 페어링 요청이 없습니다.</Text>
+          ) : null}
+
+          {pairings.map((pairing) => (
+            <View key={pairing.pairingCode} style={styles.pairingRow}>
+              <View style={styles.pairingRowTop}>
+                <View style={styles.deviceTitleBlock}>
+                  <Text style={styles.deviceAliasText}>{pairing.deviceId}</Text>
+                  <Text
+                    style={[
+                      styles.deviceIdSubText,
+                      commonStyles.selectableText,
+                    ]}
+                  >
+                    코드: {pairing.pairingCode}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.statusChip,
+                    pairing.status === 'approved'
+                      ? styles.statusChipActive
+                      : pairing.status === 'rejected'
+                        ? styles.statusChipRevoked
+                        : styles.statusChipPending,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusChipText,
+                      pairing.status === 'approved'
+                        ? styles.statusChipTextActive
+                        : pairing.status === 'rejected'
+                          ? styles.statusChipTextRevoked
+                          : styles.statusChipTextPending,
+                    ]}
+                  >
+                    {formatPairingState(pairing.status)}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.deviceMeta}>
+                생성: {formatTimestamp(pairing.createdAt)}
+              </Text>
+              <Text style={styles.deviceMeta}>
+                만료: {formatTimestamp(pairing.expiresAt)}
+              </Text>
+            </View>
+          ))}
+        </View>
+
         <Text style={styles.syncText}>
-          여기서 고른 기기로 업로드와 추론이 진행돼요.
+          기기 선택과 표시 이름은 이 계정의 세션과 함께 유지됩니다.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -450,19 +769,21 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 24,
-    paddingTop: 36,
+    paddingTop: 24,
     paddingBottom: 32,
   },
-  homeButton: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
+  headerLink: {
+    minWidth: 40,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+    textAlign: 'center',
   },
-  homeLogo: {
-    width: 28,
-    height: 28,
-    resizeMode: 'contain',
+  headerIcon: {
+    width: 24,
+    fontSize: 24,
+    color: colors.text,
+    textAlign: 'center',
   },
   avatar: {
     width: 88,
@@ -472,7 +793,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 36,
+    marginBottom: 28,
   },
   avatarIcon: {
     fontSize: 36,
@@ -504,6 +825,10 @@ const styles = StyleSheet.create({
   },
   deviceCard: {
     marginTop: 12,
+    gap: 14,
+  },
+  pairingHistoryCard: {
+    marginTop: 16,
     gap: 14,
   },
   deviceTitle: {
@@ -550,7 +875,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   registerButton: {
-    minWidth: 100,
+    minWidth: 110,
     height: 46,
     borderRadius: 12,
     backgroundColor: colors.primary,
@@ -565,6 +890,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  pairingHighlight: {
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    gap: 4,
+  },
+  pairingHighlightLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  pairingHighlightCode: {
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    color: colors.text,
+  },
+  pairingHighlightMeta: {
+    fontSize: 12,
+    color: colors.subText,
   },
   statusText: {
     fontSize: 13,
@@ -586,6 +934,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: colors.text,
+  },
+  historyHint: {
+    fontSize: 12,
+    color: colors.subText,
   },
   refreshButton: {
     paddingHorizontal: 12,
@@ -637,21 +989,42 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     gap: 6,
   },
+  pairingRow: {
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F8FAFC',
+    gap: 6,
+  },
   deviceRowCurrent: {
     borderColor: '#93C5FD',
     backgroundColor: '#F8FBFF',
   },
   deviceRowTop: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
   },
-  deviceIdText: {
+  pairingRowTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  deviceTitleBlock: {
     flex: 1,
+    gap: 3,
+  },
+  deviceAliasText: {
     fontSize: 15,
     fontWeight: '700',
     color: colors.text,
+  },
+  deviceIdSubText: {
+    fontSize: 12,
+    color: colors.subText,
   },
   statusChip: {
     paddingHorizontal: 10,
@@ -660,6 +1033,9 @@ const styles = StyleSheet.create({
   },
   statusChipActive: {
     backgroundColor: '#DCFCE7',
+  },
+  statusChipPending: {
+    backgroundColor: '#FEF3C7',
   },
   statusChipRevoked: {
     backgroundColor: '#FEE2E2',
@@ -671,12 +1047,78 @@ const styles = StyleSheet.create({
   statusChipTextActive: {
     color: '#166534',
   },
+  statusChipTextPending: {
+    color: '#92400E',
+  },
   statusChipTextRevoked: {
     color: '#991B1B',
   },
   deviceMeta: {
     fontSize: 12,
     color: colors.subText,
+  },
+  renameInlineRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+  },
+  renameShortcut: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  renameShortcutText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  renameEditor: {
+    gap: 10,
+    marginTop: 2,
+  },
+  renameInput: {
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    fontSize: 14,
+    color: colors.text,
+  },
+  renameActions: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  renameButton: {
+    minHeight: 38,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  renameButtonPrimary: {
+    backgroundColor: colors.primary,
+  },
+  renameButtonSecondary: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  renameButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  renameButtonTextPrimary: {
+    color: '#FFFFFF',
+  },
+  renameButtonTextSecondary: {
+    color: colors.text,
   },
   deviceActions: {
     marginTop: 8,

@@ -5,6 +5,13 @@ export const commonStyles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
+    userSelect: 'none',
+  },
+
+  contentContainer: {
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
   },
 
   header: {
@@ -28,5 +35,11 @@ export const commonStyles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+
+  selectableText: {
+    userSelect: 'text',
   },
 });

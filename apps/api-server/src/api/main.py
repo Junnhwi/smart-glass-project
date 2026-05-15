@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -16,6 +17,8 @@ from src.api.auth import (
 from src.api.intake import build_capture_upload_response
 from src.api.pipeline import CapturePipelineError, build_default_capture_pipeline
 from src.api.schemas import (
+    AdminMemoryQueryLogListResponse,
+    AdminMemoryQueryLogPayload,
     AuthAdminUserListResponse,
     AuthAdminUserUpdateRequest,
     AuthAdminUserUpdateResponse,
@@ -37,6 +40,10 @@ from src.api.schemas import (
     CaptureWorkerExecutionPayload,
     DeviceRegistrationRequest,
     DeviceRegistrationResponse,
+    DevicePairingIssueRequest,
+    DevicePairingIssueResponse,
+    DevicePairingListResponse,
+    DevicePairingPayload,
     MediaBatchAccessUrlRequest,
     MediaBatchAccessUrlResponse,
     MediaAccessUrlRequest,
@@ -60,6 +67,7 @@ from src.api.schemas import (
     UserCreateResponse,
     UserDeviceListResponse,
     UserDevicePayload,
+    UserDeviceRenameRequest,
     UserDeviceRegistrationRequest,
     UserDeviceStatusResponse,
     VlmInferenceResultPayload,
@@ -291,11 +299,50 @@ def _map_user_device(device: Any) -> UserDevicePayload:
     return UserDevicePayload(
         userId=device.user_id,
         deviceId=device.device_id,
+        displayName=getattr(device, "display_name", None),
         status=device.status,
         registeredAt=device.registered_at,
         approvedAt=device.approved_at,
         revokedAt=device.revoked_at,
         updatedAt=device.updated_at,
+    )
+
+
+def _map_device_pairing(pairing: Any) -> DevicePairingPayload:
+    return DevicePairingPayload(
+        pairingCode=pairing.pairing_code,
+        userId=pairing.user_id,
+        deviceId=pairing.device_id,
+        status=pairing.status,
+        createdAt=pairing.created_at,
+        expiresAt=pairing.expires_at,
+        approvedAt=pairing.approved_at,
+        updatedAt=pairing.updated_at,
+    )
+
+
+def _map_memory_query_log(log: Any) -> AdminMemoryQueryLogPayload:
+    cited_memory_ids: list[str] = []
+    if log.cited_memory_ids_json:
+      try:
+          parsed = json.loads(log.cited_memory_ids_json)
+          if isinstance(parsed, list):
+              cited_memory_ids = [
+                  str(item).strip() for item in parsed if str(item).strip()
+              ]
+      except Exception:
+          cited_memory_ids = []
+
+    return AdminMemoryQueryLogPayload(
+        logId=log.log_id,
+        userId=log.user_id,
+        queryType=log.query_type,
+        queryText=log.query_text,
+        totalHits=log.total_hits,
+        answerText=log.answer_text,
+        answerMode=log.answer_mode,
+        citedMemoryIds=cited_memory_ids,
+        createdAt=log.created_at,
     )
 
 
@@ -402,6 +449,8 @@ def _map_celery_state_to_capture_status(state: str) -> str:
 def _map_user_device_error(exc: Exception) -> HTTPException:
     if isinstance(exc, LookupError):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, PermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
     if isinstance(exc, ValueError):
         detail = str(exc)
         if "API_CAPTURE_DATABASE_URL" in detail or "database_url" in detail:
@@ -508,9 +557,17 @@ def create_app() -> FastAPI:
                 "POST /users",
                 "GET /users/{userId}/devices",
                 "POST /users/{userId}/devices",
+                "PATCH /users/{userId}/devices/{deviceId}",
+                "POST /users/{userId}/device-pairings",
+                "GET /users/{userId}/device-pairings",
                 "POST /users/{userId}/devices/{deviceId}/approve",
                 "POST /users/{userId}/devices/{deviceId}/revoke",
                 "GET /admin/users/{userId}/devices",
+                "PATCH /admin/users/{userId}/devices/{deviceId}",
+                "GET /admin/device-pairings",
+                "POST /admin/device-pairings/{pairingCode}/approve",
+                "POST /admin/device-pairings/{pairingCode}/reject",
+                "GET /admin/memory-query-logs",
                 "POST /admin/users/{userId}/devices/{deviceId}/approve",
                 "POST /admin/users/{userId}/devices/{deviceId}/revoke",
                 "POST /devices/register",
@@ -1187,6 +1244,7 @@ def create_app() -> FastAPI:
         return DeviceRegistrationResponse(
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
         )
 
@@ -1200,10 +1258,11 @@ def create_app() -> FastAPI:
         userId: str,
         payload: UserDeviceRegistrationRequest,
     ) -> DeviceRegistrationResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
         try:
             user_device_service = _get_user_device_service(request)
             device = user_device_service.register_device(
-                user_id=userId,
+                user_id=authorized_user_id,
                 device_id=payload.deviceId,
             )
         except Exception as exc:
@@ -1211,7 +1270,169 @@ def create_app() -> FastAPI:
         return DeviceRegistrationResponse(
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
+        )
+
+    @app.patch(
+        "/users/{userId}/devices/{deviceId}",
+        response_model=UserDeviceStatusResponse,
+    )
+    def rename_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+        payload: UserDeviceRenameRequest,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.update_device_display_name(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+                display_name=payload.displayName,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            displayName=device.display_name,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
+        )
+
+    @app.post(
+        "/users/{userId}/device-pairings",
+        status_code=status.HTTP_201_CREATED,
+        response_model=DevicePairingIssueResponse,
+    )
+    def issue_device_pairing_for_user(
+        request: Request,
+        userId: str,
+        payload: DevicePairingIssueRequest,
+    ) -> DevicePairingIssueResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            pairing = user_device_service.issue_pairing_code(
+                user_id=authorized_user_id,
+                device_id=payload.deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return DevicePairingIssueResponse(pairing=_map_device_pairing(pairing))
+
+    @app.get(
+        "/users/{userId}/device-pairings",
+        response_model=DevicePairingListResponse,
+    )
+    def list_user_device_pairings(
+        request: Request,
+        userId: str,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> DevicePairingListResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            pairings = user_device_service.list_pairing_codes(
+                user_id=authorized_user_id,
+                status=status,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return DevicePairingListResponse(
+            totalPairings=len(pairings),
+            items=[_map_device_pairing(pairing) for pairing in pairings],
+        )
+
+    @app.get(
+        "/admin/device-pairings",
+        response_model=DevicePairingListResponse,
+    )
+    def admin_list_device_pairings(
+        request: Request,
+        status: str | None = "pending",
+        limit: int = 100,
+    ) -> DevicePairingListResponse:
+        _require_admin_principal(request)
+        try:
+            user_device_service = _get_user_device_service(request)
+            pairings = user_device_service.list_pairing_codes(
+                status=status,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return DevicePairingListResponse(
+            totalPairings=len(pairings),
+            items=[_map_device_pairing(pairing) for pairing in pairings],
+        )
+
+    @app.post(
+        "/admin/device-pairings/{pairingCode}/approve",
+        response_model=DevicePairingPayload,
+    )
+    def admin_approve_device_pairing(
+        request: Request,
+        pairingCode: str,
+    ) -> DevicePairingPayload:
+        _require_admin_principal(request)
+        try:
+            user_device_service = _get_user_device_service(request)
+            pairing = user_device_service.approve_pairing_code(
+                pairing_code=pairingCode,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return _map_device_pairing(pairing)
+
+    @app.post(
+        "/admin/device-pairings/{pairingCode}/reject",
+        response_model=DevicePairingPayload,
+    )
+    def admin_reject_device_pairing(
+        request: Request,
+        pairingCode: str,
+    ) -> DevicePairingPayload:
+        _require_admin_principal(request)
+        try:
+            user_device_service = _get_user_device_service(request)
+            pairing = user_device_service.reject_pairing_code(
+                pairing_code=pairingCode,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return _map_device_pairing(pairing)
+
+    @app.get(
+        "/admin/memory-query-logs",
+        response_model=AdminMemoryQueryLogListResponse,
+    )
+    def admin_list_memory_query_logs(
+        request: Request,
+        userId: str | None = None,
+        queryType: str | None = None,
+        limit: int = 100,
+    ) -> AdminMemoryQueryLogListResponse:
+        _require_admin_principal(request)
+        try:
+            user_device_service = _get_user_device_service(request)
+            logs = user_device_service.list_memory_query_logs(
+                user_id=userId,
+                query_type=queryType,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return AdminMemoryQueryLogListResponse(
+            totalLogs=len(logs),
+            items=[_map_memory_query_log(log) for log in logs],
         )
 
     @app.post(
@@ -1236,6 +1457,7 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1264,6 +1486,38 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
+            registeredAt=device.registered_at,
+            approvedAt=device.approved_at,
+            revokedAt=device.revoked_at,
+            updatedAt=device.updated_at,
+        )
+
+    @app.patch(
+        "/admin/users/{userId}/devices/{deviceId}",
+        response_model=UserDeviceStatusResponse,
+    )
+    def admin_rename_user_device(
+        request: Request,
+        userId: str,
+        deviceId: str,
+        payload: UserDeviceRenameRequest,
+    ) -> UserDeviceStatusResponse:
+        authorized_user_id = _resolve_admin_user_scope(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.update_device_display_name(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+                display_name=payload.displayName,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return UserDeviceStatusResponse(
+            status=device.status,
+            userId=device.user_id,
+            deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1292,6 +1546,7 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1320,6 +1575,7 @@ def create_app() -> FastAPI:
             status=device.status,
             userId=device.user_id,
             deviceId=device.device_id,
+            displayName=device.display_name,
             registeredAt=device.registered_at,
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
@@ -1626,6 +1882,20 @@ def create_app() -> FastAPI:
                 detail=f"Memory query backend unavailable: {exc}",
             ) from exc
 
+        try:
+            user_device_service = _get_user_device_service(request)
+            user_device_service.record_memory_query_log(
+                user_id=user_id,
+                query_type="search",
+                query_text=payload.query,
+                total_hits=len(hits),
+                cited_memory_ids_json=json.dumps(
+                    [hit.memory.memory_id for hit in hits[:5]]
+                ),
+            )
+        except Exception:
+            pass
+
         return MemorySearchResponse(
             query=payload.query,
             totalHits=len(hits),
@@ -1654,6 +1924,20 @@ def create_app() -> FastAPI:
                 status_code=502,
                 detail=f"Memory query backend unavailable: {exc}",
             ) from exc
+
+        try:
+            user_device_service = _get_user_device_service(request)
+            user_device_service.record_memory_query_log(
+                user_id=user_id,
+                query_type="chat",
+                query_text=payload.query,
+                total_hits=len(hits),
+                answer_text=answer_result.text,
+                answer_mode=answer_result.mode,
+                cited_memory_ids_json=json.dumps(answer_result.cited_memory_ids),
+            )
+        except Exception:
+            pass
 
         return MemoryChatResponse(
             answer=answer_result.text,
