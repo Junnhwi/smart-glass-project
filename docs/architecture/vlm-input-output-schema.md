@@ -193,3 +193,48 @@ Current lightweight verification paths:
 - VLM execution stays in `inference-server`.
 - Memory persistence, search, and chat APIs are handled in `api-server`.
 - The default application path no longer depends on a separate search service.
+
+## Ollama Cloud (example integration)
+
+Add an optional adapter that forwards the canonical VLM input shape to an
+Ollama Cloud endpoint and maps the response back to the project's success
+result shape. Minimal responsibilities:
+
+- Read `OLLAMA_API_URL`, `OLLAMA_API_KEY`, `OLLAMA_TIMEOUT_SEC` from environment.
+- Send a POST to `{{OLLAMA_API_URL}}/v1/infer` with the same `requestId` and
+  `sourceImage` references.
+- Parse the provider response and populate `metadata` and `providerMetadata`.
+
+Example request (client->Ollama):
+
+```json
+{
+  "requestId": "req-ollama-001",
+  "taskType": "metadata",
+  "sourceImage": {"imageKey": "captures/user-1/2026/05/15/sample.jpg"},
+  "generation": {"instructions": "Summarize scene and list objects."}
+}
+```
+
+Example normalized success result (inference-server -> api-server):
+
+```json
+{
+  "status": "success",
+  "requestId": "req-ollama-001",
+  "taskType": "metadata",
+  "memoryId": "mem-ollama-001",
+  "userId": "user-1",
+  "capturedAt": "2026-05-15T10:00:00Z",
+  "metadata": {
+    "caption": "a desk with a laptop and earbuds",
+    "sceneSummary": "workspace desk",
+    "detectedObjects": ["laptop", "earbuds", "desk"]
+  },
+  "providerMetadata": {"provider": "ollama", "modelKey": "ollama-vl-example"}
+}
+```
+
+This integration keeps model-specific options (temperature, prompts, etc.)
+outside the core contract so they can be tuned later without changing the
+normalization or downstream APIs.

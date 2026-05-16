@@ -16,6 +16,7 @@ from src.contracts.vlm import (
 from src.core.logging import configure_logging, get_logger
 from src.models.captioning import generate_caption
 from src.models.qwen_vlm import generate_qwen_vlm_metadata
+from src.adapters.ollama_adapter import generate_ollama_vlm_metadata
 from src.models.registry import resolve_inference_model
 from src.models.serving_profile import (
     resolve_runtime_execution_policy,
@@ -297,7 +298,23 @@ def process_vision_inference(
 
         model_inference_started_at = time.perf_counter()
         try:
-            if model_descriptor.mode == "vlm":
+            # If VISION_USE_OLLAMA=1, forward to Ollama adapter regardless of local model mode
+            use_ollama = os.getenv("VISION_USE_OLLAMA", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if use_ollama:
+                result = generate_ollama_vlm_metadata(
+                    image=raw_image,
+                    model_key=model_key,
+                    quantization=quantization,
+                    dtype_name=dtype_name,
+                )
+                metadata = result["metadata"]
+                pipeline_output = result.get("pipeline_output")
+            elif model_descriptor.mode == "vlm":
                 try:
                     result = generate_qwen_vlm_metadata(
                         image=raw_image,
@@ -333,12 +350,12 @@ def process_vision_inference(
                     )
                     model_key = fallback_model_key
                     model_descriptor = resolve_inference_model(model_key)
-                    model_id = model_descriptor.model_id  # 팀원분이 추가하신 로직 살림!
+                    model_id = model_descriptor.model_id
                     fallback_triggered = True
                     execution_policy_payload = execution_policy.to_payload(
                         fallback_triggered=True
                     )
-                metadata = result["metadata"]
+                metadata = result.get("metadata")
                 pipeline_output = result.get("pipeline_output")
             else:
                 result = generate_caption(
