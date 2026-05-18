@@ -70,6 +70,10 @@ class MemoryStoreAdapterTests(unittest.TestCase):
                         {
                             "name": "keys",
                             "nearby_objects": ["mug"],
+                            "position": {
+                                "hint": "keys beside a mug on the desk",
+                                "surface": "desk",
+                            },
                             "visual_features": {"brand": "Starbucks"},
                         }
                     ],
@@ -78,8 +82,11 @@ class MemoryStoreAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(record.detected_objects, ["keys"])
-        self.assertEqual(record.tags, ["keys", "mug", "Starbucks"])
-        self.assertEqual(record.position_hint, "mug 옆")
+        self.assertEqual(
+            record.tags,
+            ["keys", "mug", "keys beside a mug on the desk", "desk", "Starbucks"],
+        )
+        self.assertEqual(record.position_hint, "keys beside a mug on the desk")
 
     def test_memory_record_from_vlm_result_rejects_failed_payload(self) -> None:
         with self.assertRaisesRegex(

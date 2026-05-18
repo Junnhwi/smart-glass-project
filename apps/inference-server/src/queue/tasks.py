@@ -312,6 +312,8 @@ def process_vision_inference(
                     quantization=quantization,
                     dtype_name=dtype_name,
                 )
+                model_key = result.get("model_key") or model_key
+                model_id = result.get("model_id") or model_id
                 metadata = result["metadata"]
                 pipeline_output = result.get("pipeline_output")
             elif model_descriptor.mode == "vlm":

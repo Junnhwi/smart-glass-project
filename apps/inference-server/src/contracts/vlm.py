@@ -293,7 +293,8 @@ def build_provider_metadata(
         "modelFamily": resolved_family,
         "quantization": quantization,
         "dtype": dtype_name,
-        "provider": "huggingface-transformers",
+        "provider": _normalize_whitespace(generation_result.get("provider"))
+        or "huggingface-transformers",
         "capabilities": resolved_capabilities,
         "executionPolicy": execution_policy,
         "raw": None,
