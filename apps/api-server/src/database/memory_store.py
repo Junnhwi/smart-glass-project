@@ -168,10 +168,28 @@ def _normalize_structured_objects(values: Any) -> list[dict[str, Any]]:
         nearby_objects = _dedupe_strings(
             item.get("nearby_objects") or item.get("nearby") or []
         )
+        position = item.get("position")
+        position_hint = None
+        surface = None
+        if isinstance(position, Mapping):
+            position_hint = _normalize_text(
+                position.get("hint")
+                or position.get("positionHint")
+                or position.get("position_hint")
+            ) or None
+            surface = _normalize_text(position.get("surface")) or None
+        if position_hint is None:
+            position_hint = _normalize_text(
+                item.get("positionHint")
+                or item.get("position_hint")
+                or item.get("location")
+            ) or None
         normalized.append(
             {
                 "name": name,
                 "nearby_objects": nearby_objects,
+                "position_hint": position_hint,
+                "surface": surface,
                 "visual_features": {"brand": brand},
             }
         )
@@ -188,6 +206,10 @@ def _build_tags(
 
     for item in structured_objects:
         candidates.extend(item.get("nearby_objects") or [])
+        if item.get("position_hint"):
+            candidates.append(item["position_hint"])
+        if item.get("surface"):
+            candidates.append(item["surface"])
         brand = item.get("visual_features", {}).get("brand")
         if brand:
             candidates.append(brand)
@@ -383,6 +405,14 @@ def memory_record_from_vlm_result(result: Mapping[str, Any]) -> MemoryRecord:
         position_hint = (
             _normalize_text(metadata.get("positionHint"))
             or _normalize_text(pipeline_output.get("location_context"))
+            or next(
+                (
+                    item["position_hint"]
+                    for item in structured_objects
+                    if item.get("position_hint")
+                ),
+                None,
+            )
             or _extract_position_hint(
                 metadata.get("caption"),
                 metadata.get("sceneSummary"),

@@ -75,6 +75,7 @@ class TaskContractTestCase(unittest.TestCase):
             "VISION_CAPTION_DTYPE",
             "VISION_PROVIDER_METADATA_INCLUDE_RAW",
             "VISION_QWEN_FALLBACK_MODEL",
+            "VISION_USE_OLLAMA",
         ):
             os.environ.pop(name, None)
 
@@ -102,7 +103,7 @@ class TaskContractTestCase(unittest.TestCase):
                     "prompt": "a photography of",
                 },
             ):
-            with patch("src.queue.tasks.logger.info") as mocked_logger_info:
+                with patch("src.queue.tasks.logger.info") as mocked_logger_info:
                     result = process_vision_inference(
                         image_key="captures/wallet-01.jpg",
                         user_id="user-1",
@@ -165,6 +166,76 @@ class TaskContractTestCase(unittest.TestCase):
             "taskLatencySec",
         ):
             self._assert_runtime_metric(result["runtime"], key)
+
+    def test_process_vision_inference_uses_ollama_when_enabled(self) -> None:
+        os.environ["VISION_USE_OLLAMA"] = "1"
+
+        ollama_result = {
+            "metadata": {
+                "caption": "a desk with a laptop and earbuds",
+                "sceneSummary": "workspace desk",
+                "detectedObjects": ["laptop", "earbuds", "desk"],
+                "tags": ["workspace", "electronics"],
+                "ocrText": None,
+                "positionHint": None,
+                "location": None,
+            },
+            "elapsed_sec": 0.31,
+            "peak_memory_mb": 0.0,
+            "load_time_sec": 0.0,
+            "provider": "ollama",
+            "model_id": "blip-base",
+            "model_key": "blip-base",
+            "device": "external-ollama",
+            "quantization": "none",
+            "prompt": None,
+            "system_prompt": None,
+            "raw_output_text": None,
+            "objects": ["laptop", "earbuds", "desk"],
+            "scene_info": {"summary": "a desk with a laptop and earbuds"},
+            "pipeline_output": {
+                "capture_id": "ollama-test",
+                "timestamp": "2026-05-15T10:00:00Z",
+                "objects": [],
+                "inference_time": 0.31,
+            },
+            "pipeline_mode": "ollama_adapter",
+        }
+
+        with patch(
+            "src.queue.tasks.get_storage_service",
+            return_value=_FakeStorageService(_build_test_image_bytes()),
+        ):
+            with patch(
+                "src.queue.tasks.generate_ollama_vlm_metadata",
+                return_value=ollama_result,
+            ) as mocked_ollama:
+                with patch("src.queue.tasks.generate_caption") as mocked_caption:
+                    result = process_vision_inference(
+                        image_key="captures/desk-01.jpg",
+                        user_id="user-1",
+                        memory_id="mem-ollama-1",
+                        captured_at="2026-05-15T10:00:00Z",
+                        request_id="req-ollama-1",
+                        task_type="metadata",
+                    )
+
+        mocked_ollama.assert_called_once()
+        mocked_caption.assert_not_called()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["taskType"], "metadata")
+        self.assertEqual(result["requestId"], "req-ollama-1")
+        self.assertEqual(result["memoryId"], "mem-ollama-1")
+        self.assertEqual(
+            result["metadata"]["caption"],
+            "a desk with a laptop and earbuds",
+        )
+        self.assertEqual(
+            result["metadata"]["detectedObjects"],
+            ["laptop", "earbuds", "desk"],
+        )
+        self.assertEqual(result["providerMetadata"]["provider"], "ollama")
+        self.assertEqual(result["pipelineOutput"]["capture_id"], "ollama-test")
 
     def test_process_vision_inference_returns_vlm_error_contract(self) -> None:
         with patch(
