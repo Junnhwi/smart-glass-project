@@ -10,7 +10,7 @@ smart-glass-project/
 |   |-- api-server/
 |   |-- inference-server/
 |   |-- admin-web/
-|   `-- smart-glass-client/
+|   `-- smart-glass-client/   # Mobile app and smart-glass firmware
 |-- packages/
 |   |-- shared-types/
 |   |-- shared-utils/
@@ -31,6 +31,7 @@ smart-glass-project/
 
 - `api-server` handles capture intake, memory persistence, search, and chat endpoints.
 - `inference-server` handles VLM inference and worker execution.
+- `smart-glass-client` contains the mobile client and device firmware sketches.
 - PostgreSQL stores normalized memory metadata and documents.
 - Object storage keeps original captured images.
 
