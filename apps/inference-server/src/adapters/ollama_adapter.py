@@ -12,36 +12,43 @@ from src.contracts.vlm import build_vlm_error_result, build_vlm_success_result
 
 logger = logging.getLogger(__name__)
 
-VLM_METADATA_PROMPT = """
-Analyze this smart-glass image for searchable memory retrieval.
-Return only a JSON object with these fields:
+VLM_METADATA_PROMPT = """You are a helpful assistant. Always respond in Korean. Output valid JSON only. No code blocks.
+
+이미지를 분석하여 다음 JSON 형식으로 출력하세요. 설명 없이 JSON만 출력하세요.
+
 {
-  "caption": "short natural-language image caption",
-  "sceneSummary": "short scene summary",
-  "detectedObjects": ["object names visible in the image"],
+  "caption": "사진 전체에 대한 한 문장 설명",
+  "sceneSummary": "전체 장면 10단어 이내 요약",
+  "location": "공간 유형 (예: 거실, 카페, 사무실)",
+  "detectedObjects": ["물체1", "물체2"],
   "objects": [
     {
-      "name": "object name",
-      "positionHint": "where it is, using nearby objects or surfaces",
-      "nearbyObjects": ["nearby object names"],
-      "surface": "desk/table/floor/shelf/etc or null"
+      "name": "물체명 (가장 구체적인 이름)",
+      "positionHint": "주변 물체 기준 상대적 위치 (예: 맥북 오른쪽, 아이폰 아래)",
+      "surface": "놓인 표면 또는 기준 물체. 예: 맥북 위, 테이블 위 왼쪽. 절대 비워두지 말 것",
+      "nearbyObjects": ["주변 물체1", "주변 물체2"]
     }
   ],
-  "tags": ["search tags"],
-  "ocrText": "visible text if any, otherwise null",
-  "positionHint": "best overall location hint for the most findable object",
-  "location": null
+  "tags": ["검색용 태그 키워드들"],
+  "ocrText": "보이는 텍스트가 있다면 기록, 없으면 null",
+  "positionHint": "가장 찾기 쉬운 메인 물체의 종합적 위치 단서"
 }
-For each important object, describe its location relative to stable anchors.
-Prefer concrete hints like "AirPods on the laptop at the lower right" or
-"phone near the center-bottom of the desk". Do not invent hidden objects.
-Use concise object names. Do not include markdown.
-""".strip()
+
+규칙:
+- 작거나 부분만 보여도 포함
+- 브랜드 제품은 브랜드명 포함 (예: AirPods, 맥북, 아이패드, Apple Pencil)
+- 태블릿/스마트패드/아이패드도 반드시 포함
+- 같은 종류가 여러 개면 모두 포함 (예: AirPods 케이스가 2개면 "AirPods 케이스 1", "AirPods 케이스 2")
+- 가구/벽/바닥 제외
+- JSON만 출력
+- 반드시 한국어로""".strip()
 
 
 def _image_to_base64_jpeg(image: Image.Image) -> str:
+    # 640x480으로 리사이징 (VLM 입력 고정)
+    resized = image.resize((640, 480), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=85)
+    resized.save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 

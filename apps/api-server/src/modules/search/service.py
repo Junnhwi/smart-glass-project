@@ -219,24 +219,25 @@ class OllamaAnswerGenerator:
 
     def _format_hit_context(self, index: int, hit: SearchHit) -> str:
         memory = hit.memory
-        location = memory.location.name or memory.location.address or "\uBBF8\uC0C1"
-        captured_at = format_timestamp(memory.captured_at) or memory.captured_at or "\uBBF8\uC0C1"
-        detected_objects = ", ".join(memory.detected_objects[:8]) or "\uC5C6\uC74C"
-        tags = ", ".join(memory.tags[:8]) or "\uC5C6\uC74C"
-        position_hint = memory.position_hint or "\uC5C6\uC74C"
-        caption = memory.caption or "\uC5C6\uC74C"
-        scene_summary = memory.scene_summary or "\uC5C6\uC74C"
+        location = memory.location.name or memory.location.address or "미상"
+        captured_at = format_timestamp(memory.captured_at) or memory.captured_at or "미상"
+        detected_objects = ", ".join(memory.detected_objects[:8]) or "없음"
+        tags = ", ".join(memory.tags[:8]) or "없음"
+        position_hint = memory.position_hint or "없음"
+        caption = memory.caption or "없음"
+        scene_summary = memory.scene_summary or "없음"
+        image_key = memory.image_key or "사진 없음"
 
         return (
             f"[Memory {index}]\n"
-            f"- memory_id: {memory.memory_id}\n"
-            f"- \uCD2C\uC601 \uC2DC\uAC01: {captured_at}\n"
-            f"- \uC7A5\uC18C: {location}\n"
-            f"- \uC704\uCE58 \uB2E8\uC11C: {position_hint}\n"
-            f"- \uAC10\uC9C0 \uBB3C\uCCB4: {detected_objects}\n"
-            f"- \uD0DC\uADF8: {tags}\n"
-            f"- \uC124\uBA85: {caption}\n"
-            f"- \uC7A5\uBA74 \uC694\uC57D: {scene_summary}\n"
+            f"- 원본 사진 키(image_key): {image_key}\n"
+            f"- 촬영 시각: {captured_at}\n"
+            f"- 장소: {location}\n"
+            f"- 위치 단서: {position_hint}\n"
+            f"- 감지 물체: {detected_objects}\n"
+            f"- 태그(특징): {tags}\n"
+            f"- 설명: {caption}\n"
+            f"- 장면 요약: {scene_summary}\n"
         )
 
     def _build_messages(self, query: str, hits: list[SearchHit]) -> list[dict[str, str]]:
@@ -244,16 +245,13 @@ class OllamaAnswerGenerator:
             self._format_hit_context(index + 1, hit)
             for index, hit in enumerate(hits[: self.max_context_hits])
         )
-        system_prompt = (
-            "\uB2F9\uC2E0\uC740 \uC0AC\uC6A9\uC790\uC758 \uBB3C\uAC74 \uAE30\uC5B5\uC744 \uCC3E\uC544\uC8FC\uB294 \uC5B4\uC2DC\uC2A4\uD134\uD2B8\uC785\uB2C8\uB2E4. "
-            "\uBC18\uB4DC\uC2DC \uC81C\uACF5\uB41C memory context\ub9CC \uADFC\uAC70\uB85C \uB2F5\uD558\uACE0, \uC5C6\uB294 \uC0AC\uC2E4\uC744 "
-            "\uC9C0\uC5B4\uB0B4\uC9C0 \uB9C8\uC138\uC694. \uB2F5\uBCC0\uC740 \uC790\uC5F0\uC2A4\uB7EC\uC6B4 \uD55C\uAD6D\uC5B4 2~4\uBB38\uC7A5\uC73C\uB85C "
-            "\uC9E7\uACE0 \uCE5C\uC808\uD558\uAC8C \uC791\uC131\uD558\uC138\uC694. \uAC00\uC7A5 \uC720\uB825\uD55C \uCD5C\uC2E0 \uAE30\uB85D\uC744 \uC6B0\uC120 "
-            "\uC124\uBA85\uD558\uACE0, \uD655\uC2E4\uD558\uC9C0 \uC54A\uC73C\uBA74 '\uAE30\uB85D\uC0C1 \uD655\uC2E4\uD558\uC9C0 \uC54A\uB2E4'\uACE0 \uB9D0\uD558\uC138\uC694."
-        )
+        system_prompt = "당신은 사용자의 물건 위치를 찾아주는 똑똑한 비서입니다."
         user_prompt = (
-            f"\uC0AC\uC6A9\uC790 \uC9C8\uBB38:\n{query}\n\n"
-            f"\uCC38\uACE0 memory context:\n{context}\n"
+            "아래 제공된 [종합 관측 기록]을 바탕으로 질문에 대답하세요. 이 기록은 최신순/유사도순으로 정렬되어 있습니다.\n"
+            "목록에 없는 물건을 찾으면 \"해당 물건은 최근 기록에서 찾을 수 없습니다.\"라고 대답하세요.\n"
+            "목표 물건을 찾은 경우, 관측 시간, 위치 단서, 주변 물건 정보(특징)와 함께 **원본 사진 키(image_key)**를 반드시 출력해 주세요.\n\n"
+            f"[종합 관측 기록]\n{context}\n\n"
+            f"[사용자 질문]\n{query}"
         )
         return [
             {"role": "system", "content": system_prompt},
@@ -417,7 +415,7 @@ def build_default_memory_query_service() -> MemoryQueryService:
         answer_generator = OllamaAnswerGenerator(
             OllamaChatClient(
                 base_url=os.getenv("API_LLM_OLLAMA_BASE_URL", "https://ollama.com/api"),
-                model=os.getenv("API_LLM_OLLAMA_MODEL", "gpt-oss:20b-cloud"),
+                model=os.getenv("API_LLM_OLLAMA_MODEL", "gemma3:4b-cloud"),
                 api_key=os.getenv("API_LLM_OLLAMA_API_KEY"),
                 timeout_sec=float(
                     os.getenv("API_LLM_OLLAMA_TIMEOUT_SEC", "20").strip() or "20"

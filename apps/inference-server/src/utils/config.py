@@ -15,7 +15,7 @@ class Settings:
     )
     ollama_vlm_model = os.getenv(
         "OLLAMA_VLM_MODEL",
-        os.getenv("OLLAMA_MODEL", "gemma3:12b"),
+        os.getenv("OLLAMA_MODEL", "gemma4:31b-cloud"),
     )
     ollama_timeout_sec = int(
         os.getenv("OLLAMA_TIMEOUT_SEC", os.getenv("API_LLM_OLLAMA_TIMEOUT_SEC", "30"))
