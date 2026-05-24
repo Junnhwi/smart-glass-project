@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
+  Button,
   Text,
   View,
 } from 'react-native';
@@ -20,6 +21,29 @@ import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
 const AUTO_SYNC_REFRESH_MS = 3000;
+
+const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const CHARACTERISTIC_UUID_RX = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const CHARACTERISTIC_UUID_TX = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8002';
+
+const STATUS_LABELS: Record<string, string> = {
+  idle: '대기 중',
+  connecting: '글래스 연결 중',
+  connected: '글래스 연결 완료',
+  capturing: '촬영 요청 전송 중',
+  receiving: '이미지 수신 중',
+  ready: '이미지 수신 완료',
+  requestingUpload: '업로드 URL 요청 중',
+  uploading: 'Object Storage 업로드 중',
+  registering: '캡처 등록 중',
+  polling: '추론 결과 대기 중',
+  completed: '추론 완료',
+  failed: '오류 발생',
+};
+
 
 const QUICK_ACTIONS = [
   {
@@ -69,10 +93,31 @@ export default function CaptureScreen() {
   const [isLoadingRecent, setIsLoadingRecent] = useState(false);
   const [recentMemories, setRecentMemories] = useState<MemoryRecentItem[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const [pipelineErrorMessage, setPipelineErrorMessage] = useState('');
 
   const hasSelectedDevice = Boolean(currentUser?.deviceId);
   const selectedDeviceLabel = getDeviceLabel(currentUser?.deviceId);
   const latestMemory = recentMemories[0] || null;
+
+
+  const [status, setStatus] = useState('idle');
+  const [capturedFile, setCapturedFile] = useState<File | null>(null);
+  const [inferenceResult, setInferenceResult] = useState<any>(null);
+
+  const rxRef = useRef<any>(null);
+  const txRef = useRef<any>(null);
+  const chunksRef = useRef<Uint8Array[]>([]);
+
+  const isBusy = [
+    'connecting',
+    'capturing',
+    'receiving',
+    'requestingUpload',
+    'uploading',
+    'registering',
+    'polling',
+  ].includes(status);
+
 
   const syncStatus = useMemo(() => {
     if (!currentUser) {
@@ -105,6 +150,237 @@ export default function CaptureScreen() {
       description: '최근 저장된 기억이 확인되었습니다. 새 촬영이 들어오면 같은 흐름으로 자동 처리됩니다.',
     };
   }, [currentUser, hasSelectedDevice, latestMemory]);
+
+
+  const connectGlass = async () => {
+    try {
+      setPipelineErrorMessage('');
+      setStatus('connecting');
+
+      const bluetooth = (navigator as any).bluetooth;
+
+      if (!bluetooth) {
+        throw new Error('이 브라우저는 Web Bluetooth를 지원하지 않습니다.');
+      }
+
+      // const device = await bluetooth.requestDevice({
+      //   acceptAllDevices: true,
+      //   optionalServices: [SERVICE_UUID],
+      // });
+      const device = await bluetooth.requestDevice({
+        filters: [
+          {
+            services: [SERVICE_UUID],
+          },
+        ],
+        optionalServices: [SERVICE_UUID],
+      });
+
+      const server = await device.gatt?.connect();
+
+      if (!server) {
+        throw new Error('GATT 서버 연결에 실패했습니다.');
+      }
+
+      const service = await server.getPrimaryService(SERVICE_UUID);
+
+      const rx = await service.getCharacteristic(CHARACTERISTIC_UUID_RX);
+      const tx = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
+
+      rxRef.current = rx;
+      txRef.current = tx;
+
+      await tx.startNotifications();
+
+      tx.addEventListener('characteristicvaluechanged', handleChunkReceived);
+
+      setStatus('connected');
+    } catch (error) {
+      console.error('BLE 연결 오류:', error);
+
+      setStatus('failed');
+      setPipelineErrorMessage(
+        error instanceof Error ? error.message : '글래스 연결에 실패했습니다.'
+      );
+    } 
+  }
+
+  const handleChunkReceived = (event: Event) => {
+    const characteristic = event.target as any;
+    const value = characteristic.value;
+
+    if (!value) return;
+
+    const chunk = new Uint8Array(value.buffer);
+    chunksRef.current.push(chunk);
+
+    const len = chunk.length;
+
+    // JPEG 종료 바이트: FF D9
+    if (
+      len >= 2 &&
+      chunk[len - 2] === 0xff &&
+      chunk[len - 1] === 0xd9
+    ) {
+      const blobParts = chunksRef.current.map((chunk) => {
+        const copied = new Uint8Array(chunk.byteLength);
+        copied.set(chunk);
+        return copied.buffer;
+      });
+
+      const blob = new Blob(blobParts, {
+        type: 'image/jpeg',
+      });
+
+      const file = new File([blob], `capture-${Date.now()}.jpg`, {
+        type: 'image/jpeg',
+      });
+
+      setCapturedFile(file);
+      setStatus('ready');
+
+      void uploadAndRegisterCapture();
+    }
+  }
+
+  const requestCapture = async () => {
+    if (!rxRef.current) {
+      setPipelineErrorMessage('글래스가 연결되지 않았습니다.');
+      return;
+    }
+
+    try {
+      setPipelineErrorMessage('');
+      chunksRef.current = [];
+
+      setStatus('capturing');
+
+      const encoder = new TextEncoder();
+
+      await rxRef.current.writeValue(
+        encoder.encode('1')
+      );
+
+      setStatus('receiving');
+    } catch (error) {
+      setStatus('failed');
+
+      setPipelineErrorMessage(
+        error instanceof Error
+          ? error.message
+          : '촬영 요청 실패'
+      );
+    }
+  };
+
+  const uploadAndRegisterCapture = async () => {
+    if (!capturedFile) {
+      setPipelineErrorMessage('업로드할 이미지가 없습니다.');
+      return;
+    }
+
+    try {
+      setPipelineErrorMessage('');
+      setStatus('requestingUpload');
+
+      const accessRes = await fetch(`${API_BASE_URL}/media/access-url`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filename: capturedFile.name,
+          contentType: capturedFile.type,
+        }),
+      });
+
+      if (!accessRes.ok) {
+        throw new Error('업로드 URL 요청 실패');
+      }
+
+      const access = await accessRes.json();
+
+      setStatus('uploading');
+
+      const uploadRes = await fetch(access.uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': capturedFile.type,
+        },
+        body: capturedFile,
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error('Object Storage 업로드 실패');
+      }
+
+      setStatus('registering');
+
+      const captureRes = await fetch(`${API_BASE_URL}/media/captures`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          objectKey: access.objectKey,
+          capturedAt: new Date().toISOString(),
+        }),
+      });
+
+      if (!captureRes.ok) {
+        throw new Error('캡처 등록 실패');
+      }
+
+      const capture = await captureRes.json();
+
+      setStatus('polling');
+
+      if (capture.taskId) {
+        pollTask(capture.taskId);
+      } else {
+        setStatus('completed');
+      }
+    } catch (error) {
+      setStatus('failed');
+      setPipelineErrorMessage(
+        error instanceof Error ? error.message : '업로드/캡처 등록 실패'
+      );
+    }
+  };
+
+  const pollTask = async (taskId: string) => {
+    try {
+      const timer = setInterval(async () => {
+        const res = await fetch(`${API_BASE_URL}/inference/tasks/${taskId}`);
+
+        if (!res.ok) {
+          clearInterval(timer);
+          setStatus('failed');
+          setPipelineErrorMessage('추론 상태 조회 실패');
+          return;
+        }
+
+        const data = await res.json();
+
+        if (data.status === 'completed') {
+          clearInterval(timer);
+          setInferenceResult(data);
+          setStatus('completed');
+        }
+
+        if (data.status === 'failed') {
+          clearInterval(timer);
+          setStatus('failed');
+          setPipelineErrorMessage('추론 실패');
+        }
+      }, 2000);
+    } catch (error) {
+      setStatus('failed');
+      setPipelineErrorMessage(
+        error instanceof Error ? error.message : '추론 상태 조회 실패'
+      );
+    }
+  };
 
   const loadRecentMemories = async ({ silent = false } = {}) => {
     if (!currentUser?.authToken || !currentUser.userId) {
@@ -142,20 +418,20 @@ export default function CaptureScreen() {
   useEffect(() => {
     void loadRecentMemories();
   }, [currentUser?.authToken, currentUser?.userId]);
+  //테스트 중 자동 새로고침 비활
+  // useEffect(() => {
+  //   if (!currentUser?.authToken || !currentUser.userId) {
+  //     return;
+  //   }
 
-  useEffect(() => {
-    if (!currentUser?.authToken || !currentUser.userId) {
-      return;
-    }
+  //   const interval = setInterval(() => {
+  //     void loadRecentMemories({ silent: true });
+  //   }, AUTO_SYNC_REFRESH_MS);
 
-    const interval = setInterval(() => {
-      void loadRecentMemories({ silent: true });
-    }, AUTO_SYNC_REFRESH_MS);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [currentUser?.authToken, currentUser?.userId]);
+  //   return () => {
+  //     clearInterval(interval);
+  //   };
+  // }, [currentUser?.authToken, currentUser?.userId]);
 
   return (
     <SafeAreaView style={commonStyles.screen}>
@@ -242,6 +518,44 @@ export default function CaptureScreen() {
               </View>
             ))}
           </View>
+        </View>
+
+        <View style={styles.pipelineCard}>
+          <Text style={styles.pipelineTitle}>글래스 캡처 파이프라인</Text>
+
+          <Text style={styles.pipelineStatus}>
+            현재 상태: {STATUS_LABELS[status] ?? status}
+          </Text>
+          
+          <View style={styles.pipelineButtonGroup}>
+            <Button 
+              title="글래스 연결"
+              onPress={connectGlass}
+              disabled={isBusy}
+            />
+
+            <Button
+              title="촬영 요청"
+              onPress={requestCapture}
+              disabled={status !== 'connected'||isBusy}
+            />
+          </View>
+
+          {capturedFile && (
+            <Text style={styles.pipelineText}>
+              수신 파일: {capturedFile.name}
+            </Text>
+          )}
+
+          {pipelineErrorMessage ? (
+            <Text style={styles.pipelineError}>{pipelineErrorMessage}</Text>
+          ) : null}
+
+          {inferenceResult && (
+            <Text style={styles.pipelineText}>
+              {JSON.stringify(inferenceResult, null, 2)}
+            </Text>
+          )}
         </View>
 
         <View style={styles.quickActionGrid}>
@@ -550,4 +864,31 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#B91C1C',
   },
+
+  pipelineCard: {
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    gap: 10,
+  },
+  pipelineTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  pipelineStatus: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  pipelineButtonGroup: {
+    gap: 8,
+  },
+  pipelineText: {
+    fontSize: 13,
+  },
+  pipelineError: {
+    fontSize: 13,
+    color: 'red',
+  },
+
 });
