@@ -112,6 +112,8 @@ export default function CaptureScreen() {
   const rxRef = useRef<any>(null);
   const txRef = useRef<any>(null);
   const chunksRef = useRef<Uint8Array[]>([]);
+  const lastReceivedByteRef = useRef<number | null>(null);
+  const isTxNotificationStartedRef = useRef(false);
 
   const isBusy = [
     'connecting',
@@ -168,10 +170,22 @@ export default function CaptureScreen() {
         throw new Error('이 브라우저는 Web Bluetooth를 지원하지 않습니다.');
       }
 
-      // const device = await bluetooth.requestDevice({
-      //   acceptAllDevices: true,
-      //   optionalServices: [SERVICE_UUID],
-      // });
+      // 기존 TX notify listener 정리
+      if (txRef.current && isTxNotificationStartedRef.current) {
+        txRef.current.removeEventListener(
+          'characteristicvaluechanged',
+          handleChunkReceived
+        );
+
+        try {
+          await txRef.current.stopNotifications();
+        } catch {
+          // 이미 연결이 끊긴 characteristic이면 무시
+        }
+
+        isTxNotificationStartedRef.current = false;
+      }
+
       const device = await bluetooth.requestDevice({
         filters: [
           {
@@ -197,7 +211,12 @@ export default function CaptureScreen() {
 
       await tx.startNotifications();
 
-      tx.addEventListener('characteristicvaluechanged', handleChunkReceived);
+      tx.addEventListener(
+        'characteristicvaluechanged',
+        handleChunkReceived
+      );
+
+      isTxNotificationStartedRef.current = true;
 
       setStatus('connected');
     } catch (error) {
@@ -207,8 +226,8 @@ export default function CaptureScreen() {
       setPipelineErrorMessage(
         error instanceof Error ? error.message : '글래스 연결에 실패했습니다.'
       );
-    } 
-  }
+    }
+  };
 
   const handleChunkReceived = (event: Event) => {
     const characteristic = event.target as any;
@@ -221,19 +240,28 @@ export default function CaptureScreen() {
 
     const len = chunk.length;
 
+    if (len === 0) return;
+
+    const lastIndex = len - 1;
+
     // JPEG 종료 바이트: FF D9
-    if (
-      len >= 2 &&
-      chunk[len - 2] === 0xff &&
-      chunk[len - 1] === 0xd9
-    ) {
+    // 같은 chunk 안에서 FF D9가 끝나는 경우 + FF/D9가 chunk 경계에서 나뉘는 경우 모두 처리
+    const hasJpegEndMarker =
+      (len >= 2 &&
+        chunk[len - 2] === 0xff &&
+        chunk[len - 1] === 0xd9) ||
+      (lastReceivedByteRef.current === 0xff && chunk[0] === 0xd9);
+
+    lastReceivedByteRef.current = chunk[lastIndex];
+
+    if (hasJpegEndMarker) {
       const blobParts = chunksRef.current.map((chunk) => {
         const copied = new Uint8Array(chunk.byteLength);
         copied.set(chunk);
         return copied.buffer;
       });
 
-      const blob = new Blob(blobParts, {
+      const blob = new Blob(blobParts as BlobPart[], {
         type: 'image/jpeg',
       });
 
@@ -246,7 +274,7 @@ export default function CaptureScreen() {
 
       void uploadAndRegisterCapture(file);
     }
-  }
+  };
 
   const requestCapture = async () => {
     if (!rxRef.current) {
@@ -257,23 +285,20 @@ export default function CaptureScreen() {
     try {
       setPipelineErrorMessage('');
       chunksRef.current = [];
+      lastReceivedByteRef.current = null;
 
       setStatus('capturing');
 
       const encoder = new TextEncoder();
 
-      await rxRef.current.writeValue(
-        encoder.encode('1')
-      );
+      await rxRef.current.writeValue(encoder.encode('1'));
 
       setStatus('receiving');
     } catch (error) {
       setStatus('failed');
 
       setPipelineErrorMessage(
-        error instanceof Error
-          ? error.message
-          : '촬영 요청 실패'
+        error instanceof Error ? error.message : '촬영 요청 실패'
       );
     }
   };
