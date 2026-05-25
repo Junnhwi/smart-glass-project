@@ -12,6 +12,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   listRecentMemories,
+  requestMediaUploadAuthorization,
+  buildCaptureRegistrationPayload,
+  registerMediaCapture,
+  getCaptureTaskStatus,
+  uploadAuthorizedCaptureSource,
   type MemoryRecentItem,
 } from '../../networking/api';
 import SideBar from '../components/SideBar';
@@ -239,7 +244,7 @@ export default function CaptureScreen() {
       setCapturedFile(file);
       setStatus('ready');
 
-      void uploadAndRegisterCapture();
+      void uploadAndRegisterCapture(file);
     }
   }
 
@@ -273,9 +278,21 @@ export default function CaptureScreen() {
     }
   };
 
-  const uploadAndRegisterCapture = async () => {
-    if (!capturedFile) {
+  const uploadAndRegisterCapture = async (fileToUpload?: File) => {
+    const targetFile = fileToUpload ?? capturedFile;
+
+    if (!targetFile) {
       setPipelineErrorMessage('업로드할 이미지가 없습니다.');
+      return;
+    }
+
+    if (!currentUser?.userId) {
+      setPipelineErrorMessage('로그인 사용자 정보가 없습니다.');
+      return;
+    }
+
+    if (!currentUser?.deviceId) {
+      setPipelineErrorMessage('선택된 기기가 없습니다.');
       return;
     }
 
@@ -283,60 +300,44 @@ export default function CaptureScreen() {
       setPipelineErrorMessage('');
       setStatus('requestingUpload');
 
-      const accessRes = await fetch(`${API_BASE_URL}/media/access-url`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filename: capturedFile.name,
-          contentType: capturedFile.type,
-        }),
+      const capturedAt = new Date().toISOString();
+
+      const uploadAuthorization = await requestMediaUploadAuthorization({
+        deviceId: currentUser.deviceId,
+        contentType: targetFile.type,
+        fileName: targetFile.name,
+        capturedAt,
       });
 
-      if (!accessRes.ok) {
-        throw new Error('업로드 URL 요청 실패');
+      if (uploadAuthorization.status !== 'allowed' || !uploadAuthorization.upload) {
+        throw new Error('업로드가 허용되지 않았습니다.');
       }
 
-      const access = await accessRes.json();
+      const uploadPlan = uploadAuthorization.upload;
+
 
       setStatus('uploading');
 
-      const uploadRes = await fetch(access.uploadUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': capturedFile.type,
-        },
-        body: capturedFile,
+      await uploadAuthorizedCaptureSource({
+        uploadPlan,
+        body: targetFile,
+        contentType: targetFile.type,
       });
-
-      if (!uploadRes.ok) {
-        throw new Error('Object Storage 업로드 실패');
-      }
 
       setStatus('registering');
 
-      const captureRes = await fetch(`${API_BASE_URL}/media/captures`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          objectKey: access.objectKey,
-          capturedAt: new Date().toISOString(),
-        }),
+      const registrationPayload = buildCaptureRegistrationPayload({
+        userId: currentUser.userId,
+        deviceId: currentUser.deviceId,
+        uploadPlan,
       });
 
-      if (!captureRes.ok) {
-        throw new Error('캡처 등록 실패');
-      }
-
-      const capture = await captureRes.json();
+      const capture = await registerMediaCapture(registrationPayload);
 
       setStatus('polling');
 
       if (capture.taskId) {
-        pollTask(capture.taskId);
+        void pollTask(capture.taskId);
       } else {
         setStatus('completed');
       }
@@ -351,27 +352,26 @@ export default function CaptureScreen() {
   const pollTask = async (taskId: string) => {
     try {
       const timer = setInterval(async () => {
-        const res = await fetch(`${API_BASE_URL}/inference/tasks/${taskId}`);
+        try {
+          const data = await getCaptureTaskStatus(taskId);
 
-        if (!res.ok) {
+          if (data.status === 'completed') {
+            clearInterval(timer);
+            setInferenceResult(data);
+            setStatus('completed');
+          }
+
+          if (data.status === 'failed') {
+            clearInterval(timer);
+            setStatus('failed');
+            setPipelineErrorMessage('추론 실패');
+          }
+        } catch (error) {
           clearInterval(timer);
           setStatus('failed');
-          setPipelineErrorMessage('추론 상태 조회 실패');
-          return;
-        }
-
-        const data = await res.json();
-
-        if (data.status === 'completed') {
-          clearInterval(timer);
-          setInferenceResult(data);
-          setStatus('completed');
-        }
-
-        if (data.status === 'failed') {
-          clearInterval(timer);
-          setStatus('failed');
-          setPipelineErrorMessage('추론 실패');
+          setPipelineErrorMessage(
+            error instanceof Error ? error.message : '추론 상태 조회 실패'
+          );
         }
       }, 2000);
     } catch (error) {
@@ -381,7 +381,7 @@ export default function CaptureScreen() {
       );
     }
   };
-
+  
   const loadRecentMemories = async ({ silent = false } = {}) => {
     if (!currentUser?.authToken || !currentUser.userId) {
       setRecentMemories([]);
