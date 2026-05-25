@@ -355,7 +355,7 @@ export default function CaptureScreen() {
         try {
           const data = await getCaptureTaskStatus(taskId);
 
-          if (data.status === 'completed') {
+          if (data.status === 'completed' || data.status === 'partial') {
             clearInterval(timer);
             setInferenceResult(data);
             setStatus('completed');
@@ -418,20 +418,20 @@ export default function CaptureScreen() {
   useEffect(() => {
     void loadRecentMemories();
   }, [currentUser?.authToken, currentUser?.userId]);
-  //테스트 중 자동 새로고침 비활
-  // useEffect(() => {
-  //   if (!currentUser?.authToken || !currentUser.userId) {
-  //     return;
-  //   }
+  
+  useEffect(() => {
+    if (!currentUser?.authToken || !currentUser.userId) {
+      return;
+    }
 
-  //   const interval = setInterval(() => {
-  //     void loadRecentMemories({ silent: true });
-  //   }, AUTO_SYNC_REFRESH_MS);
+    const interval = setInterval(() => {
+      void loadRecentMemories({ silent: true });
+    }, AUTO_SYNC_REFRESH_MS);
 
-  //   return () => {
-  //     clearInterval(interval);
-  //   };
-  // }, [currentUser?.authToken, currentUser?.userId]);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [currentUser?.authToken, currentUser?.userId]);
 
   return (
     <SafeAreaView style={commonStyles.screen}>
