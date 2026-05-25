@@ -43,31 +43,88 @@ export default function UploadPage() {
     setStatus("업로드 중... ⏳");
 
     try {
-      const res = await fetch("http://localhost:3000/upload-image", {
-        method: "POST",
-        body: formData,
-      });
+      const API_BASE_URL =
+        import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8002";
 
-      const data: UploadResponse = await res.json();
-      setResultJson(data);
-
-      if (!res.ok) {
-        setStatus("업로드 실패 ❌");
-        setLogs((prev) => [
-          { time: new Date().toLocaleTimeString(), result: "실패" },
-          ...prev,
-        ]);
+      if (!file) {
+        setStatus("이미지 파일이 없습니다 ❌");
         return;
       }
 
-      setStatus("업로드 성공 ✅");
+      setStatus("업로드 허용 요청 중...");
+
+      // 1. 업로드 허용 요청
+      const authRes = await fetch(`${API_BASE_URL}/media/upload-authorizations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type,
+          size: file.size,
+        }),
+      });
+
+      const authData = await authRes.json();
+
+      if (!authRes.ok) {
+        console.error("업로드 허용 실패:", authData);
+        setStatus("업로드 허용 실패 ❌");
+        return;
+      }
+
+      const { uploadUrl, imageKey } = authData;
+
+      setStatus("Object Storage 업로드 중...");
+
+      // 2. presigned URL로 Object Storage 직접 업로드
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type,
+        },
+        body: file,
+      });
+
+      if (!uploadRes.ok) {
+        setStatus("Object Storage 업로드 실패 ❌");
+        return;
+      }
+
+      setStatus("캡처 등록 중...");
+
+      // 3. 캡처 등록
+      const captureRes = await fetch(`${API_BASE_URL}/media/captures`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          imageKey,
+          userId: "demo-user",
+          memoryId: "demo-memory",
+          capturedAt: new Date().toISOString(),
+        }),
+      });
+
+      const captureData = await captureRes.json();
+      setResultJson(captureData);
+
+      if (!captureRes.ok) {
+        console.error("캡처 등록 실패:", captureData);
+        setStatus("캡처 등록 실패 ❌");
+        return;
+      }
+
+      setStatus("캡처 등록 성공 ✅");
       setLogs((prev) => [
         { time: new Date().toLocaleTimeString(), result: "성공" },
         ...prev,
       ]);
     } catch (err) {
       console.error("업로드 오류:", err);
-      setStatus("서버 오류 ❌");
+      setStatus("업로드 오류 ❌");
       setLogs((prev) => [
         { time: new Date().toLocaleTimeString(), result: "서버 오류" },
         ...prev,

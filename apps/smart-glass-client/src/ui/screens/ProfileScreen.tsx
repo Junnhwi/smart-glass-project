@@ -129,21 +129,21 @@ export default function ProfileScreen() {
     void loadDevices();
     void loadPairings();
   }, [currentUser?.authToken, currentUser?.userId]);
+  // 테스트 중 기기 상태 자동 새로고침 비활
+  // useEffect(() => {
+  //   if (!currentUser) {
+  //     return;
+  //   }
 
-  useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
+  //   const interval = setInterval(() => {
+  //     void loadDevices({ silent: true });
+  //     void loadPairings({ silent: true });
+  //   }, AUTO_REFRESH_INTERVAL_MS);
 
-    const interval = setInterval(() => {
-      void loadDevices({ silent: true });
-      void loadPairings({ silent: true });
-    }, AUTO_REFRESH_INTERVAL_MS);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [currentUser?.authToken, currentUser?.userId]);
+  //   return () => {
+  //     clearInterval(interval);
+  //   };
+  // }, [currentUser?.authToken, currentUser?.userId]);
 
   const moveToCaptureWithDevice = (deviceId: string) => {
     setCurrentDevice(deviceId);
