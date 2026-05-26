@@ -212,6 +212,15 @@ def check_model_config() -> Tuple[str, Dict[str, Any]]:
 def check_model_preload() -> Tuple[str, Dict[str, Any]]:
     path = get_preload_status_path()
     detail: Dict[str, Any] = {"status_path": str(path)}
+    enabled = os.getenv("INFERENCE_WORKER_PRELOAD_ON_STARTUP", "0").strip().lower()
+
+    if enabled not in {"1", "true", "yes", "on"}:
+        detail["status"] = "ok"
+        detail["probe"] = {
+            "status": "skipped",
+            "reason": "worker model preload is disabled",
+        }
+        return detail["status"], detail
 
     if not path.exists():
         detail["status"] = "error"

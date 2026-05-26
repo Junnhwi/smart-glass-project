@@ -90,6 +90,41 @@ const formatTimestamp = (value?: string | null) => {
   return parsed.toLocaleString();
 };
 
+const flattenChunks = (chunks: Uint8Array[]) => {
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+
+  chunks.forEach((chunk) => {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  });
+
+  return merged;
+};
+
+const extractJpegBytes = (bytes: Uint8Array) => {
+  let startIndex = -1;
+  let endIndex = -1;
+
+  for (let index = 0; index < bytes.length - 1; index += 1) {
+    if (startIndex === -1 && bytes[index] === 0xff && bytes[index + 1] === 0xd8) {
+      startIndex = index;
+    }
+
+    if (startIndex !== -1 && bytes[index] === 0xff && bytes[index + 1] === 0xd9) {
+      endIndex = index + 2;
+      break;
+    }
+  }
+
+  if (startIndex === -1 || endIndex === -1) {
+    throw new Error('수신된 데이터에서 JPEG 이미지를 찾지 못했습니다.');
+  }
+
+  return bytes.slice(startIndex, endIndex);
+};
+
 export default function CaptureScreen() {
   const navigation = useAppNavigation();
   const { currentUser, getDeviceLabel } = useAuth();
@@ -235,7 +270,7 @@ export default function CaptureScreen() {
 
     if (!value) return;
 
-    const chunk = new Uint8Array(value.buffer);
+    const chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     chunksRef.current.push(chunk);
 
     const len = chunk.length;
@@ -255,13 +290,24 @@ export default function CaptureScreen() {
     lastReceivedByteRef.current = chunk[lastIndex];
 
     if (hasJpegEndMarker) {
-      const blobParts = chunksRef.current.map((chunk) => {
-        const copied = new Uint8Array(chunk.byteLength);
-        copied.set(chunk);
-        return copied.buffer;
-      });
+      let jpegBytes: Uint8Array;
 
-      const blob = new Blob(blobParts as BlobPart[], {
+      try {
+        jpegBytes = extractJpegBytes(flattenChunks(chunksRef.current));
+      } catch (error) {
+        chunksRef.current = [];
+        lastReceivedByteRef.current = null;
+        setStatus('failed');
+        setPipelineErrorMessage(
+          error instanceof Error ? error.message : '수신된 이미지 데이터가 올바르지 않습니다.'
+        );
+        return;
+      }
+
+      const copied = new Uint8Array(jpegBytes.byteLength);
+      copied.set(jpegBytes);
+
+      const blob = new Blob([copied.buffer] as BlobPart[], {
         type: 'image/jpeg',
       });
 
@@ -271,6 +317,8 @@ export default function CaptureScreen() {
 
       setCapturedFile(file);
       setStatus('ready');
+      chunksRef.current = [];
+      lastReceivedByteRef.current = null;
 
       void uploadAndRegisterCapture(file);
     }

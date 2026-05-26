@@ -373,6 +373,7 @@ def main() -> int:
         "POST",
         f"{api_base_url}/users/{urllib.parse.quote(user_id, safe='')}/devices",
         payload={"deviceId": device_id},
+        headers=bearer_headers(user_id),
     )
     require_success(register_status, register_payload, "device registration")
     print_step("device registered or confirmed")

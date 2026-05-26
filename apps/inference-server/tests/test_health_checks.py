@@ -8,6 +8,7 @@ from unittest.mock import patch
 from src.health.checks import (
     build_health_summary,
     check_model_config,
+    check_model_preload,
     check_storage,
     run_timed_health_check,
 )
@@ -38,6 +39,8 @@ class StorageHealthCheckTestCase(unittest.TestCase):
             "VISION_CAPTION_MODEL",
             "VISION_CAPTION_QUANTIZATION",
             "VISION_CAPTION_DTYPE",
+            "INFERENCE_WORKER_PRELOAD_ON_STARTUP",
+            "INFERENCE_PRELOAD_STATUS_PATH",
         ):
             os.environ.pop(name, None)
 
@@ -157,6 +160,35 @@ class StorageHealthCheckTestCase(unittest.TestCase):
         self.assertEqual(
             detail["executionPolicy"]["fallbackModelKey"], "qwen2.5-vl-3b"
         )
+
+    def test_check_model_preload_skips_when_preload_is_disabled(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"INFERENCE_WORKER_PRELOAD_ON_STARTUP": "0"},
+            clear=True,
+        ):
+            status, detail = check_model_preload()
+
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail["status"], "ok")
+        self.assertEqual(detail["probe"]["status"], "skipped")
+
+    def test_check_model_preload_requires_status_file_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            status_path = Path(tmp_dir) / "missing-preload.json"
+            with patch.dict(
+                "os.environ",
+                {
+                    "INFERENCE_WORKER_PRELOAD_ON_STARTUP": "1",
+                    "INFERENCE_PRELOAD_STATUS_PATH": str(status_path),
+                },
+                clear=True,
+            ):
+                status, detail = check_model_preload()
+
+        self.assertEqual(status, "error")
+        self.assertEqual(detail["status"], "error")
+        self.assertEqual(detail["message"], "Preload status file is missing")
 
     def test_build_health_summary_treats_missing_status_as_failing(self) -> None:
         summary = build_health_summary(
