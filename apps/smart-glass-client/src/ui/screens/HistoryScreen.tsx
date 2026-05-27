@@ -74,7 +74,7 @@ const uniqueImageKeys = (items: MemoryRecentItem[]) => {
 
 export default function HistoryScreen() {
   const navigation = useAppNavigation();
-  const { currentUser } = useAuth();
+  const { currentUser, refreshSession } = useAuth();
   const [items, setItems] = useState<HistoryCardItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -95,11 +95,34 @@ export default function HistoryScreen() {
       setErrorMessage('');
 
       try {
-        const recentResponse = await listRecentMemories({
-          authToken: currentUser.authToken,
-          userId: currentUser.userId,
-          limit: 20,
-        });
+        let authToken = currentUser.authToken;
+        let userId = currentUser.userId;
+        let recentResponse: Awaited<ReturnType<typeof listRecentMemories>>;
+
+        try {
+          recentResponse = await listRecentMemories({
+            authToken,
+            userId,
+            limit: 20,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '';
+          if (!message.toLowerCase().includes('access token has expired')) {
+            throw error;
+          }
+
+          const refreshedUser = await refreshSession();
+          if (!refreshedUser) {
+            throw error;
+          }
+          authToken = refreshedUser.authToken;
+          userId = refreshedUser.userId;
+          recentResponse = await listRecentMemories({
+            authToken,
+            userId,
+            limit: 20,
+          });
+        }
 
         let accessUrlByImageKey: Record<string, string> = {};
         const imageKeys = uniqueImageKeys(recentResponse.items);
@@ -107,8 +130,8 @@ export default function HistoryScreen() {
         if (imageKeys.length > 0) {
           try {
             const accessUrls = await issueMediaAccessUrls({
-              authToken: currentUser.authToken,
-              userId: currentUser.userId,
+              authToken,
+              userId,
               imageKeys,
             });
             accessUrlByImageKey = accessUrls.items.reduce<Record<string, string>>(

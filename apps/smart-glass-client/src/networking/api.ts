@@ -305,9 +305,11 @@ const postJson = async <TResponse>(
 };
 
 export const registerUserDevice = async ({
+  authToken,
   userId,
   deviceId,
 }: {
+  authToken: string;
   userId: string;
   deviceId: string;
 }) => {
@@ -315,7 +317,8 @@ export const registerUserDevice = async ({
     `/users/${encodeURIComponent(userId)}/devices`,
     {
       deviceId,
-    }
+    },
+    { authToken }
   );
 };
 

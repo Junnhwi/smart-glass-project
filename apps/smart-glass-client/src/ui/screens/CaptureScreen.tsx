@@ -16,6 +16,7 @@ import {
   buildCaptureRegistrationPayload,
   registerMediaCapture,
   getCaptureTaskStatus,
+  registerUserDevice,
   uploadAuthorizedCaptureSource,
   type MemoryRecentItem,
 } from '../../networking/api';
@@ -30,6 +31,7 @@ const AUTO_SYNC_REFRESH_MS = 3000;
 const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const CHARACTERISTIC_UUID_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 const CHARACTERISTIC_UUID_TX = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const GLASS_DEVICE_NAME = 'XIAO_BLE_CAM';
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8002';
@@ -125,9 +127,34 @@ const extractJpegBytes = (bytes: Uint8Array) => {
   return bytes.slice(startIndex, endIndex);
 };
 
+const normalizeDeviceId = (value?: string | null) =>
+  String(value ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .join('-');
+
+const resolveBluetoothDeviceId = (device: any) =>
+  normalizeDeviceId(device?.name) ||
+  normalizeDeviceId(device?.id) ||
+  GLASS_DEVICE_NAME;
+
+const isExpiredTokenError = (error: unknown) =>
+  error instanceof Error &&
+  error.message.toLowerCase().includes('access token has expired');
+
+const getErrorMessage = (error: unknown, fallbackMessage: string) =>
+  error instanceof Error && error.message ? error.message : fallbackMessage;
+
 export default function CaptureScreen() {
   const navigation = useAppNavigation();
-  const { currentUser, getDeviceLabel } = useAuth();
+  const {
+    currentUser,
+    getDeviceLabel,
+    refreshSession,
+    setCurrentDevice,
+    setDeviceAlias,
+  } = useAuth();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [isLoadingRecent, setIsLoadingRecent] = useState(false);
@@ -149,6 +176,7 @@ export default function CaptureScreen() {
   const chunksRef = useRef<Uint8Array[]>([]);
   const lastReceivedByteRef = useRef<number | null>(null);
   const isTxNotificationStartedRef = useRef(false);
+  const connectedDeviceIdRef = useRef<string | null>(null);
 
   const isBusy = [
     'connecting',
@@ -194,6 +222,43 @@ export default function CaptureScreen() {
   }, [currentUser, hasSelectedDevice, latestMemory]);
 
 
+  const registerAndSelectGlassDevice = async (deviceId: string) => {
+    if (!currentUser?.authToken || !currentUser.userId) {
+      return;
+    }
+
+    let authToken = currentUser.authToken;
+    let userId = currentUser.userId;
+
+    try {
+      await registerUserDevice({
+        authToken,
+        userId,
+        deviceId,
+      });
+    } catch (error) {
+      if (!isExpiredTokenError(error)) {
+        throw error;
+      }
+
+      const refreshedUser = await refreshSession();
+      if (!refreshedUser) {
+        throw error;
+      }
+
+      authToken = refreshedUser.authToken;
+      userId = refreshedUser.userId;
+      await registerUserDevice({
+        authToken,
+        userId,
+        deviceId,
+      });
+    }
+
+    setCurrentDevice(deviceId);
+    setDeviceAlias(deviceId, GLASS_DEVICE_NAME);
+  };
+
   const connectGlass = async () => {
     try {
       setPipelineErrorMessage('');
@@ -224,11 +289,13 @@ export default function CaptureScreen() {
       const device = await bluetooth.requestDevice({
         filters: [
           {
-            services: [SERVICE_UUID],
+            name: GLASS_DEVICE_NAME,
           },
         ],
         optionalServices: [SERVICE_UUID],
       });
+      const connectedDeviceId = resolveBluetoothDeviceId(device);
+      connectedDeviceIdRef.current = connectedDeviceId;
 
       const server = await device.gatt?.connect();
 
@@ -252,6 +319,7 @@ export default function CaptureScreen() {
       );
 
       isTxNotificationStartedRef.current = true;
+      await registerAndSelectGlassDevice(connectedDeviceId);
 
       setStatus('connected');
     } catch (error) {
@@ -364,7 +432,10 @@ export default function CaptureScreen() {
       return;
     }
 
-    if (!currentUser?.deviceId) {
+    const selectedDeviceId =
+      currentUser.deviceId || connectedDeviceIdRef.current;
+
+    if (!selectedDeviceId) {
       setPipelineErrorMessage('선택된 기기가 없습니다.');
       return;
     }
@@ -375,12 +446,22 @@ export default function CaptureScreen() {
 
       const capturedAt = new Date().toISOString();
 
-      const uploadAuthorization = await requestMediaUploadAuthorization({
-        deviceId: currentUser.deviceId,
-        contentType: targetFile.type,
-        fileName: targetFile.name,
-        capturedAt,
-      });
+      let uploadAuthorization: Awaited<
+        ReturnType<typeof requestMediaUploadAuthorization>
+      >;
+
+      try {
+        uploadAuthorization = await requestMediaUploadAuthorization({
+          deviceId: selectedDeviceId,
+          contentType: targetFile.type,
+          fileName: targetFile.name,
+          capturedAt,
+        });
+      } catch (error) {
+        throw new Error(
+          `업로드 허가 요청 실패: ${getErrorMessage(error, 'API 서버에 연결하지 못했습니다.')}`
+        );
+      }
 
       if (uploadAuthorization.status !== 'allowed' || !uploadAuthorization.upload) {
         throw new Error('업로드가 허용되지 않았습니다.');
@@ -391,21 +472,37 @@ export default function CaptureScreen() {
 
       setStatus('uploading');
 
-      await uploadAuthorizedCaptureSource({
-        uploadPlan,
-        body: targetFile,
-        contentType: targetFile.type,
-      });
+      try {
+        await uploadAuthorizedCaptureSource({
+          uploadPlan,
+          body: targetFile,
+          contentType: targetFile.type,
+        });
+      } catch (error) {
+        throw new Error(
+          `Object Storage 업로드 실패: ${getErrorMessage(
+            error,
+            '브라우저에서 presigned URL로 업로드하지 못했습니다.'
+          )}`
+        );
+      }
 
       setStatus('registering');
 
       const registrationPayload = buildCaptureRegistrationPayload({
         userId: currentUser.userId,
-        deviceId: currentUser.deviceId,
+        deviceId: selectedDeviceId,
         uploadPlan,
       });
 
-      const capture = await registerMediaCapture(registrationPayload);
+      let capture: Awaited<ReturnType<typeof registerMediaCapture>>;
+      try {
+        capture = await registerMediaCapture(registrationPayload);
+      } catch (error) {
+        throw new Error(
+          `캡처 등록 실패: ${getErrorMessage(error, 'API 서버에 연결하지 못했습니다.')}`
+        );
+      }
 
       setStatus('polling');
 
@@ -432,6 +529,7 @@ export default function CaptureScreen() {
             clearInterval(timer);
             setInferenceResult(data);
             setStatus('completed');
+            void loadRecentMemories({ silent: true });
           }
 
           if (data.status === 'failed') {
@@ -467,11 +565,33 @@ export default function CaptureScreen() {
     }
 
     try {
-      const response = await listRecentMemories({
-        authToken: currentUser.authToken,
-        userId: currentUser.userId,
-        limit: 4,
-      });
+      let authToken = currentUser.authToken;
+      let response: Awaited<ReturnType<typeof listRecentMemories>>;
+
+      try {
+        response = await listRecentMemories({
+          authToken,
+          userId: currentUser.userId,
+          limit: 4,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (!message.toLowerCase().includes('access token has expired')) {
+          throw error;
+        }
+
+        const refreshedUser = await refreshSession();
+        if (!refreshedUser) {
+          throw error;
+        }
+        authToken = refreshedUser.authToken;
+        response = await listRecentMemories({
+          authToken,
+          userId: refreshedUser.userId,
+          limit: 4,
+        });
+      }
+
       setRecentMemories(response.items);
     } catch (error) {
       const message =
