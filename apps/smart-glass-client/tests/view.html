@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>XIAO BLE High-Speed Receiver</title>
+    <style>
+        body { text-align: center; font-family: sans-serif; background-color: #f8f9fa; padding: 20px; }
+        .container { background: white; max-width: 500px; margin: 0 auto; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        button { padding: 15px 30px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 8px; }
+        .stats { display: flex; justify-content: space-around; background: #e9ecef; padding: 15px; border-radius: 10px; margin: 20px 0; }
+        #photo { max-width: 100%; border-radius: 10px; margin-top: 20px; display: none; border: 3px solid #ddd; }
+        #log { font-family: monospace; font-size: 12px; height: 100px; overflow-y: auto; background: #333; color: #fff; padding: 10px; border-radius: 5px; text-align: left; margin-top: 20px; }
+        .value { font-weight: bold; color: #007bff; display: block; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>📸 실시간 전송 측정기</h2>
+        <button id="connect">기기 연결 및 촬영</button>
+        
+        <div class="stats">
+            <div>데이터 크기<span id="byteCount" class="value">0 B</span></div>
+            <div>소요 시간<span id="timer" class="value">0.00 s</span></div>
+            <div>전송 속도<span id="speed" class="value">0.0 KB/s</span></div>
+        </div>
+
+        <p id="status">상태: 대기 중...</p>
+        <img id="photo">
+        <div id="log">로그 대기 중...</div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+        const RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+        
+        let imgBuffer = [];
+        let startTime;
+
+        function addLog(m) { const l = document.getElementById('log'); l.innerHTML += `> ${m}<br>`; l.scrollTop = l.scrollHeight; }
+
+        document.getElementById('connect').addEventListener('click', async () => {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'XIAO_BLE_CAM' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                const txChar = await service.getCharacteristic(TX_UUID);
+                const rxChar = await service.getCharacteristic(RX_UUID);
+
+                await txChar.startNotifications();
+                addLog("기기 연결 완료!");
+
+                txChar.addEventListener('characteristicvaluechanged', (event) => {
+                    let data = new Uint8Array(event.target.value.buffer);
+                    let str = new TextDecoder().decode(data);
+
+                    if (str.includes("--- START ---")) {
+                        imgBuffer = [];
+                        startTime = performance.now();
+                        document.getElementById('status').innerText = "📥 데이터를 받는 중입니다...";
+                        addLog("데이터 전송 시작");
+                    } 
+                    else if (str.includes("--- END ---")) {
+                        let duration = (performance.now() - startTime) / 1000;
+                        let sizeKB = imgBuffer.length / 1024;
+                        let speed = sizeKB / duration;
+
+                        document.getElementById('timer').innerText = duration.toFixed(2) + " s";
+                        document.getElementById('speed').innerText = speed.toFixed(1) + " KB/s";
+                        document.getElementById('status').innerText = "✅ 전송 완료!";
+                        addLog(`완료! 크기: ${imgBuffer.length} bytes`);
+
+                        if (imgBuffer.length > 0) {
+                            const blob = new Blob([new Uint8Array(imgBuffer)], { type: 'image/jpeg' });
+                            document.getElementById('photo').src = URL.createObjectURL(blob);
+                            document.getElementById('photo').style.display = "inline-block";
+                        }
+                    } 
+                    else {
+                        // 이미지 데이터 조각들을 버퍼에 추가
+                        for (let b of data) { imgBuffer.push(b); }
+                        document.getElementById('byteCount').innerText = imgBuffer.length + " B";
+                        
+                        // 실시간 시간 업데이트
+                        let liveTime = (performance.now() - startTime) / 1000;
+                        document.getElementById('timer').innerText = liveTime.toFixed(2) + " s";
+                    }
+                });
+
+                // 촬영 명령 보내기
+                await rxChar.writeValue(new TextEncoder().encode("1"));
+                document.getElementById('status').innerText = "📸 촬영 명령 전송됨";
+
+            } catch (e) {
+                addLog("에러: " + e);
+                document.getElementById('status').innerText = "❌ 오류 발생";
+            }
+        });
+    </script>
+</body>
+</html>
