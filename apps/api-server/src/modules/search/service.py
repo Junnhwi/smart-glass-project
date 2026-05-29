@@ -219,25 +219,25 @@ class OllamaAnswerGenerator:
 
     def _format_hit_context(self, index: int, hit: SearchHit) -> str:
         memory = hit.memory
-        location = memory.location.name or memory.location.address or "미상"
-        captured_at = format_timestamp(memory.captured_at) or memory.captured_at or "미상"
-        detected_objects = ", ".join(memory.detected_objects[:8]) or "없음"
-        tags = ", ".join(memory.tags[:8]) or "없음"
-        position_hint = memory.position_hint or "없음"
-        caption = memory.caption or "없음"
-        scene_summary = memory.scene_summary or "없음"
-        image_key = memory.image_key or "사진 없음"
+        location = memory.location.name or memory.location.address or "Unknown"
+        captured_at = format_timestamp(memory.captured_at) or memory.captured_at or "Unknown"
+        detected_objects = ", ".join(memory.detected_objects[:8]) or "None"
+        tags = ", ".join(memory.tags[:8]) or "None"
+        position_hint = memory.position_hint or "None"
+        caption = memory.caption or "None"
+        scene_summary = memory.scene_summary or "None"
+        image_key = memory.image_key or "No image"
 
         return (
             f"[Memory {index}]\n"
-            f"- 원본 사진 키(image_key): {image_key}\n"
-            f"- 촬영 시각: {captured_at}\n"
-            f"- 장소: {location}\n"
-            f"- 위치 단서: {position_hint}\n"
-            f"- 감지 물체: {detected_objects}\n"
-            f"- 태그(특징): {tags}\n"
-            f"- 설명: {caption}\n"
-            f"- 장면 요약: {scene_summary}\n"
+            f"- Image Key: {image_key}\n"
+            f"- Captured At: {captured_at}\n"
+            f"- Location: {location}\n"
+            f"- Position Hint: {position_hint}\n"
+            f"- Detected Objects: {detected_objects}\n"
+            f"- Tags: {tags}\n"
+            f"- Caption: {caption}\n"
+            f"- Scene Summary: {scene_summary}\n"
         )
 
     def _build_messages(self, query: str, hits: list[SearchHit]) -> list[dict[str, str]]:
@@ -245,13 +245,14 @@ class OllamaAnswerGenerator:
             self._format_hit_context(index + 1, hit)
             for index, hit in enumerate(hits[: self.max_context_hits])
         )
-        system_prompt = "당신은 사용자의 물건 위치를 찾아주는 똑똑한 비서입니다."
+        system_prompt = "You are a smart assistant that helps the user find their belongings. Always respond in Korean."
         user_prompt = (
-            "아래 제공된 [종합 관측 기록]을 바탕으로 질문에 대답하세요. 이 기록은 최신순/유사도순으로 정렬되어 있습니다.\n"
-            "목록에 없는 물건을 찾으면 \"해당 물건은 최근 기록에서 찾을 수 없습니다.\"라고 대답하세요.\n"
-            "목표 물건을 찾은 경우, 관측 시간, 위치 단서, 주변 물건 정보(특징)와 함께 **원본 사진 키(image_key)**를 반드시 출력해 주세요.\n\n"
-            f"[종합 관측 기록]\n{context}\n\n"
-            f"[사용자 질문]\n{query}"
+            "Answer the question based on the provided [Observation Records] below. These records are sorted by recency and relevance.\n"
+            "Note: Even if the item name the user is searching for does not exactly match the records, infer and treat them as the same item if they are conceptually similar, synonyms, or have a hypernym/hyponym relationship (e.g., 'wristwatch' and 'Apple Watch', 'earphones' and 'AirPods').\n"
+            "If the requested item cannot be found or inferred from the records, you MUST reply exactly with: \"해당 물건은 최근 기록에서 찾을 수 없습니다.\"\n"
+            "If the target item is found, you MUST output the observation time, location hints, and surrounding objects (features) along with the **original image key (image_key)**.\n\n"
+            f"[Observation Records]\n{context}\n\n"
+            f"[User Question]\n{query}"
         )
         return [
             {"role": "system", "content": system_prompt},
