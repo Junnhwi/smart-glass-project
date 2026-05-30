@@ -563,18 +563,21 @@ class PostgresAuthStore:
         self,
         *,
         user_id: str,
+        password_hash: str | None = None,
         display_name: str | None = None,
         role: str | None = None,
         status: str | None = None,
     ) -> AuthUserRecord:
         normalized_user_id = _normalize_text(user_id)
+        normalized_password_hash = _normalize_text(password_hash) or None
         normalized_display_name = _normalize_text(display_name) or None
         normalized_role = _normalize_text(role) or None
         normalized_status = _normalize_text(status) or None
         if not normalized_user_id:
             raise ValueError("userId must not be blank")
         if (
-            normalized_display_name is None
+            normalized_password_hash is None
+            and normalized_display_name is None
             and normalized_role is None
             and normalized_status is None
         ):
@@ -584,6 +587,7 @@ class PostgresAuthStore:
         query = f"""
             UPDATE {self.auth_users_table_name}
             SET
+                password_hash = COALESCE(%s, password_hash),
                 display_name = COALESCE(%s, display_name),
                 role = COALESCE(%s, role),
                 status = COALESCE(%s, status),
@@ -606,6 +610,7 @@ class PostgresAuthStore:
                     cur.execute(
                         query,
                         (
+                            normalized_password_hash,
                             normalized_display_name,
                             normalized_role,
                             normalized_status,

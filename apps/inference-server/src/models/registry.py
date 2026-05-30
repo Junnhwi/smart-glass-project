@@ -1,9 +1,5 @@
 from dataclasses import dataclass
 
-from src.models.captioning import get_caption_model_spec
-from src.models.qwen_vlm import get_qwen_vlm_spec
-
-
 @dataclass(frozen=True)
 class InferenceModelCapabilities:
     caption: bool
@@ -61,29 +57,78 @@ QWEN_VLM_CAPABILITIES = InferenceModelCapabilities(
     pipeline_output=True,
 )
 
+MODEL_DESCRIPTORS = {
+    "blip-base": InferenceModelDescriptor(
+        key="blip-base",
+        model_id="Salesforce/blip-image-captioning-base",
+        family="blip",
+        mode="caption",
+        recommended_quantization="none",
+        notes="빠른 베이스라인. 첫 비교 대상으로 적합합니다.",
+        capabilities=CAPTION_CAPABILITIES,
+    ),
+    "blip-large": InferenceModelDescriptor(
+        key="blip-large",
+        model_id="Salesforce/blip-image-captioning-large",
+        family="blip",
+        mode="caption",
+        recommended_quantization="none",
+        notes="정확도 향상을 기대할 수 있지만 메모리 사용량이 늘어납니다.",
+        capabilities=CAPTION_CAPABILITIES,
+    ),
+    "git-base": InferenceModelDescriptor(
+        key="git-base",
+        model_id="microsoft/git-base-coco",
+        family="git",
+        mode="caption",
+        recommended_quantization="none",
+        notes="상대적으로 가벼운 캡셔닝 전용 모델입니다.",
+        capabilities=CAPTION_CAPABILITIES,
+    ),
+    "vit-gpt2": InferenceModelDescriptor(
+        key="vit-gpt2",
+        model_id="nlpconnect/vit-gpt2-image-captioning",
+        family="vit-gpt2",
+        mode="caption",
+        recommended_quantization="none",
+        notes="구현이 단순하고 CPU fallback 테스트에도 유용합니다.",
+        capabilities=CAPTION_CAPABILITIES,
+    ),
+    "blip2-opt-2.7b": InferenceModelDescriptor(
+        key="blip2-opt-2.7b",
+        model_id="Salesforce/blip2-opt-2.7b",
+        family="blip2",
+        mode="caption",
+        recommended_quantization="4bit",
+        notes="RTX 4070에서는 4-bit 또는 8-bit 양자화 권장.",
+        capabilities=CAPTION_CAPABILITIES,
+    ),
+    "qwen2.5-vl-3b": InferenceModelDescriptor(
+        key="qwen2.5-vl-3b",
+        model_id="Qwen/Qwen2.5-VL-3B-Instruct",
+        family="qwen2_5_vl",
+        mode="vlm",
+        recommended_quantization="4bit",
+        notes="smoke test와 빠른 구조 검증용 기본 VLM.",
+        capabilities=QWEN_VLM_CAPABILITIES,
+    ),
+    "qwen2.5-vl-7b": InferenceModelDescriptor(
+        key="qwen2.5-vl-7b",
+        model_id="Qwen/Qwen2.5-VL-7B-Instruct",
+        family="qwen2_5_vl",
+        mode="vlm",
+        recommended_quantization="4bit",
+        notes="구조화된 JSON 응답 실험용 VLM 후보.",
+        capabilities=QWEN_VLM_CAPABILITIES,
+    ),
+}
+
 
 def resolve_inference_model(model_key: str) -> InferenceModelDescriptor:
     try:
-        spec = get_caption_model_spec(model_key)
-        return InferenceModelDescriptor(
-            key=spec.key,
-            model_id=spec.model_id,
-            family=spec.family,
-            mode="caption",
-            recommended_quantization=spec.recommended_quantization,
-            notes=spec.notes,
-            capabilities=CAPTION_CAPABILITIES,
-        )
-    except Exception:
-        pass
-
-    spec = get_qwen_vlm_spec(model_key)
-    return InferenceModelDescriptor(
-        key=spec.key,
-        model_id=spec.model_id,
-        family=spec.family,
-        mode="vlm",
-        recommended_quantization=spec.recommended_quantization,
-        notes=spec.notes,
-        capabilities=QWEN_VLM_CAPABILITIES,
-    )
+        return MODEL_DESCRIPTORS[model_key]
+    except KeyError as exc:
+        raise KeyError(
+            f"Unknown inference model key: {model_key}. "
+            f"Available keys: {', '.join(sorted(MODEL_DESCRIPTORS))}"
+        ) from exc

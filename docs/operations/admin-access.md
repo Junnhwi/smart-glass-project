@@ -1,17 +1,27 @@
 # Admin Access
 
-Shared local admin account for team use:
+The production admin account is created or updated by the `admin-bootstrap`
+service in `infra/compose/docker-compose.prod.yml`.
 
-- Email: `team-admin@smartglass.local`
-- Password: `TeamAdmin123!`
-- Role: `admin`
+Set these values in the root `.env` file before deployment:
 
-Local admin console:
+```env
+ADMIN_BOOTSTRAP_EMAIL=team-admin@smartglass.local
+ADMIN_BOOTSTRAP_PASSWORD=replace-with-a-private-password
+ADMIN_BOOTSTRAP_USER_ID=team-admin
+ADMIN_BOOTSTRAP_DISPLAY_NAME=Team Admin
+```
 
-- URL: `http://127.0.0.1:5173`
-- API base: `http://127.0.0.1:8002`
+Do not commit the real password. The bootstrap container updates the account
+role to `admin`, activates it, rotates the password, and revokes existing
+refresh sessions on repeated deployment.
 
-Notes:
+Admin console:
 
-- This account is intended for local development and shared team QA only.
-- The admin console can review users, device pairing requests, device activation state, and recent memory search/chat logs.
+- Production URL: `http://<NCP_SERVER_IP>:8080`
+- Local Vite URL: `http://127.0.0.1:5173`
+- API route from the production console: `/api`
+
+The console can review users, device pairing requests, device activation state,
+recent memory search/chat logs, and run image upload/inference polling with an
+active registered device.

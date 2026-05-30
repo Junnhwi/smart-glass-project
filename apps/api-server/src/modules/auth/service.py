@@ -253,6 +253,7 @@ class AuthRepository(Protocol):
         self,
         *,
         user_id: str,
+        password_hash: str | None = None,
         display_name: str | None = None,
         role: str | None = None,
         status: str | None = None,

@@ -16,9 +16,9 @@ repository code. It is a system overview; endpoint-level details live in
   BLE camera firmware. The current capture screen uses a Web Bluetooth-style
   path to connect to the BLE camera, request capture, receive JPEG chunks,
   upload the image, register the capture, and poll task status.
-- `apps/admin-web`: Vite/React admin UI. It contains dashboard, upload, system
-  status, settings, and user management screens. Some screens still use mock or
-  partially wired data.
+- `apps/admin-web`: Vite/React admin console. It connects to the API for admin
+  login, user/device management, capture upload, task polling, and query-log
+  inspection.
 - `packages/*`: Workspace packages for shared types, utilities, config, and UI
   kit placeholders.
 - `infra/*`: Docker, Compose, Nginx, Kubernetes, and Terraform scaffolding.
@@ -126,20 +126,22 @@ Current firmware behavior:
 
 ## Admin Web
 
-`apps/admin-web` is a Vite/React admin interface using `AdminLayout` and page
-components for dashboard, upload, status, settings, and user management.
+`apps/admin-web` is a Vite/React admin console. Its active entrypoint renders the
+API-connected console in `src/app/App.jsx`.
 
 Current implementation status:
 
-- Dashboard currently renders mock inference rows.
-- Upload page contains a direct-upload flow but its request shape does not fully
-  match the current `POST /media/upload-authorizations` contract, which expects
-  device-oriented upload authorization data.
-- System status and settings pages are UI-level admin surfaces rather than the
-  primary capture runtime.
-
-Treat admin-web as a management/demo surface, not as the source of truth for the
-capture pipeline contract.
+- Admin login uses the bootstrap account configured through environment
+  variables.
+- User devices can be listed, approved, and revoked through admin API
+  endpoints.
+- The upload panel selects an active device, requests a device-oriented upload
+  authorization, uploads directly to Object Storage, registers the capture, and
+  polls task status.
+- The production Compose stack serves the built SPA through Nginx and proxies
+  `/api/*` to `api-server`.
+- Browser direct upload still requires Object Storage CORS to allow the admin
+  web origin, `PUT`, and `Content-Type`.
 
 ## Storage And Persistence
 
@@ -174,8 +176,6 @@ The API server has real auth flows and demo-token support:
 ## Current Boundaries
 
 - The default architecture does not include a separate vector database.
-- Admin-web is not yet fully aligned with the media upload authorization
-  contract.
 - The app has manual BLE capture request behavior; a five-minute periodic
   capture scheduler is not implemented in the current app or firmware.
 - Hardware, BLE support, Object Storage credentials, bucket permissions, and

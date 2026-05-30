@@ -14,8 +14,6 @@ from src.contracts.vlm import (
     build_vlm_success_result,
 )
 from src.core.logging import configure_logging, get_logger
-from src.models.captioning import generate_caption
-from src.models.qwen_vlm import generate_qwen_vlm_metadata
 from src.adapters.ollama_adapter import generate_ollama_vlm_metadata
 from src.models.registry import resolve_inference_model
 from src.models.serving_profile import (
@@ -76,6 +74,20 @@ app.conf.update(
 )
 configure_logging()
 logger = get_logger(__name__)
+
+
+def generate_caption(*args, **kwargs):
+    from src.models.captioning import generate_caption as generate_local_caption
+
+    return generate_local_caption(*args, **kwargs)
+
+
+def generate_qwen_vlm_metadata(*args, **kwargs):
+    from src.models.qwen_vlm import (
+        generate_qwen_vlm_metadata as generate_local_qwen_vlm_metadata,
+    )
+
+    return generate_local_qwen_vlm_metadata(*args, **kwargs)
 
 
 @dataclass(frozen=True)

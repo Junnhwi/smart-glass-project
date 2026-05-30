@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8002';
+  import.meta.env.VITE_API_BASE_URL || '/api';
 const STORAGE_KEY = 'smart-glass-admin.session';
-const SHARED_ADMIN_EMAIL = 'team-admin@smartglass.local';
-const SHARED_ADMIN_PASSWORD = 'TeamAdmin123!';
 const AUTO_REFRESH_INTERVAL_MS = 3000;
+const TASK_POLL_INTERVAL_MS = 3000;
+const TASK_POLL_MAX_ATTEMPTS = 100;
 
 const formatTime = (value) => {
   if (!value) {
@@ -31,7 +31,9 @@ const buildErrorMessage = async (response) => {
     if (typeof parsed?.detail === 'string' && parsed.detail.trim()) {
       return parsed.detail.trim();
     }
-  } catch {}
+  } catch {
+    // Preserve non-JSON error bodies returned by proxies and upstream services.
+  }
 
   return rawText;
 };
@@ -63,8 +65,8 @@ const requestRefreshToken = async (refreshToken) => {
 };
 
 export default function App() {
-  const [email, setEmail] = useState(SHARED_ADMIN_EMAIL);
-  const [password, setPassword] = useState(SHARED_ADMIN_PASSWORD);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [session, setSession] = useState(() => {
     if (typeof window === 'undefined') {
       return null;
@@ -90,6 +92,11 @@ export default function App() {
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [busyActionKey, setBusyActionKey] = useState('');
   const [logFilter, setLogFilter] = useState('all');
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadDeviceId, setUploadDeviceId] = useState('');
+  const [uploadStatus, setUploadStatus] = useState('대기 중');
+  const [uploadResult, setUploadResult] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
   const refreshPromiseRef = useRef(null);
 
   const authToken = session?.accessToken || '';
@@ -177,6 +184,10 @@ export default function App() {
   }, [session?.user?.userId, users]);
   const selectedUser =
     visibleUsers.find((user) => user.userId === selectedUserId) || null;
+  const activeUploadDevices = useMemo(
+    () => selectedUserDevices.filter((device) => device.status === 'active'),
+    [selectedUserDevices]
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -217,6 +228,8 @@ export default function App() {
     return () => {
       window.clearTimeout(timer);
     };
+    // refreshSession intentionally follows the current session snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.accessTokenExpiresAt, session?.refreshToken]);
 
   const loadUsers = async ({ silent = false } = {}) => {
@@ -367,17 +380,32 @@ export default function App() {
     void loadUsers();
     void loadPendingPairings();
     void loadMemoryLogs({ userId: '', type: 'all' });
+    // Loader functions intentionally use the session bound to this auth token.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
   useEffect(() => {
     if (!selectedUserId) {
       setSelectedUserDevices([]);
+      setUploadDeviceId('');
       return;
     }
 
     void loadUserDevices(selectedUserId);
     void loadMemoryLogs({ userId: selectedUserId, type: logFilter });
+    // A user selection change is the only trigger needed for this refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken, selectedUserId]);
+
+  useEffect(() => {
+    if (
+      uploadDeviceId &&
+      activeUploadDevices.some((device) => device.deviceId === uploadDeviceId)
+    ) {
+      return;
+    }
+    setUploadDeviceId(activeUploadDevices[0]?.deviceId || '');
+  }, [activeUploadDevices, uploadDeviceId]);
 
   useEffect(() => {
     if (!authToken) {
@@ -385,6 +413,8 @@ export default function App() {
     }
 
     void loadMemoryLogs({ userId: selectedUserId, type: logFilter });
+    // selectedUserId is refreshed by the dedicated selection effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken, logFilter]);
 
   useEffect(() => {
@@ -413,6 +443,8 @@ export default function App() {
     return () => {
       window.clearInterval(interval);
     };
+    // Interval callbacks intentionally capture the latest visible selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken, logFilter, selectedUserId]);
 
   const handleLogin = async (event) => {
@@ -518,6 +550,113 @@ export default function App() {
     }
   };
 
+  const pollCaptureTask = async (taskId) => {
+    for (let attempt = 0; attempt < TASK_POLL_MAX_ATTEMPTS; attempt += 1) {
+      const task = await requestJson(
+        `/media/captures/tasks/${encodeURIComponent(taskId)}`
+      );
+      setUploadResult(task);
+      setUploadStatus(`추론 상태: ${task.status}`);
+      if (['completed', 'partial', 'failed'].includes(task.status)) {
+        return task;
+      }
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, TASK_POLL_INTERVAL_MS);
+      });
+    }
+    throw new Error('추론 결과 대기 시간이 초과되었습니다.');
+  };
+
+  const handleUpload = async () => {
+    if (!selectedUser?.userId) {
+      setError('업로드할 사용자를 선택해 주세요.');
+      return;
+    }
+    if (!uploadDeviceId) {
+      setError('선택한 사용자의 활성 기기가 필요합니다.');
+      return;
+    }
+    if (!uploadFile) {
+      setError('업로드할 이미지 파일을 선택해 주세요.');
+      return;
+    }
+
+    setIsUploading(true);
+    setError('');
+    setFeedback('');
+    setUploadResult(null);
+
+    try {
+      const capturedAt = new Date().toISOString();
+      setUploadStatus('업로드 허용 요청 중');
+      const authorization = await requestJson('/media/upload-authorizations', {
+        method: 'POST',
+        body: {
+          deviceId: uploadDeviceId,
+          taskType: 'metadata',
+          capturedAt,
+          fileName: uploadFile.name,
+          contentType: uploadFile.type || undefined,
+        },
+      });
+      if (authorization.status !== 'allowed' || !authorization.upload) {
+        throw new Error('선택한 기기의 업로드가 허용되지 않았습니다.');
+      }
+
+      const uploadPlan = authorization.upload;
+      const contentType =
+        uploadFile.type || uploadPlan.sourceImage?.contentType || '';
+      setUploadStatus('Object Storage 업로드 중');
+      const uploadResponse = await fetch(uploadPlan.uploadUrl, {
+        method: 'PUT',
+        headers: contentType ? { 'Content-Type': contentType } : {},
+        body: uploadFile,
+      });
+      if (!uploadResponse.ok) {
+        throw new Error(
+          (await uploadResponse.text()) ||
+            `Object Storage upload failed with ${uploadResponse.status}`
+        );
+      }
+
+      setUploadStatus('캡처 등록 중');
+      const capture = await requestJson('/media/captures', {
+        method: 'POST',
+        body: {
+          captureId: uploadPlan.captureId,
+          requestId: uploadPlan.requestId,
+          memoryId: uploadPlan.memoryId,
+          userId: authorization.userId,
+          deviceId: authorization.deviceId,
+          taskType: uploadPlan.taskType,
+          capturedAt: uploadPlan.capturedAt,
+          sourceImage: uploadPlan.sourceImage,
+        },
+      });
+      setUploadResult(capture);
+      setUploadStatus(`추론 상태: ${capture.worker?.status || 'queued'}`);
+
+      if (capture.taskId) {
+        const task = await pollCaptureTask(capture.taskId);
+        if (task.status === 'failed') {
+          throw new Error(task.worker?.error || '추론 작업이 실패했습니다.');
+        }
+      }
+
+      setFeedback('이미지 업로드와 추론 저장이 완료되었습니다.');
+      await loadMemoryLogs({ userId: selectedUser.userId, type: logFilter });
+    } catch (nextError) {
+      setUploadStatus('업로드 또는 추론 실패');
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : '이미지 업로드를 완료하지 못했습니다.'
+      );
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const userSummary = useMemo(() => {
     const activeUsers = visibleUsers.filter((user) => user.status === 'active').length;
     const failedLogs = memoryLogs.filter((log) => log.totalHits === 0).length;
@@ -575,9 +714,10 @@ export default function App() {
           </div>
 
           <div className="session-summary">
-            <p className="session-title">팀 공용 계정</p>
-            <p className="mono">{SHARED_ADMIN_EMAIL}</p>
-            <p className="mono">{SHARED_ADMIN_PASSWORD}</p>
+            <p className="session-title">관리자 전용 로그인</p>
+            <p className="muted-copy">
+              배포 환경에서 bootstrap한 관리자 계정으로 로그인하세요.
+            </p>
           </div>
 
           {session?.user ? (
@@ -600,7 +740,7 @@ export default function App() {
                     type="email"
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
-                    placeholder={SHARED_ADMIN_EMAIL}
+                    placeholder="admin@example.com"
                   />
                 </label>
                 <label className="field">
@@ -609,7 +749,7 @@ export default function App() {
                     type="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
-                    placeholder={SHARED_ADMIN_PASSWORD}
+                    placeholder="관리자 비밀번호"
                   />
                 </label>
                 <button className="primary-button" type="submit" disabled={isLoggingIn}>
@@ -618,8 +758,7 @@ export default function App() {
               </form>
 
               <p className="muted-copy">
-                위 공용 계정으로 로그인하면 사용자 목록, 기기 승인, 검색/채팅 로그
-                패널이 열립니다.
+                로그인하면 사용자 목록, 기기 승인, 검색/채팅 로그 패널이 열립니다.
               </p>
             </>
           )}
@@ -829,6 +968,71 @@ export default function App() {
             {selectedUser && !isLoadingDevices && selectedUserDevices.length === 0 ? (
               <p className="muted-copy">이 사용자에게 등록된 기기가 아직 없습니다.</p>
             ) : null}
+          </div>
+        </section>
+
+        <section className="panel wide-panel">
+          <div className="panel-header">
+            <div>
+              <p className="panel-eyebrow">Capture Pipeline</p>
+              <h2>이미지 업로드 및 추론</h2>
+            </div>
+            <span className="pill neutral">{uploadStatus}</span>
+          </div>
+
+          <div className="upload-grid">
+            <div className="login-form">
+              <label className="field">
+                <span>대상 사용자</span>
+                <input value={selectedUser?.displayName || ''} disabled />
+              </label>
+              <label className="field">
+                <span>활성 기기</span>
+                <select
+                  className="log-filter"
+                  value={uploadDeviceId}
+                  onChange={(event) => setUploadDeviceId(event.target.value)}
+                >
+                  <option value="">활성 기기를 선택하세요</option>
+                  {activeUploadDevices.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.displayName || device.deviceId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>이미지 파일</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => {
+                    setUploadFile(event.target.files?.[0] || null);
+                    setUploadResult(null);
+                    setUploadStatus('대기 중');
+                  }}
+                />
+              </label>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  void handleUpload();
+                }}
+                disabled={!authToken || isUploading}
+              >
+                {isUploading ? '업로드 및 추론 진행 중' : '업로드 및 추론 실행'}
+              </button>
+              <p className="muted-copy">
+                선택한 사용자의 활성 기기로 presigned PUT 업로드 후 Celery task를
+                polling합니다.
+              </p>
+            </div>
+            <pre className="result-json">
+              {uploadResult
+                ? JSON.stringify(uploadResult, null, 2)
+                : '업로드 후 task 상태와 결과가 표시됩니다.'}
+            </pre>
           </div>
         </section>
 
