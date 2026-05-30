@@ -38,7 +38,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -355,9 +356,40 @@ button {
   border: 1px solid var(--border);
 }
 
+.upload-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  gap: 18px;
+}
+
+.log-filter {
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid rgba(95, 107, 125, 0.2);
+  border-radius: 14px;
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.result-json {
+  min-height: 280px;
+  max-height: 520px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  border-radius: 16px;
+  background: #172033;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 1120px) {
   .hero,
-  .dashboard-grid {
+  .dashboard-grid,
+  .upload-grid {
     grid-template-columns: 1fr;
   }
 
