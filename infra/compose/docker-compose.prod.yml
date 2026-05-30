@@ -70,10 +70,6 @@ services:
         condition: service_healthy
     environment:
       API_CAPTURE_DATABASE_URL: postgresql://api_server:api_server@postgres:5432/smart_glass
-      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:-}
-      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-}
-      ADMIN_BOOTSTRAP_USER_ID: ${ADMIN_BOOTSTRAP_USER_ID:-team-admin}
-      ADMIN_BOOTSTRAP_DISPLAY_NAME: ${ADMIN_BOOTSTRAP_DISPLAY_NAME:-Team Admin}
     command: ["python", "/app/scripts/bootstrap_admin.py"]
 
   inference-worker:
