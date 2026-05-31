@@ -400,6 +400,13 @@ def _collect_vlm_expansion_context(records: list[MemoryRecord]) -> dict[str, str
             locations.append(loc.name)
         elif loc.address:
             locations.append(loc.address)
+        # pipeline_output 내 개별 사물명도 수집
+        po = rec.pipeline_output
+        if isinstance(po, dict):
+            for obj in po.get("objects", []):
+                name = obj.get("name", "")
+                if name:
+                    all_objects.append(name)
 
     def _dedup(lst: list[str]) -> str:
         return ", ".join(dict.fromkeys(x for x in lst if x)) or "(없음)"
@@ -481,6 +488,29 @@ def _format_hit_context_gemma(index: int, hit: SearchHit) -> str:
     ocr_str = memory.ocr_text or ""
     note_str = memory.note or ""
 
+    # pipeline_output 내 개별 사물별 상세 위치 정보 포맷팅
+    pipeline_detail = ""
+    po = memory.pipeline_output
+    if isinstance(po, dict):
+        obj_lines = []
+        for obj in po.get("objects", []):
+            name = obj.get("name", "")
+            pos = obj.get("position", {})
+            hint = pos.get("hint", "") or pos.get("positionHint") or pos.get("position_hint") or ""
+            surface = pos.get("surface") or ""
+            nearby = ", ".join(obj.get("nearby_objects") or obj.get("nearby") or [])
+            if name:
+                detail = f"  · {name}"
+                if hint:
+                    detail += f" — {hint}"
+                if surface:
+                    detail += f" ({surface})"
+                if nearby:
+                    detail += f", 주변: {nearby}"
+                obj_lines.append(detail)
+        if obj_lines:
+            pipeline_detail = "\n- 사물별 상세 위치:\n" + "\n".join(obj_lines)
+
     lines = [
         f"[기록 {index}]",
         f"- 촬영 시각: {captured_str}",
@@ -489,6 +519,8 @@ def _format_hit_context_gemma(index: int, hit: SearchHit) -> str:
         f"- 전체 위치 힌트: {position}",
         f"- 감지된 사물 목록: {objects_str}",
     ]
+    if pipeline_detail:
+        lines.append(pipeline_detail)
     if ocr_str:
         lines.append(f"- 이미지 내 텍스트(OCR): {ocr_str}")
     if note_str:

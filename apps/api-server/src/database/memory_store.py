@@ -288,6 +288,7 @@ class MemoryRecord:
     note: str | None
     position_hint: str | None
     location: MemoryLocation
+    pipeline_output: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -304,6 +305,7 @@ class MemoryRecord:
             "note": self.note,
             "position_hint": self.position_hint,
             "location": self.location.to_dict(),
+            "pipeline_output": self.pipeline_output,
         }
 
     @classmethod
@@ -325,6 +327,7 @@ class MemoryRecord:
             note=_normalize_text(payload.get("note")) or None,
             position_hint=_normalize_text(payload.get("position_hint")) or None,
             location=MemoryLocation.from_dict(payload.get("location")),
+            pipeline_output=payload.get("pipeline_output"),
         )
 
 
@@ -471,6 +474,7 @@ def memory_record_from_vlm_result(result: Mapping[str, Any]) -> MemoryRecord:
         note=None,
         position_hint=position_hint,
         location=location,
+        pipeline_output=pipeline_output,
     )
 
 
