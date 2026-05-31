@@ -540,14 +540,11 @@ def _run_answer_generation(
     context = "\n".join(
         _format_hit_context_gemma(i + 1, hit) for i, hit in enumerate(hits[:max_hits])
     )
-    try:
-        raw = client.call(
-            system=_ANSWER_SYSTEM,
-            user=_ANSWER_USER_TMPL.format(query=query, context=context),
-        )
-        return GemmaLLMClient.clean_output(raw)
-    except Exception:
-        return hits[0].memory.scene_summary or hits[0].memory.caption or "위치를 찾았지만 답변 생성에 실패했어요."
+    raw = client.call(
+        system=_ANSWER_SYSTEM,
+        user=_ANSWER_USER_TMPL.format(query=query, context=context),
+    )
+    return GemmaLLMClient.clean_output(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -965,8 +962,11 @@ class MemoryQueryService:
         """
         if isinstance(self.answer_generator, Gemma3AnswerGenerator):
             # Stage 1 + 2: 의도 분석 + VLM-aware 쿼리 확장
-            all_records = self.repository.list_by_user(user_id)
-            augmented_query = self.answer_generator.expand_query(query, all_records)
+            # _search_hits 와 동일한 제한(max(top_k*10, 40))을 적용해 대용량 계정 타임아웃 방지
+            resolved_top_k = top_k if isinstance(top_k, int) and top_k > 0 else self.default_top_k
+            expansion_limit = max(resolved_top_k * 10, 40)
+            expansion_records = self.repository.list_by_user(user_id, limit=expansion_limit)
+            augmented_query = self.answer_generator.expand_query(query, expansion_records)
             hits = self.search(user_id, augmented_query, top_k)
         else:
             hits = self.search(user_id, query, top_k)
