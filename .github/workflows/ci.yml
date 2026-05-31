@@ -62,4 +62,4 @@ jobs:
         run: npm ci
 
       - name: Typecheck smart-glass-client
-        run: npx tsc --noEmit -p apps/smart-glass-client/tsconfig.json
+        run: ./node_modules/.bin/tsc --noEmit -p apps/smart-glass-client/tsconfig.json
