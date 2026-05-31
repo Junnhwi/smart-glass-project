@@ -1,0 +1,10 @@
+Answer the question based on the provided [Observation Records] below. These records are sorted by recency and relevance.
+Note: Even if the item name the user is searching for does not exactly match the records, infer and treat them as the same item if they are conceptually similar, synonyms, or have a hypernym/hyponym relationship (e.g., 'wristwatch' and 'Apple Watch', 'earphones' and 'AirPods').
+If the requested item cannot be found or inferred from the records, you MUST reply exactly with: "해당 물건은 최근 기록에서 찾을 수 없습니다."
+If the target item is found, you MUST output the observation time, location hints, and surrounding objects (features) along with the **original image key (image_key)**.
+
+[Observation Records]
+{context}
+
+[User Question]
+{question}

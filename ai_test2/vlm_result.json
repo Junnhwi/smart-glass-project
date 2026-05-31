@@ -1,0 +1,134 @@
+{
+  "status": "success",
+  "requestId": "ai-test2-request-001",
+  "taskType": "caption",
+  "memoryId": "ai-test2-memory-001",
+  "userId": "ai-test2-user",
+  "capturedAt": "2026-05-29T20:18:57Z",
+  "sourceImage": {
+    "imageKey": "ai_test2/esp640x480.jfif",
+    "imageUrl": null,
+    "contentType": "image/jpeg"
+  },
+  "metadata": {
+    "caption": "책상 위에 노트북, 스마트폰, 충전기, 컵과 스탠드 조명이 놓여 있는 작업 공간의 모습입니다.",
+    "sceneSummary": "전자기기와 소품이 놓인 책상 위 풍경",
+    "detectedObjects": [
+      "노트북",
+      "스마트폰",
+      "충전기",
+      "컵",
+      "스탠드 조명",
+      "마우스패드"
+    ],
+    "tags": [
+      "책상",
+      "작업공간",
+      "노트북",
+      "스마트폰",
+      "충전기",
+      "조명",
+      "일상"
+    ],
+    "ocrText": null,
+    "positionHint": "화면 왼쪽 하단의 노트북과 오른쪽 상단의 스탠드 조명 사이의 책상 영역",
+    "location": null
+  },
+  "pipelineOutput": {
+    "capture_id": "ollama-130643786",
+    "timestamp": "2026-05-29T20:19:26.470772113Z",
+    "objects": [
+      {
+        "object_id": 1,
+        "name": "노트북",
+        "position": {
+          "hint": "화면 왼쪽 하단",
+          "surface": "책상 위 왼쪽"
+        },
+        "nearby_objects": [
+          "마우스패드"
+        ]
+      },
+      {
+        "object_id": 2,
+        "name": "스마트폰",
+        "position": {
+          "hint": "충전기 오른쪽",
+          "surface": "마우스패드 위"
+        },
+        "nearby_objects": [
+          "충전기",
+          "컵"
+        ]
+      },
+      {
+        "object_id": 3,
+        "name": "충전기",
+        "position": {
+          "hint": "스마트폰 왼쪽",
+          "surface": "마우스패드 위"
+        },
+        "nearby_objects": [
+          "스마트폰",
+          "노트북"
+        ]
+      },
+      {
+        "object_id": 4,
+        "name": "컵",
+        "position": {
+          "hint": "스탠드 조명 아래",
+          "surface": "책상 위 오른쪽"
+        },
+        "nearby_objects": [
+          "스마트폰",
+          "스탠드 조명"
+        ]
+      },
+      {
+        "object_id": 5,
+        "name": "스탠드 조명",
+        "position": {
+          "hint": "화면 오른쪽 상단",
+          "surface": "책상 위 오른쪽"
+        },
+        "nearby_objects": [
+          "컵"
+        ]
+      },
+      {
+        "object_id": 6,
+        "name": "마우스패드",
+        "position": {
+          "hint": "책상 중앙 전체",
+          "surface": "책상 위"
+        },
+        "nearby_objects": [
+          "노트북",
+          "스마트폰",
+          "충전기"
+        ]
+      }
+    ],
+    "inference_time": 31.005,
+    "done_reason": "stop"
+  },
+  "providerMetadata": {
+    "modelKey": "gemma4:31b-cloud",
+    "modelId": "gemma4:31b-cloud",
+    "modelFamily": null,
+    "quantization": "none",
+    "dtype": "float16",
+    "provider": "ollama",
+    "capabilities": null,
+    "executionPolicy": null,
+    "raw": null
+  },
+  "runtime": {
+    "latencySec": 31.005,
+    "peakMemoryMb": 0.0,
+    "loadTimeSec": 0.0,
+    "modelInferenceSec": 31.005,
+    "taskLatencySec": 31.005
+  }
+}

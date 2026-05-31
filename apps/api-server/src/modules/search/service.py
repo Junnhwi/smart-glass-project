@@ -205,6 +205,534 @@ class OllamaChatClient:
         return content
 
 
+# ---------------------------------------------------------------------------
+# Gemma3 LLM Client (Gemma3-optimised parameters)
+# ---------------------------------------------------------------------------
+
+class GemmaLLMClient:
+    """
+    Gemma3-optimised Ollama chat client.
+    - temperature=0.3 (grounded RAG)
+    - repeat_penalty=1.0 (Gemma3 does not need aggressive penalty)
+    - num_ctx=4096 (accommodates rich VLM context)
+    - Provides a single-turn call(system, user) helper.
+    - Strips LLM-style markdown artefacts from final output.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        timeout_sec: float = 60.0,
+        http_client: ChatHttpClient | None = None,
+    ) -> None:
+        self.base_url = " ".join((base_url or "").strip().split())
+        self.model = " ".join((model or "").strip().split())
+        self.api_key = " ".join((api_key or "").strip().split()) or None
+        self.timeout_sec = max(5.0, float(timeout_sec))
+        self.http_client = http_client or httpx
+
+        if not self.base_url:
+            raise ValueError("API_LLM_OLLAMA_BASE_URL is required")
+        if not self.model:
+            raise ValueError("API_LLM_OLLAMA_MODEL is required")
+
+    def call(self, *, system: str, user: str) -> str:
+        """Single-turn structured call with Gemma3 options."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.3,
+                "repeat_penalty": 1.0,
+                "num_ctx": 4096,
+            },
+        }
+        try:
+            resp = self.http_client.post(
+                f"{self.base_url.rstrip('/')}/chat",
+                json=body,
+                headers=headers,
+                timeout=self.timeout_sec,
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            raise RuntimeError(f"Gemma LLM call failed: {exc}") from exc
+
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Gemma LLM response is invalid")
+        content: str = (
+            (payload.get("message") or {}).get("content") or ""
+        ).strip()
+        return content
+
+    @staticmethod
+    def clean_output(text: str) -> str:
+        """Remove markdown artefacts so answers read naturally."""
+        import re
+        text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
+        text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^[\-\*•]\s+", "", text, flags=re.MULTILINE)
+        text = re.sub(r"\(?image_key\s*:\s*\S+\)?", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"[ \t]+", " ", text)
+        return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Stage 1 – Intent Analysis
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class _IntentResult:
+    target_object: str
+    intent_summary: str
+
+
+_INTENT_SYSTEM = """\
+[역할]
+당신은 스마트 글라스 기억 보조 시스템의 의도 분석 모듈입니다.
+사용자 발화에서 찾고 있는 핵심 사물(명사)을 추출하는 것이 유일한 임무입니다.
+
+[출력 규칙]
+- 반드시 아래 형식의 JSON 하나만 출력하세요. 설명이나 마크다운은 절대 포함하지 마세요.
+- {"target_object": "<한국어 명사>", "intent_summary": "<한 문장 한국어 요약>"}
+- target_object: 브랜드명은 그대로 유지하세요 (예: 에어팟, 애플워치, 갤럭시버즈).
+- intent_summary: 사용자가 무엇을 원하는지 한 문장으로 설명하세요.
+"""
+
+_INTENT_USER_TMPL = """\
+[사용자 발화]
+"{query}"
+"""
+
+
+def _run_intent_analysis(client: GemmaLLMClient, query: str) -> _IntentResult:
+    import json as _json
+    import re as _re
+
+    try:
+        raw = client.call(system=_INTENT_SYSTEM, user=_INTENT_USER_TMPL.format(query=query))
+        match = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if match:
+            parsed = _json.loads(match.group(0))
+            return _IntentResult(
+                target_object=(parsed.get("target_object") or query).strip(),
+                intent_summary=(parsed.get("intent_summary") or "").strip(),
+            )
+    except Exception:
+        pass
+    return _IntentResult(target_object=query.strip(), intent_summary="")
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 – Query Expansion (VLM-context-aware)
+# ---------------------------------------------------------------------------
+
+_EXPANSION_SYSTEM = """\
+[역할]
+당신은 한국어 사물 검색 시스템의 쿼리 확장 모듈입니다.
+
+[지침]
+- 사용자가 찾는 사물명과 VLM(시각 AI)이 실제로 촬영된 장면에서 교배한 모든 정보를 참고하여
+  검색에 활용할 수 있는 유사어·브랜드명·상위어·하위어 목록을 생성하세요.
+- 반드시 아래 형식의 JSON 하나만 출력하세요. JSON 외 텍스트는 절대 포함하지 마세요.
+- {"expanded_terms": ["term1", "term2", ...]}
+- VLM이 감지한 사물 중 찾는 사물과 의미적으로 관련 있는 항목도 포함하세요.
+- 실제 현장에 있는 사물명은 원문 그대로 포함하세요.
+- 최대 14개 이내로 작성하세요.
+"""
+
+_EXPANSION_USER_TMPL = """\
+[검색 대상 사물]
+{target_object}
+
+[VLM이 기억 기록에서 실제 감지한 사물 목록]
+{vlm_objects}
+
+[VLM 장면 태그]
+{vlm_tags}
+
+[VLM 장면 설명 (caption)]
+{vlm_caption}
+
+[VLM 장면 요약]
+{vlm_summary}
+
+[VLM 전체 위치 힌트]
+{vlm_position}
+
+[VLM 촬영 장소]
+{vlm_location}
+"""
+
+
+def _collect_vlm_expansion_context(records: list[MemoryRecord]) -> dict[str, str]:
+    all_objects: list[str] = []
+    all_tags: list[str] = []
+    captions: list[str] = []
+    summaries: list[str] = []
+    positions: list[str] = []
+    locations: list[str] = []
+
+    for rec in records:
+        all_objects.extend(rec.detected_objects)
+        all_tags.extend(rec.tags)
+        if rec.caption:
+            captions.append(rec.caption)
+        if rec.scene_summary:
+            summaries.append(rec.scene_summary)
+        if rec.position_hint:
+            positions.append(rec.position_hint)
+        loc = rec.location
+        if loc.name:
+            locations.append(loc.name)
+        elif loc.address:
+            locations.append(loc.address)
+
+    def _dedup(lst: list[str]) -> str:
+        return ", ".join(dict.fromkeys(x for x in lst if x)) or "(없음)"
+
+    return {
+        "vlm_objects": _dedup(all_objects),
+        "vlm_tags": _dedup(all_tags),
+        "vlm_caption": _dedup(captions),
+        "vlm_summary": _dedup(summaries),
+        "vlm_position": _dedup(positions),
+        "vlm_location": _dedup(locations),
+    }
+
+
+def _run_query_expansion(
+    client: GemmaLLMClient,
+    target_object: str,
+    records: list[MemoryRecord],
+) -> list[str]:
+    import json as _json
+    import re as _re
+
+    ctx = _collect_vlm_expansion_context(records)
+    try:
+        raw = client.call(
+            system=_EXPANSION_SYSTEM,
+            user=_EXPANSION_USER_TMPL.format(target_object=target_object, **ctx),
+        )
+        match = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if match:
+            parsed = _json.loads(match.group(0))
+            terms = parsed.get("expanded_terms", [])
+            if isinstance(terms, list):
+                return [str(t).strip() for t in terms if str(t).strip()]
+    except Exception:
+        pass
+    return [target_object]
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 – Answer Generation (Gemma3-optimised)
+# ---------------------------------------------------------------------------
+
+_ANSWER_SYSTEM = """\
+[역할]
+당신은 스마트 글라스 착용자의 일상 기억을 도와주는 친근하고 자연스러운 한국어 AI 도우미 Memobot입니다.
+
+[지침]
+1. 반드시 자연스러운 구어체 한국어(~요/~어요 체)로만 답변하세요.
+2. 마크다운(**굵게**, ## 제목, - 목록 등)을 절대 사용하지 마세요.
+3. image_key, memory_id, score 같은 기술적인 필드명은 언급하지 마세요.
+4. 기록에 없는 정보는 절대 추측하거나 지어내지 마세요.
+5. 가장 최근 기록의 위치 정보(위치 힌트, 주변 사물, 장면 요약)를 활용해 구체적으로 안내하세요.
+6. 답변은 2~3문장 이내로 간결하게 작성하세요.
+"""
+
+_ANSWER_USER_TMPL = """\
+[사용자 질문]
+{query}
+
+[검색된 기억 기록 (최신순)]
+{context}
+
+위 기록만을 근거로 사용자의 질문에 자연스럽게 답변하세요.
+기록에 찾는 사물이 없으면 "기록을 찾지 못했다"고 솔직하게 말하고 다른 이름으로 다시 물어보라고 안내하세요.
+"""
+
+
+def _format_hit_context_gemma(index: int, hit: SearchHit) -> str:
+    """MemoryRecord의 모든 VLM 필드를 Gemma3 답변 컨텍스트로 포맷."""
+    memory = hit.memory
+    captured_str = format_timestamp(memory.captured_at) or memory.captured_at or "알 수 없음"
+    scene = memory.scene_summary or memory.caption or "알 수 없음"
+    position = memory.position_hint or "알 수 없음"
+    objects_str = ", ".join(memory.detected_objects[:10]) if memory.detected_objects else "없음"
+
+    loc = memory.location
+    location_str = loc.name or loc.address or "정보 없음"
+    ocr_str = memory.ocr_text or ""
+    note_str = memory.note or ""
+
+    lines = [
+        f"[기록 {index}]",
+        f"- 촬영 시각: {captured_str}",
+        f"- 촬영 장소: {location_str}",
+        f"- 장면 요약: {scene}",
+        f"- 전체 위치 힌트: {position}",
+        f"- 감지된 사물 목록: {objects_str}",
+    ]
+    if ocr_str:
+        lines.append(f"- 이미지 내 텍스트(OCR): {ocr_str}")
+    if note_str:
+        lines.append(f"- 사용자 메모: {note_str}")
+    return "\n".join(lines) + "\n"
+
+
+def _run_answer_generation(
+    client: GemmaLLMClient,
+    query: str,
+    hits: list[SearchHit],
+    max_hits: int = 3,
+) -> str:
+    if not hits:
+        return "해당 물건에 대한 최근 기록을 찾지 못했어요. 다른 이름이나 설명으로 다시 물어봐 주시겠어요?"
+
+    context = "\n".join(
+        _format_hit_context_gemma(i + 1, hit) for i, hit in enumerate(hits[:max_hits])
+    )
+    try:
+        raw = client.call(
+            system=_ANSWER_SYSTEM,
+            user=_ANSWER_USER_TMPL.format(query=query, context=context),
+        )
+        return GemmaLLMClient.clean_output(raw)
+    except Exception:
+        return hits[0].memory.scene_summary or hits[0].memory.caption or "위치를 찾았지만 답변 생성에 실패했어요."
+
+
+# ---------------------------------------------------------------------------
+# Gemma3AnswerGenerator  (AnswerGenerator Protocol 구현)
+# ---------------------------------------------------------------------------
+
+class Gemma3AnswerGenerator:
+    """
+    3-stage pipeline (의도 분석 → VLM-aware 쿼리 확장 → 답변 생성).
+
+    MemoryQueryService.chat() 이 호출하는 generate() 외에도,
+    검색 전 단계(의도 분석 + 쿼리 확장)를 위해
+    expand_query(query, records) 를 별도로 제공합니다.
+    """
+
+    def __init__(
+        self,
+        client: GemmaLLMClient,
+        *,
+        fallback_generator: TemplateAnswerGenerator | None = None,
+        max_context_hits: int = MAX_CONTEXT_HITS,
+    ) -> None:
+        self.client = client
+        self.fallback = fallback_generator or TemplateAnswerGenerator()
+        self.max_context_hits = max(1, min(max_context_hits, 5))
+
+    def expand_query(self, query: str, records: list[MemoryRecord]) -> str:
+        """
+        Stage 1 + Stage 2:
+        사용자 질문 → 의도 분석 → VLM 컨텍스트 기반 쿼리 확장.
+        반환값: 원본 질문 + 확장 키워드를 합친 augmented query string.
+        """
+        intent = _run_intent_analysis(self.client, query)
+        expanded = _run_query_expansion(self.client, intent.target_object, records)
+        if expanded:
+            return query + " " + " ".join(expanded)
+        return query
+
+    def generate(self, query: str, hits: list[SearchHit]) -> GeneratedAnswer:
+        """Stage 3: 검색 결과 기반 자연어 답변 생성."""
+        if not hits:
+            return self.fallback.generate(query, hits)
+
+        cited_ids = [h.memory.memory_id for h in hits[: self.max_context_hits]]
+        try:
+            text = _run_answer_generation(self.client, query, hits, self.max_context_hits)
+            return GeneratedAnswer(
+                text=text,
+                mode="gemma3_3stage",
+                cited_memory_ids=cited_ids,
+                confidence=round(max(0.55, min(hits[0].score + 0.2, 0.95)), 2),
+                reason=(
+                    f"Gemma3 3-stage pipeline: "
+                    f"model={self.client.model}, hits={len(hits)}"
+                ),
+            )
+        except Exception as exc:
+            fallback = self.fallback.generate(query, hits)
+            return GeneratedAnswer(
+                text=fallback.text,
+                mode=fallback.mode,
+                cited_memory_ids=fallback.cited_memory_ids,
+                confidence=fallback.confidence,
+                reason=f"Gemma3 fallback: {exc}. {fallback.reason or ''}",
+            )
+
+
+# ---------------------------------------------------------------------------
+# OllamaAnswerGenerator (레거시 호환, 단순 1-shot)
+# ---------------------------------------------------------------------------
+
+class OllamaAnswerGenerator:
+    def __init__(
+        self,
+        client: OllamaChatClient,
+        *,
+        fallback_generator: TemplateAnswerGenerator | None = None,
+        max_context_hits: int = MAX_CONTEXT_HITS,
+    ) -> None:
+        self.client = client
+        self.fallback_generator = fallback_generator or TemplateAnswerGenerator()
+        self.max_context_hits = max(1, min(max_context_hits, 5))
+
+    def _format_hit_context(self, index: int, hit: SearchHit) -> str:
+        memory = hit.memory
+        location = memory.location.name or memory.location.address or "Unknown"
+        captured_at = format_timestamp(memory.captured_at) or memory.captured_at or "Unknown"
+        detected_objects = ", ".join(memory.detected_objects[:8]) or "None"
+        tags = ", ".join(memory.tags[:8]) or "None"
+        position_hint = memory.position_hint or "None"
+        caption = memory.caption or "None"
+        scene_summary = memory.scene_summary or "None"
+        image_key = memory.image_key or "No image"
+
+        return (
+            f"[Memory {index}]\n"
+            f"- Image Key: {image_key}\n"
+            f"- Captured At: {captured_at}\n"
+            f"- Location: {location}\n"
+            f"- Position Hint: {position_hint}\n"
+            f"- Detected Objects: {detected_objects}\n"
+            f"- Tags: {tags}\n"
+            f"- Caption: {caption}\n"
+            f"- Scene Summary: {scene_summary}\n"
+        )
+
+    def _build_messages(self, query: str, hits: list[SearchHit]) -> list[dict[str, str]]:
+        context = "\n".join(
+            self._format_hit_context(index + 1, hit)
+            for index, hit in enumerate(hits[: self.max_context_hits])
+        )
+        system_prompt = "You are a smart assistant that helps the user find their belongings. Always respond in Korean."
+        user_prompt = (
+            "Answer the question based on the provided [Observation Records] below. These records are sorted by recency and relevance.\n"
+            "Note: Even if the item name the user is searching for does not exactly match the records, infer and treat them as the same item if they are conceptually similar, synonyms, or have a hypernym/hyponym relationship (e.g., 'wristwatch' and 'Apple Watch', 'earphones' and 'AirPods').\n"
+            "If the requested item cannot be found or inferred from the records, you MUST reply exactly with: \"해당 물건은 최근 기록에서 찾을 수 없습니다.\"\n"
+            "If the target item is found, you MUST output the observation time, location hints, and surrounding objects (features) along with the **original image key (image_key)**.\n\n"
+            f"[Observation Records]\n{context}\n\n"
+            f"[User Question]\n{query}"
+        )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def generate(self, query: str, hits: list[SearchHit]) -> GeneratedAnswer:
+        if not hits:
+            return self.fallback_generator.generate(query, hits)
+
+        cited_memory_ids = [
+            hit.memory.memory_id for hit in hits[: self.max_context_hits]
+        ]
+        try:
+            answer_text = self.client.chat(messages=self._build_messages(query, hits))
+            confidence = max(0.55, min(hits[0].score + 0.2, 0.95))
+            return GeneratedAnswer(
+                text=answer_text,
+                mode="ollama",
+                cited_memory_ids=cited_memory_ids,
+                confidence=round(confidence, 2),
+                reason=(
+                    f"Ollama model {self.client.model} generated the answer "
+                    "from retrieved memory context."
+                ),
+            )
+        except Exception as exc:
+            fallback = self.fallback_generator.generate(query, hits)
+            return GeneratedAnswer(
+                text=fallback.text,
+                mode=fallback.mode,
+                cited_memory_ids=fallback.cited_memory_ids,
+                confidence=fallback.confidence,
+                reason=(
+                    f"Ollama fallback triggered: {exc}. "
+                    f"{fallback.reason or 'Template answer was used.'}"
+                ),
+            )
+
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str | None = None,
+        timeout_sec: float = 20.0,
+        http_client: ChatHttpClient | None = None,
+    ) -> None:
+        self.base_url = self._normalize_text(base_url)
+        self.model = self._normalize_text(model)
+        self.api_key = self._normalize_text(api_key) or None
+        self.timeout_sec = max(5.0, float(timeout_sec))
+        self.http_client = http_client or httpx
+
+        if not self.base_url:
+            raise ValueError("API_LLM_OLLAMA_BASE_URL is required")
+        if not self.model:
+            raise ValueError("API_LLM_OLLAMA_MODEL is required")
+        if self.base_url.startswith("https://ollama.com") and not self.api_key:
+            raise ValueError("API_LLM_OLLAMA_API_KEY is required for Ollama cloud")
+
+    @staticmethod
+    def _normalize_text(value: Any) -> str:
+        if value is None:
+            return ""
+        return " ".join(str(value).strip().split())
+
+    def chat(self, *, messages: list[dict[str, str]]) -> str:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        response = self.http_client.post(
+            f"{self.base_url.rstrip('/')}/chat",
+            json={
+                "model": self.model,
+                "messages": messages,
+                "stream": False,
+            },
+            headers=headers,
+            timeout=self.timeout_sec,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Ollama chat response is invalid")
+
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("Ollama chat response is missing message")
+
+        content = self._normalize_text(message.get("content"))
+        if not content:
+            raise RuntimeError("Ollama chat response is missing content")
+        return content
+
+
 class OllamaAnswerGenerator:
     def __init__(
         self,
@@ -396,7 +924,21 @@ class MemoryQueryService:
         query: str,
         top_k: int | None = None,
     ) -> tuple[GeneratedAnswer, list[SearchHit]]:
-        hits = self.search(user_id, query, top_k)
+        """
+        3-stage 파이프라인 지원:
+        - answer_generator가 Gemma3AnswerGenerator이면
+          Stage1(의도 분석) + Stage2(쿼리 확장) 로 augmented query 를 먼저 생성,
+          확장된 쿼리로 검색 후 Stage3(답변 생성) 진행.
+        - 기타 제네레이터는 기존 쿼리 그대로 검색.
+        """
+        if isinstance(self.answer_generator, Gemma3AnswerGenerator):
+            # Stage 1 + 2: 의도 분석 + VLM-aware 쿼리 확장
+            all_records = self.repository.list_by_user(user_id)
+            augmented_query = self.answer_generator.expand_query(query, all_records)
+            hits = self.search(user_id, augmented_query, top_k)
+        else:
+            hits = self.search(user_id, query, top_k)
+        # Stage 3 (또는 기존 generate)
         answer = self.answer_generator.generate(query, hits)
         return answer, hits
 
@@ -410,20 +952,24 @@ def build_default_memory_query_service() -> MemoryQueryService:
         raise ValueError("API_CAPTURE_DATABASE_URL is required for memory queries")
     top_k_raw = os.getenv("API_MEMORY_DEFAULT_TOP_K", "5").strip() or "5"
     llm_provider = os.getenv("API_LLM_PROVIDER", "template").strip().lower() or "template"
-    answer_generator: TemplateAnswerGenerator | OllamaAnswerGenerator
+
+    answer_generator: TemplateAnswerGenerator | Gemma3AnswerGenerator | OllamaAnswerGenerator
     answer_generator = TemplateAnswerGenerator()
+
     if llm_provider == "ollama":
-        answer_generator = OllamaAnswerGenerator(
-            OllamaChatClient(
+        # Gemma3 3-stage pipeline이 기본
+        answer_generator = Gemma3AnswerGenerator(
+            GemmaLLMClient(
                 base_url=os.getenv("API_LLM_OLLAMA_BASE_URL", "https://ollama.com/api"),
                 model=os.getenv("API_LLM_OLLAMA_MODEL", "gemma3:4b-cloud"),
                 api_key=os.getenv("API_LLM_OLLAMA_API_KEY"),
                 timeout_sec=float(
-                    os.getenv("API_LLM_OLLAMA_TIMEOUT_SEC", "20").strip() or "20"
+                    os.getenv("API_LLM_OLLAMA_TIMEOUT_SEC", "60").strip() or "60"
                 ),
             ),
             fallback_generator=TemplateAnswerGenerator(),
         )
+
     return MemoryQueryService(
         PostgresMemoryStoreClient(database_url),
         default_top_k=max(1, min(int(top_k_raw), 20)),

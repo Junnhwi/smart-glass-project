@@ -1,0 +1,193 @@
+{
+  "metadata": {
+    "caption": "책상 위에 노트북, 스마트폰, 충전기, 컵과 스탠드 조명이 놓여 있는 작업 공간의 모습입니다.",
+    "sceneSummary": "전자기기와 소품이 놓인 책상 위 풍경",
+    "detectedObjects": [
+      "노트북",
+      "스마트폰",
+      "충전기",
+      "컵",
+      "스탠드 조명",
+      "마우스패드"
+    ],
+    "tags": [
+      "책상",
+      "작업공간",
+      "노트북",
+      "스마트폰",
+      "충전기",
+      "조명",
+      "일상"
+    ],
+    "ocrText": null,
+    "positionHint": "화면 왼쪽 하단의 노트북과 오른쪽 상단의 스탠드 조명 사이의 책상 영역",
+    "location": "방"
+  },
+  "elapsed_sec": 31.005,
+  "peak_memory_mb": 0.0,
+  "load_time_sec": 0.0,
+  "provider": "ollama",
+  "model_id": "gemma4:31b-cloud",
+  "model_key": "gemma4:31b-cloud",
+  "device": "external-ollama",
+  "quantization": "none",
+  "prompt": "You are a helpful assistant. Always respond in Korean. Output valid JSON only. No code blocks.\n\n이미지를 분석하여 다음 JSON 형식으로 출력하세요. 설명 없이 JSON만 출력하세요.\n\n{\n  \"caption\": \"사진 전체에 대한 한 문장 설명\",\n  \"sceneSummary\": \"전체 장면 10단어 이내 요약\",\n  \"location\": \"공간 유형 (예: 거실, 카페, 사무실)\",\n  \"detectedObjects\": [\"물체1\", \"물체2\"],\n  \"objects\": [\n    {\n      \"name\": \"물체명 (가장 구체적인 이름)\",\n      \"positionHint\": \"주변 물체 기준 상대적 위치 (예: 맥북 오른쪽, 아이폰 아래)\",\n      \"surface\": \"놓인 표면 또는 기준 물체. 예: 맥북 위, 테이블 위 왼쪽. 절대 비워두지 말 것\",\n      \"nearbyObjects\": [\"주변 물체1\", \"주변 물체2\"]\n    }\n  ],\n  \"tags\": [\"검색용 태그 키워드들\"],\n  \"ocrText\": \"보이는 텍스트가 있다면 기록, 없으면 null\",\n  \"positionHint\": \"가장 찾기 쉬운 메인 물체의 종합적 위치 단서\"\n}\n\n규칙:\n- 작거나 부분만 보여도 포함\n- 브랜드 제품은 브랜드명 포함 (예: AirPods, 맥북, 아이패드, Apple Pencil)\n- 태블릿/스마트패드/아이패드도 반드시 포함\n- 같은 종류가 여러 개면 모두 포함 (예: AirPods 케이스가 2개면 \"AirPods 케이스 1\", \"AirPods 케이스 2\")\n- 가구/벽/바닥 제외\n- JSON만 출력\n- 반드시 한국어로",
+  "system_prompt": null,
+  "raw_output_text": "{\n  \"caption\": \"책상 위에 노트북, 스마트폰, 충전기, 컵과 스탠드 조명이 놓여 있는 작업 공간의 모습입니다.\",\n  \"sceneSummary\": \"전자기기와 소품이 놓인 책상 위 풍경\",\n  \"location\": \"방\",\n  \"detectedObjects\": [\"노트북\", \"스마트폰\", \"충전기\", \"컵\", \"스탠드 조명\", \"마우스패드\"],\n  \"objects\": [\n    {\n      \"name\": \"노트북\",\n      \"positionHint\": \"화면 왼쪽 하단\",\n      \"surface\": \"책상 위 왼쪽\",\n      \"nearbyObjects\": [\"마우스패드\"]\n    },\n    {\n      \"name\": \"스마트폰\",\n      \"positionHint\": \"충전기 오른쪽\",\n      \"surface\": \"마우스패드 위\",\n      \"nearbyObjects\": [\"충전기\", \"컵\"]\n    },\n    {\n      \"name\": \"충전기\",\n      \"positionHint\": \"스마트폰 왼쪽\",\n      \"surface\": \"마우스패드 위\",\n      \"nearbyObjects\": [\"스마트폰\", \"노트북\"]\n    },\n    {\n      \"name\": \"컵\",\n      \"positionHint\": \"스탠드 조명 아래\",\n      \"surface\": \"책상 위 오른쪽\",\n      \"nearbyObjects\": [\"스마트폰\", \"스탠드 조명\"]\n    },\n    {\n      \"name\": \"스탠드 조명\",\n      \"positionHint\": \"화면 오른쪽 상단\",\n      \"surface\": \"책상 위 오른쪽\",\n      \"nearbyObjects\": [\"컵\"]\n    },\n    {\n      \"name\": \"마우스패드\",\n      \"positionHint\": \"책상 중앙 전체\",\n      \"surface\": \"책상 위\",\n      \"nearbyObjects\": [\"노트북\", \"스마트폰\", \"충전기\"]\n    }\n  ],\n  \"tags\": [\"책상\", \"작업공간\", \"노트북\", \"스마트폰\", \"충전기\", \"조명\", \"일상\"],\n  \"ocrText\": null,\n  \"positionHint\": \"화면 왼쪽 하단의 노트북과 오른쪽 상단의 스탠드 조명 사이의 책상 영역\"\n}",
+  "objects": [
+    {
+      "object_id": 1,
+      "name": "노트북",
+      "position": {
+        "hint": "화면 왼쪽 하단",
+        "surface": "책상 위 왼쪽"
+      },
+      "nearby_objects": [
+        "마우스패드"
+      ]
+    },
+    {
+      "object_id": 2,
+      "name": "스마트폰",
+      "position": {
+        "hint": "충전기 오른쪽",
+        "surface": "마우스패드 위"
+      },
+      "nearby_objects": [
+        "충전기",
+        "컵"
+      ]
+    },
+    {
+      "object_id": 3,
+      "name": "충전기",
+      "position": {
+        "hint": "스마트폰 왼쪽",
+        "surface": "마우스패드 위"
+      },
+      "nearby_objects": [
+        "스마트폰",
+        "노트북"
+      ]
+    },
+    {
+      "object_id": 4,
+      "name": "컵",
+      "position": {
+        "hint": "스탠드 조명 아래",
+        "surface": "책상 위 오른쪽"
+      },
+      "nearby_objects": [
+        "스마트폰",
+        "스탠드 조명"
+      ]
+    },
+    {
+      "object_id": 5,
+      "name": "스탠드 조명",
+      "position": {
+        "hint": "화면 오른쪽 상단",
+        "surface": "책상 위 오른쪽"
+      },
+      "nearby_objects": [
+        "컵"
+      ]
+    },
+    {
+      "object_id": 6,
+      "name": "마우스패드",
+      "position": {
+        "hint": "책상 중앙 전체",
+        "surface": "책상 위"
+      },
+      "nearby_objects": [
+        "노트북",
+        "스마트폰",
+        "충전기"
+      ]
+    }
+  ],
+  "scene_info": {
+    "summary": "책상 위에 노트북, 스마트폰, 충전기, 컵과 스탠드 조명이 놓여 있는 작업 공간의 모습입니다."
+  },
+  "pipeline_output": {
+    "capture_id": "ollama-130643786",
+    "timestamp": "2026-05-29T20:19:26.470772113Z",
+    "objects": [
+      {
+        "object_id": 1,
+        "name": "노트북",
+        "position": {
+          "hint": "화면 왼쪽 하단",
+          "surface": "책상 위 왼쪽"
+        },
+        "nearby_objects": [
+          "마우스패드"
+        ]
+      },
+      {
+        "object_id": 2,
+        "name": "스마트폰",
+        "position": {
+          "hint": "충전기 오른쪽",
+          "surface": "마우스패드 위"
+        },
+        "nearby_objects": [
+          "충전기",
+          "컵"
+        ]
+      },
+      {
+        "object_id": 3,
+        "name": "충전기",
+        "position": {
+          "hint": "스마트폰 왼쪽",
+          "surface": "마우스패드 위"
+        },
+        "nearby_objects": [
+          "스마트폰",
+          "노트북"
+        ]
+      },
+      {
+        "object_id": 4,
+        "name": "컵",
+        "position": {
+          "hint": "스탠드 조명 아래",
+          "surface": "책상 위 오른쪽"
+        },
+        "nearby_objects": [
+          "스마트폰",
+          "스탠드 조명"
+        ]
+      },
+      {
+        "object_id": 5,
+        "name": "스탠드 조명",
+        "position": {
+          "hint": "화면 오른쪽 상단",
+          "surface": "책상 위 오른쪽"
+        },
+        "nearby_objects": [
+          "컵"
+        ]
+      },
+      {
+        "object_id": 6,
+        "name": "마우스패드",
+        "position": {
+          "hint": "책상 중앙 전체",
+          "surface": "책상 위"
+        },
+        "nearby_objects": [
+          "노트북",
+          "스마트폰",
+          "충전기"
+        ]
+      }
+    ],
+    "inference_time": 31.005,
+    "done_reason": "stop"
+  },
+  "pipeline_mode": "ollama_adapter"
+}
