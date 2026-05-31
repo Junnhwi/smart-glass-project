@@ -8,6 +8,7 @@ import {
   Text,
   TextInput,
   View,
+  Switch,
 } from 'react-native';
 
 import {
@@ -69,6 +70,8 @@ export default function ProfileScreen() {
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
+  const [isAutoCaptureEnabled, setIsAutoCaptureEnabled] = useState(false);
+
   const loadDevices = async ({ silent = false } = {}) => {
     if (!currentUser) {
       setDevices([]);
@@ -123,6 +126,13 @@ export default function ProfileScreen() {
         setIsLoadingPairings(false);
       }
     }
+  };
+
+  const handleAutoCaptureChange = async (nextValue: boolean) => {
+    setIsAutoCaptureEnabled(nextValue);
+
+    // TODO:
+    // 추후 자동 촬영 설정 API 연결 예정
   };
 
   useEffect(() => {
@@ -371,10 +381,27 @@ export default function ProfileScreen() {
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>현재 기기</Text>
+
           <View style={styles.inputBox}>
             <Text style={[styles.value, commonStyles.selectableText]}>
               {getDeviceLabel(currentUser?.deviceId)}
             </Text>
+          </View>
+
+          <View style={styles.captureToggleContainer}>
+            <View>
+              <Text style={styles.captureLabel}>자동 촬영</Text>
+
+              <Text style={styles.captureDescription}>
+                5분마다 자동으로 촬영합니다.
+              </Text>
+            </View>
+
+            <Switch
+              value={isAutoCaptureEnabled}
+              onValueChange={handleAutoCaptureChange}
+              disabled={!currentUser?.deviceId}
+            />
           </View>
         </View>
 
@@ -1187,5 +1214,26 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: 16,
     lineHeight: 18,
+  },
+  captureToggleContainer: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  captureLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+
+  captureDescription: {
+    fontSize: 13,
+    color: "#64748B",
   },
 });
