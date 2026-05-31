@@ -206,3 +206,6 @@ apps/smart-glass-client/ios/
 
 # Backend (develop)
 apps/api-server/uploads/
+
+
+docs/report/

@@ -1,0 +1,98 @@
+{
+  "answer": "음, 스마트폰은 충전기 오른쪽, 마우스패드 위에 있대요. 컵이랑 같이 놓여있더라고요!",
+  "answerMode": "gemma3_3stage",
+  "query": "스마트폰 어딨어?",
+  "totalHits": 1,
+  "hits": [
+    {
+      "memoryId": "ai-test2-memory-001",
+      "score": 0.4,
+      "lexicalScore": 0.4,
+      "matchedTerms": [
+        "cell",
+        "cellphone",
+        "iphone",
+        "phone",
+        "phones",
+        "smartphone",
+        "스마트폰",
+        "아이폰",
+        "폰",
+        "핸드폰",
+        "휴대폰"
+      ],
+      "imageKey": "ai_test2/esp640x480.jfif",
+      "imageUrl": null,
+      "capturedAt": "2026-05-29T20:18:57Z",
+      "caption": "책상 위에 노트북, 스마트폰, 충전기, 컵과 스탠드 조명이 놓여 있는 작업 공간의 모습입니다.",
+      "sceneSummary": "전자기기와 소품이 놓인 책상 위 풍경",
+      "positionHint": "화면 왼쪽 하단의 노트북과 오른쪽 상단의 스탠드 조명 사이의 책상 영역",
+      "location": {
+        "name": null,
+        "address": null,
+        "latitude": null,
+        "longitude": null
+      },
+      "detectedObjects": [
+        "노트북",
+        "스마트폰",
+        "충전기",
+        "컵",
+        "스탠드 조명",
+        "마우스패드"
+      ],
+      "tags": [
+        "책상",
+        "작업공간",
+        "노트북",
+        "스마트폰",
+        "충전기",
+        "조명",
+        "일상",
+        "컵",
+        "스탠드 조명",
+        "마우스패드",
+        "화면 왼쪽 하단",
+        "책상 위 왼쪽",
+        "충전기 오른쪽",
+        "마우스패드 위",
+        "스마트폰 왼쪽",
+        "스탠드 조명 아래",
+        "책상 위 오른쪽",
+        "화면 오른쪽 상단",
+        "책상 중앙 전체",
+        "책상 위"
+      ]
+    }
+  ],
+  "citedMemoryIds": [
+    "ai-test2-memory-001"
+  ],
+  "confidence": 0.4,
+  "reason": "Qwen 3-stage pipeline: intent=스마트폰, expanded_terms=14, hits=1",
+  "_pipeline": {
+    "stage1_intent": {
+      "target_object": "스마트폰",
+      "intent_summary": "사용자가 스마트폰의 위치를 알고 싶어합니다."
+    },
+    "stage2_expansion": {
+      "expanded_terms": [
+        "스마트폰",
+        "휴대폰",
+        "모바일폰",
+        "폰",
+        "스마트 기기",
+        "갤럭시",
+        "아이폰",
+        "샤오미",
+        "안드로이드폰",
+        "스마트폰 케이스",
+        "폰 액세서리",
+        "모바일",
+        "디지털 기기",
+        "휴대용 기기"
+      ]
+    },
+    "model": "gemma3:4b-cloud"
+  }
+}
