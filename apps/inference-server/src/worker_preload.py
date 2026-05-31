@@ -6,18 +6,31 @@ from pathlib import Path
 from typing import Any, Dict
 
 from src.core.logging import get_logger
-from src.models.captioning import (
-    DEFAULT_DEVICE as DEFAULT_CAPTION_DEVICE,
-    get_caption_model_components,
-)
-from src.models.qwen_vlm import (
-    DEFAULT_DEVICE as DEFAULT_QWEN_DEVICE,
-    get_qwen_vlm_components,
-)
 from src.models.registry import resolve_inference_model
 from src.models.serving_profile import resolve_preload_execution_policy
 
 logger = get_logger(__name__)
+
+
+def get_caption_model_components(*args, **kwargs):
+    from src.models.captioning import get_caption_model_components as get_components
+
+    return get_components(*args, **kwargs)
+
+
+def get_qwen_vlm_components(*args, **kwargs):
+    from src.models.qwen_vlm import get_qwen_vlm_components as get_components
+
+    return get_components(*args, **kwargs)
+
+
+def _resolve_default_device(model_mode: str) -> str:
+    if model_mode == "vlm":
+        from src.models.qwen_vlm import DEFAULT_DEVICE
+    else:
+        from src.models.captioning import DEFAULT_DEVICE
+
+    return DEFAULT_DEVICE
 
 
 def get_preload_status_path() -> Path:
@@ -89,9 +102,7 @@ def preload_configured_model() -> Dict[str, Any]:
         model_key = descriptor.key
         model_id = descriptor.model_id
         model_mode = descriptor.mode
-        device_name = (
-            DEFAULT_QWEN_DEVICE if descriptor.mode == "vlm" else DEFAULT_CAPTION_DEVICE
-        )
+        device_name = _resolve_default_device(descriptor.mode)
         loading_payload = {
             **loading_payload,
             "status": "loading",
