@@ -26,6 +26,14 @@ TIME_REFERENCE_CUES = (
     "오전",
     "오후",
 )
+NOT_FOUND_ANSWER_CUES = (
+    "최근 기록에서 찾을 수 없습니다",
+    "기록을 찾지 못",
+    "찾지 못했",
+    "찾을 수 없",
+    "관련 기록을 찾지 못",
+    "해당 물건에 대한 최근 기록을 찾지 못",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +169,8 @@ def _append_observation_time_if_missing(
 ) -> str:
     cleaned = " ".join(str(answer_text or "").split())
     if not cleaned or not hits:
+        return cleaned
+    if any(cue in cleaned for cue in NOT_FOUND_ANSWER_CUES):
         return cleaned
     if any(cue in cleaned for cue in TIME_REFERENCE_CUES):
         return cleaned
