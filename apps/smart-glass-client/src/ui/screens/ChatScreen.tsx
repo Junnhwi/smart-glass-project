@@ -49,6 +49,30 @@ const suggestedQueries = [
   '노트북이 있던 장면 찾아줘',
 ];
 
+const formatCapturedAtKst = (capturedAt?: string | null) => {
+  if (!capturedAt) {
+    return null;
+  }
+
+  const timestamp = new Date(capturedAt);
+  const time = timestamp.getTime();
+  if (Number.isNaN(time)) {
+    return capturedAt;
+  }
+
+  const kstTime = new Date(time + 9 * 60 * 60 * 1000);
+  const year = kstTime.getUTCFullYear();
+  const month = String(kstTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(kstTime.getUTCDate()).padStart(2, '0');
+  const hour = kstTime.getUTCHours();
+  const minute = kstTime.getUTCMinutes();
+  const period = hour < 12 ? '오전' : '오후';
+  const displayHour = hour % 12 || 12;
+  const minuteText = minute ? ` ${minute}분` : '';
+
+  return `${year}-${month}-${day} ${period} ${displayHour}시${minuteText}`;
+};
+
 const uniqueImageKeysFromHits = (hits: MemorySearchHit[]) => {
   const seen = new Set<string>();
   const keys: string[] = [];
@@ -80,13 +104,15 @@ const buildRelatedImages = (
         return null;
       }
 
+      const capturedAtText = formatCapturedAtKst(hit.capturedAt);
+
       return {
         imageKey: hit.imageKey,
         accessUrl,
         itemName:
           hit.detectedObjects[0] || hit.tags[0] || fallbackQuery || '기록',
         locationText: hit.location?.name || hit.location?.address || null,
-        capturedAt: hit.capturedAt,
+        capturedAt: capturedAtText,
         caption: hit.caption,
         sceneSummary: hit.sceneSummary,
         positionHint: hit.positionHint,
@@ -507,7 +533,12 @@ export default function ChatScreen() {
                             numberOfLines={1}
                             style={styles.relatedImageLocation}
                           >
-                            {image.locationText || image.capturedAt || '기록 보기'}
+                            {[
+                              image.locationText,
+                              image.capturedAt,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ') || '기록 보기'}
                           </Text>
                         </View>
                         <Text
