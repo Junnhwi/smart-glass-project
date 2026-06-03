@@ -17,6 +17,15 @@ from src.modules.search.text import (
 
 
 MAX_CONTEXT_HITS = 2
+TIME_REFERENCE_CUES = (
+    "마지막 확인 시각",
+    "마지막 확인 시간",
+    "촬영 시각",
+    "확인 시각",
+    "확인 시간",
+    "오전",
+    "오후",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +153,23 @@ class TemplateAnswerGenerator:
             confidence=0.5,
             reason="\uAC80\uC0C9 \uACB0\uACFC\uB97C \uAE30\uBC18\uC73C\uB85C \uD15C\uD50C\uB9BF \uC751\uB2F5\uC744 \uC0AC\uC6A9\uD588\uC2B5\uB2C8\uB2E4.",
         )
+
+
+def _append_observation_time_if_missing(
+    answer_text: str,
+    hits: list[SearchHit],
+) -> str:
+    cleaned = " ".join(str(answer_text or "").split())
+    if not cleaned or not hits:
+        return cleaned
+    if any(cue in cleaned for cue in TIME_REFERENCE_CUES):
+        return cleaned
+
+    formatted_time = format_timestamp(hits[0].memory.captured_at)
+    if not formatted_time:
+        return cleaned
+
+    return f"{cleaned} 마지막 확인 시각은 {formatted_time}입니다."
 
 
 class OllamaChatClient:
@@ -460,7 +486,9 @@ _ANSWER_SYSTEM = """\
 3. image_key, memory_id, score 같은 기술적인 필드명은 언급하지 마세요.
 4. 기록에 없는 정보는 절대 추측하거나 지어내지 마세요.
 5. 가장 최근 기록의 위치 정보(위치 힌트, 주변 사물, 장면 요약)를 활용해 구체적으로 안내하세요.
-6. 답변은 2~3문장 이내로 간결하게 작성하세요.
+6. 기록에 촬영 시각이 있으면 반드시 "마지막 확인 시각은 ..." 형태로 포함하세요.
+7. 촬영 시각은 이미 한국 시간(Asia/Seoul, KST)으로 변환된 값이므로 다시 계산하거나 바꾸지 마세요.
+8. 답변은 2~3문장 이내로 간결하게 작성하세요.
 """
 
 _ANSWER_USER_TMPL = """\
@@ -471,6 +499,7 @@ _ANSWER_USER_TMPL = """\
 {context}
 
 위 기록만을 근거로 사용자의 질문에 자연스럽게 답변하세요.
+촬영 시각은 한국 시간(Asia/Seoul, KST) 기준입니다. 기록에 촬영 시각이 있으면 마지막 확인 시각으로 꼭 알려주세요.
 기록에 찾는 사물이 없으면 "기록을 찾지 못했다"고 솔직하게 말하고 다른 이름으로 다시 물어보라고 안내하세요.
 """
 
@@ -513,7 +542,7 @@ def _format_hit_context_gemma(index: int, hit: SearchHit) -> str:
 
     lines = [
         f"[기록 {index}]",
-        f"- 촬영 시각: {captured_str}",
+        f"- 촬영 시각(KST): {captured_str}",
         f"- 촬영 장소: {location_str}",
         f"- 장면 요약: {scene}",
         f"- 전체 위치 힌트: {position}",
@@ -591,6 +620,7 @@ class Gemma3AnswerGenerator:
         cited_ids = [h.memory.memory_id for h in hits[: self.max_context_hits]]
         try:
             text = _run_answer_generation(self.client, query, hits, self.max_context_hits)
+            text = _append_observation_time_if_missing(text, hits)
             return GeneratedAnswer(
                 text=text,
                 mode="gemma3_3stage",
@@ -642,7 +672,7 @@ class OllamaAnswerGenerator:
         return (
             f"[Memory {index}]\n"
             f"- Image Key: {image_key}\n"
-            f"- Captured At: {captured_at}\n"
+            f"- Captured At (KST): {captured_at}\n"
             f"- Location: {location}\n"
             f"- Position Hint: {position_hint}\n"
             f"- Detected Objects: {detected_objects}\n"
@@ -661,7 +691,7 @@ class OllamaAnswerGenerator:
             "Answer the question based on the provided [Observation Records] below. These records are sorted by recency and relevance.\n"
             "Note: Even if the item name the user is searching for does not exactly match the records, infer and treat them as the same item if they are conceptually similar, synonyms, or have a hypernym/hyponym relationship (e.g., 'wristwatch' and 'Apple Watch', 'earphones' and 'AirPods').\n"
             "If the requested item cannot be found or inferred from the records, you MUST reply exactly with: \"해당 물건은 최근 기록에서 찾을 수 없습니다.\"\n"
-            "If the target item is found, you MUST output the observation time, location hints, and surrounding objects (features) along with the **original image key (image_key)**.\n\n"
+            "If the target item is found, you MUST output the observation time in KST, location hints, and surrounding objects (features) along with the **original image key (image_key)**.\n\n"
             f"[Observation Records]\n{context}\n\n"
             f"[User Question]\n{query}"
         )
@@ -679,6 +709,7 @@ class OllamaAnswerGenerator:
         ]
         try:
             answer_text = self.client.chat(messages=self._build_messages(query, hits))
+            answer_text = _append_observation_time_if_missing(answer_text, hits)
             confidence = max(0.55, min(hits[0].score + 0.2, 0.95))
             return GeneratedAnswer(
                 text=answer_text,
@@ -788,7 +819,7 @@ class OllamaAnswerGenerator:
         return (
             f"[Memory {index}]\n"
             f"- Image Key: {image_key}\n"
-            f"- Captured At: {captured_at}\n"
+            f"- Captured At (KST): {captured_at}\n"
             f"- Location: {location}\n"
             f"- Position Hint: {position_hint}\n"
             f"- Detected Objects: {detected_objects}\n"
@@ -807,7 +838,7 @@ class OllamaAnswerGenerator:
             "Answer the question based on the provided [Observation Records] below. These records are sorted by recency and relevance.\n"
             "Note: Even if the item name the user is searching for does not exactly match the records, infer and treat them as the same item if they are conceptually similar, synonyms, or have a hypernym/hyponym relationship (e.g., 'wristwatch' and 'Apple Watch', 'earphones' and 'AirPods').\n"
             "If the requested item cannot be found or inferred from the records, you MUST reply exactly with: \"해당 물건은 최근 기록에서 찾을 수 없습니다.\"\n"
-            "If the target item is found, you MUST output the observation time, location hints, and surrounding objects (features) along with the **original image key (image_key)**.\n\n"
+            "If the target item is found, you MUST output the observation time in KST, location hints, and surrounding objects (features) along with the **original image key (image_key)**.\n\n"
             f"[Observation Records]\n{context}\n\n"
             f"[User Question]\n{query}"
         )
@@ -825,6 +856,7 @@ class OllamaAnswerGenerator:
         ]
         try:
             answer_text = self.client.chat(messages=self._build_messages(query, hits))
+            answer_text = _append_observation_time_if_missing(answer_text, hits)
             confidence = max(0.55, min(hits[0].score + 0.2, 0.95))
             return GeneratedAnswer(
                 text=answer_text,

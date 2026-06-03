@@ -108,7 +108,11 @@ class OllamaAnswerGeneratorTests(unittest.TestCase):
         self.assertEqual(answer.mode, "ollama")
         self.assertEqual(answer.cited_memory_ids, ["mem-001"])
         self.assertIn("지갑은 작업실 책상", answer.text)
+        self.assertIn("마지막 확인 시각은 2026-05-07 오후 1시입니다.", answer.text)
         self.assertIn("gpt-oss:20b-cloud", answer.reason or "")
+        messages = http_client.last_json["messages"]
+        self.assertIn("2026-05-07 오후 1시", messages[-1]["content"])
+        self.assertIn("KST", messages[-1]["content"])
 
     def test_generate_falls_back_to_template_when_ollama_fails(self) -> None:
         generator = OllamaAnswerGenerator(

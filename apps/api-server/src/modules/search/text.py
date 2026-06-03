@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Iterable
 
 
@@ -482,6 +483,9 @@ def extract_spatial_hint(*texts: str | None) -> str | None:
     return None
 
 
+DISPLAY_TIMEZONE = ZoneInfo("Asia/Seoul")
+
+
 def format_timestamp(value: str | None) -> str | None:
     if not value:
         return None
@@ -489,6 +493,9 @@ def format_timestamp(value: str | None) -> str | None:
     normalized = value.replace("Z", "+00:00")
     try:
         timestamp = datetime.fromisoformat(normalized)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.astimezone(DISPLAY_TIMEZONE)
         period = "\uC624\uC804" if timestamp.hour < 12 else "\uC624\uD6C4"
         display_hour = timestamp.hour % 12 or 12
         display_time = f"{period} {display_hour}\uC2DC"
