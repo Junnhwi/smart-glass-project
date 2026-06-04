@@ -513,6 +513,7 @@ export default function CaptureScreen() {
       }
 
       if (!eventResponse.shouldCapture) {
+        void refreshCaptureControl({ silent: true });
         return;
       }
 
@@ -739,14 +740,19 @@ export default function CaptureScreen() {
       return;
     }
 
-    const intervalMs = Math.max(
+    const intervalSec = Math.max(
       60,
       captureControl.intervalSec || DEFAULT_CAPTURE_INTERVAL_SEC
-    ) * 1000;
+    );
+    const scheduleAfterSec =
+      captureControl.lastCaptureEventAt &&
+      typeof captureControl.nextCaptureAfterSec === 'number'
+        ? Math.max(1, captureControl.nextCaptureAfterSec)
+        : intervalSec;
 
     autoCaptureTimerRef.current = setInterval(() => {
       void runAutoCapture('scheduled_capture');
-    }, intervalMs);
+    }, scheduleAfterSec * 1000);
 
     return () => {
       clearAutoCaptureTimer();
@@ -754,6 +760,8 @@ export default function CaptureScreen() {
   }, [
     captureControl?.enabled,
     captureControl?.intervalSec,
+    captureControl?.lastCaptureEventAt,
+    captureControl?.nextCaptureAfterSec,
     currentUser?.authToken,
     currentUser?.deviceId,
     currentUser?.userId,

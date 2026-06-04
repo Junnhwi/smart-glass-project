@@ -1126,13 +1126,20 @@ class PostgresUserRegistry:
         *,
         user_id: str,
         device_id: str,
-    ) -> DeviceRecord:
+        event_type: str,
+        interval_sec: int,
+    ) -> DeviceRecord | None:
         normalized_user_id = _normalize_text(user_id)
         normalized_device_id = _normalize_text(device_id)
+        normalized_event_type = _normalize_text(event_type)
         if not normalized_user_id:
             raise ValueError("userId must not be blank")
         if not normalized_device_id:
             raise ValueError("deviceId must not be blank")
+        if normalized_event_type not in {"start_capture", "scheduled_capture"}:
+            raise ValueError("eventType must be one of: start_capture, scheduled_capture")
+        if interval_sec < 60:
+            raise ValueError("intervalSec must be greater than or equal to 60")
 
         self._ensure_schema()
         query = f"""
@@ -1140,6 +1147,11 @@ class PostgresUserRegistry:
             SET capture_last_event_at = NOW()
             WHERE user_id = %s
               AND device_id = %s
+              AND (
+                %s != 'scheduled_capture'
+                OR capture_last_event_at IS NULL
+                OR capture_last_event_at <= NOW() - (%s * INTERVAL '1 second')
+              )
             RETURNING
                 device_id,
                 user_id,
@@ -1162,6 +1174,8 @@ class PostgresUserRegistry:
                         (
                             normalized_user_id,
                             normalized_device_id,
+                            normalized_event_type,
+                            interval_sec,
                         ),
                     )
                     row = cur.fetchone()
@@ -1174,6 +1188,8 @@ class PostgresUserRegistry:
             ) from exc
 
         if not row:
+            if normalized_event_type == "scheduled_capture":
+                return None
             raise LookupError("deviceId is not registered")
         return self._map_device_row(row)
 

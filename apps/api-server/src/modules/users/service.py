@@ -144,7 +144,9 @@ class UserDeviceRepository(Protocol):
         *,
         user_id: str,
         device_id: str,
-    ) -> DeviceRecord: ...
+        event_type: str,
+        interval_sec: int,
+    ) -> DeviceRecord | None: ...
 
     def find_user_by_device_id(self, device_id: str) -> UserRecord | None: ...
 
@@ -357,7 +359,18 @@ class UserDeviceService:
         updated_device = self.repository.record_device_capture_event(
             user_id=device.user_id,
             device_id=device.device_id,
+            event_type=normalized_event_type,
+            interval_sec=interval_sec,
         )
+        if updated_device is None:
+            latest_device = self.repository.get_device(device.device_id)
+            if latest_device is not None and latest_device.user_id == device.user_id:
+                device = latest_device
+            return CaptureEventResult(
+                device=device,
+                should_capture=False,
+                reason="interval_not_elapsed",
+            )
         return CaptureEventResult(
             device=updated_device,
             should_capture=True,
