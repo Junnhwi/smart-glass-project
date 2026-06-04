@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -33,6 +33,10 @@ from src.api.schemas import (
     AuthTokenResponse,
     AuthUserPayload,
     CaptureAcceptedResponse,
+    CaptureControlResponse,
+    CaptureControlUpdateRequest,
+    CaptureEventRequest,
+    CaptureEventResponse,
     CaptureMemoryStoreExecutionPayload,
     CaptureUploadResponse,
     CaptureTaskStatusResponse,
@@ -308,6 +312,42 @@ def _map_user_device(device: Any) -> UserDevicePayload:
     )
 
 
+def _parse_api_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _capture_next_after_sec(device: Any) -> int | None:
+    if not getattr(device, "capture_enabled", False):
+        return None
+    last_capture_event_at = getattr(device, "capture_last_event_at", None)
+    if not last_capture_event_at:
+        return 0
+    try:
+        interval_sec = int(getattr(device, "capture_interval_sec", 300) or 300)
+        next_capture_at = _parse_api_timestamp(last_capture_event_at) + timedelta(
+            seconds=interval_sec,
+        )
+    except Exception:
+        return 0
+    remaining_sec = int((next_capture_at - datetime.now(timezone.utc)).total_seconds())
+    return max(0, remaining_sec)
+
+
+def _map_capture_control(device: Any) -> CaptureControlResponse:
+    return CaptureControlResponse(
+        userId=device.user_id,
+        deviceId=device.device_id,
+        enabled=bool(getattr(device, "capture_enabled", False)),
+        intervalSec=int(getattr(device, "capture_interval_sec", 300) or 300),
+        updatedAt=getattr(device, "capture_updated_at", None),
+        lastCaptureEventAt=getattr(device, "capture_last_event_at", None),
+        nextCaptureAfterSec=_capture_next_after_sec(device),
+    )
+
+
 def _map_device_pairing(pairing: Any) -> DevicePairingPayload:
     return DevicePairingPayload(
         pairingCode=pairing.pairing_code,
@@ -558,6 +598,9 @@ def create_app() -> FastAPI:
                 "GET /users/{userId}/devices",
                 "POST /users/{userId}/devices",
                 "PATCH /users/{userId}/devices/{deviceId}",
+                "GET /users/{userId}/devices/{deviceId}/capture-control",
+                "PATCH /users/{userId}/devices/{deviceId}/capture-control",
+                "POST /users/{userId}/devices/{deviceId}/capture-events",
                 "POST /users/{userId}/device-pairings",
                 "GET /users/{userId}/device-pairings",
                 "POST /users/{userId}/devices/{deviceId}/approve",
@@ -1303,6 +1346,82 @@ def create_app() -> FastAPI:
             approvedAt=device.approved_at,
             revokedAt=device.revoked_at,
             updatedAt=device.updated_at,
+        )
+
+    @app.get(
+        "/users/{userId}/devices/{deviceId}/capture-control",
+        response_model=CaptureControlResponse,
+    )
+    def get_user_device_capture_control(
+        request: Request,
+        userId: str,
+        deviceId: str,
+    ) -> CaptureControlResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.get_capture_control(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return _map_capture_control(device)
+
+    @app.patch(
+        "/users/{userId}/devices/{deviceId}/capture-control",
+        response_model=CaptureControlResponse,
+    )
+    def update_user_device_capture_control(
+        request: Request,
+        userId: str,
+        deviceId: str,
+        payload: CaptureControlUpdateRequest,
+    ) -> CaptureControlResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            device = user_device_service.update_capture_control(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+                enabled=payload.enabled,
+                interval_sec=payload.intervalSec,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        return _map_capture_control(device)
+
+    @app.post(
+        "/users/{userId}/devices/{deviceId}/capture-events",
+        response_model=CaptureEventResponse,
+    )
+    def record_user_device_capture_event(
+        request: Request,
+        userId: str,
+        deviceId: str,
+        payload: CaptureEventRequest,
+    ) -> CaptureEventResponse:
+        authorized_user_id = _resolve_self_user(request, userId)
+        try:
+            user_device_service = _get_user_device_service(request)
+            result = user_device_service.record_capture_event(
+                user_id=authorized_user_id,
+                device_id=deviceId,
+                event_type=payload.eventType,
+            )
+        except Exception as exc:
+            raise _map_user_device_error(exc) from exc
+        device = result.device
+        return CaptureEventResponse(
+            status="accepted" if result.should_capture else "skipped",
+            userId=device.user_id,
+            deviceId=device.device_id,
+            eventType=payload.eventType,
+            shouldCapture=result.should_capture,
+            reason=result.reason,
+            intervalSec=int(getattr(device, "capture_interval_sec", 300) or 300),
+            lastCaptureEventAt=getattr(device, "capture_last_event_at", None),
+            nextCaptureAfterSec=_capture_next_after_sec(device),
         )
 
     @app.post(

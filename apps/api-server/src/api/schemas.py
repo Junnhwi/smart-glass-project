@@ -355,6 +355,39 @@ class UserDeviceRenameRequest(ApiSchema):
         return normalized
 
 
+class CaptureControlUpdateRequest(ApiSchema):
+    enabled: bool
+    intervalSec: int | None = Field(default=None, ge=60, le=86400)
+
+
+class CaptureControlResponse(ApiSchema):
+    status: Literal["ok"] = "ok"
+    userId: str
+    deviceId: str
+    enabled: bool
+    intervalSec: int
+    updatedAt: str | None = None
+    lastCaptureEventAt: str | None = None
+    nextCaptureAfterSec: int | None = None
+
+
+class CaptureEventRequest(ApiSchema):
+    eventType: Literal["start_capture", "scheduled_capture"] = "scheduled_capture"
+    clientEventId: str | None = None
+
+
+class CaptureEventResponse(ApiSchema):
+    status: Literal["accepted", "skipped"]
+    userId: str
+    deviceId: str
+    eventType: Literal["start_capture", "scheduled_capture"]
+    shouldCapture: bool
+    reason: str
+    intervalSec: int
+    lastCaptureEventAt: str | None = None
+    nextCaptureAfterSec: int | None = None
+
+
 class DevicePairingIssueRequest(ApiSchema):
     deviceId: str = Field(min_length=1)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import secrets
 from typing import Protocol
 from uuid import uuid4
@@ -33,6 +33,13 @@ class DeviceAuthorization:
     status: str
     device_id: str
     user_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureEventResult:
+    device: DeviceRecord
+    should_capture: bool
+    reason: str
 
 
 def _utc_now() -> datetime:
@@ -122,6 +129,22 @@ class UserDeviceRepository(Protocol):
     def approve_device(self, *, user_id: str, device_id: str) -> DeviceRecord: ...
 
     def revoke_device(self, *, user_id: str, device_id: str) -> DeviceRecord: ...
+
+    def update_device_capture_control(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        enabled: bool,
+        interval_sec: int,
+    ) -> DeviceRecord: ...
+
+    def record_device_capture_event(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+    ) -> DeviceRecord: ...
 
     def find_user_by_device_id(self, device_id: str) -> UserRecord | None: ...
 
@@ -264,6 +287,83 @@ class UserDeviceService:
             device_id=normalized_device_id,
         )
 
+    def get_capture_control(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        return self._require_owned_active_device(
+            user_id=user_id,
+            device_id=device_id,
+        )
+
+    def update_capture_control(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        enabled: bool,
+        interval_sec: int | None = None,
+    ) -> DeviceRecord:
+        device = self._require_owned_active_device(
+            user_id=user_id,
+            device_id=device_id,
+        )
+        resolved_interval_sec = (
+            int(interval_sec)
+            if interval_sec is not None
+            else int(device.capture_interval_sec or 300)
+        )
+        if resolved_interval_sec < 60:
+            raise ValueError("intervalSec must be greater than or equal to 60")
+        if resolved_interval_sec > 86400:
+            raise ValueError("intervalSec must be less than or equal to 86400")
+        return self.repository.update_device_capture_control(
+            user_id=device.user_id,
+            device_id=device.device_id,
+            enabled=enabled,
+            interval_sec=resolved_interval_sec,
+        )
+
+    def record_capture_event(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        event_type: str,
+    ) -> CaptureEventResult:
+        normalized_event_type = _normalize_text(event_type)
+        if normalized_event_type not in {"start_capture", "scheduled_capture"}:
+            raise ValueError("eventType must be one of: start_capture, scheduled_capture")
+
+        device = self._require_owned_active_device(
+            user_id=user_id,
+            device_id=device_id,
+        )
+        if not device.capture_enabled:
+            return CaptureEventResult(
+                device=device,
+                should_capture=False,
+                reason="disabled",
+            )
+
+        interval_sec = int(device.capture_interval_sec or 300)
+        if normalized_event_type == "scheduled_capture" and device.capture_last_event_at:
+            last_event_at = _parse_timestamp(device.capture_last_event_at)
+            next_event_at = last_event_at + timedelta(seconds=interval_sec)
+            if _utc_now() < next_event_at:
+                return CaptureEventResult(
+                    device=device,
+                    should_capture=False,
+                    reason="interval_not_elapsed",
+                )
+
+        updated_device = self.repository.record_device_capture_event(
+            user_id=device.user_id,
+            device_id=device.device_id,
+        )
+        return CaptureEventResult(
+            device=updated_device,
+            should_capture=True,
+            reason="accepted",
+        )
+
     def authorize_device(self, *, device_id: str) -> DeviceAuthorization:
         normalized_device_id = _normalize_text(device_id)
         if not normalized_device_id:
@@ -347,6 +447,28 @@ class UserDeviceService:
             )
             raise PermissionError("pairingCode has expired")
         return pairing
+
+    def _require_owned_active_device(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+    ) -> DeviceRecord:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_device_id = _normalize_text(device_id)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if not normalized_device_id:
+            raise ValueError("deviceId must not be blank")
+
+        device = self.repository.get_device(normalized_device_id)
+        if device is None:
+            raise LookupError("deviceId is not registered")
+        if device.user_id != normalized_user_id:
+            raise PermissionError("deviceId does not match requested userId")
+        if _ensure_device_status(device.status) != "active":
+            raise PermissionError("deviceId is not active")
+        return device
 
     def check_health(self) -> None:
         self.repository.check_health()
