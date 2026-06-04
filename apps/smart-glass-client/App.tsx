@@ -9,6 +9,7 @@ import HistoryScreen from './src/ui/screens/HistoryScreen';
 import LoginScreen from './src/ui/screens/LoginScreen';
 import ProfileScreen from './src/ui/screens/ProfileScreen';
 import SettingsScreen from './src/ui/screens/SettingScreen';
+import { CaptureControlProvider } from './src/ui/context/CaptureControlContext';
 import { ItemProvider } from './src/ui/context/ItemContext';
 import { AuthProvider, useAuth } from './src/ui/context/AuthContext';
 import type { RootStackParamList } from './src/ui/navigation/routes';
@@ -40,19 +41,21 @@ function AppNavigator() {
 
   return (
     <ItemProvider>
-      <Stack.Navigator
-        key={currentUser.userId}
-        id="RootStack"
-        initialRouteName={initialRouteName}
-        screenOptions={{ headerShown: false }}
-      >
-        <Stack.Screen name="Capture" component={CaptureScreen} />
-        <Stack.Screen name="Chat" component={ChatScreen} />
-        <Stack.Screen name="History" component={HistoryScreen} />
-        <Stack.Screen name="Profile" component={ProfileScreen} />
-        <Stack.Screen name="Settings" component={SettingsScreen} />
-        <Stack.Screen name="ItemLocation" component={ItemLocationScreen} />
-      </Stack.Navigator>
+      <CaptureControlProvider>
+        <Stack.Navigator
+          key={currentUser.userId}
+          id="RootStack"
+          initialRouteName={initialRouteName}
+          screenOptions={{ headerShown: false }}
+        >
+          <Stack.Screen name="Capture" component={CaptureScreen} />
+          <Stack.Screen name="Chat" component={ChatScreen} />
+          <Stack.Screen name="History" component={HistoryScreen} />
+          <Stack.Screen name="Profile" component={ProfileScreen} />
+          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="ItemLocation" component={ItemLocationScreen} />
+        </Stack.Navigator>
+      </CaptureControlProvider>
     </ItemProvider>
   );
 }

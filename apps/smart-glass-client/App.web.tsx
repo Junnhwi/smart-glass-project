@@ -10,6 +10,7 @@ import LoginScreen from './src/ui/screens/LoginScreen';
 import ProfileScreen from './src/ui/screens/ProfileScreen';
 import SettingsScreen from './src/ui/screens/SettingScreen';
 import { AuthProvider, useAuth } from './src/ui/context/AuthContext';
+import { CaptureControlProvider } from './src/ui/context/CaptureControlContext';
 import { ItemProvider } from './src/ui/context/ItemContext';
 import {
   WebNavigationProvider,
@@ -94,9 +95,11 @@ function WebAppRoot() {
 
   return (
     <ItemProvider>
-      <WebNavigationProvider initialRouteName={initialRouteName}>
-        <AuthenticatedWebApp />
-      </WebNavigationProvider>
+      <CaptureControlProvider>
+        <WebNavigationProvider initialRouteName={initialRouteName}>
+          <AuthenticatedWebApp />
+        </WebNavigationProvider>
+      </CaptureControlProvider>
     </ItemProvider>
   );
 }
