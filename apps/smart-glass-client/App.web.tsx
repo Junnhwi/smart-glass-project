@@ -11,6 +11,7 @@ import ProfileScreen from './src/ui/screens/ProfileScreen';
 import SettingsScreen from './src/ui/screens/SettingScreen';
 import { AuthProvider, useAuth } from './src/ui/context/AuthContext';
 import { CaptureControlProvider } from './src/ui/context/CaptureControlContext';
+import { GlassConnectionProvider } from './src/ui/context/GlassConnectionContext';
 import { ItemProvider } from './src/ui/context/ItemContext';
 import {
   WebNavigationProvider,
@@ -96,9 +97,11 @@ function WebAppRoot() {
   return (
     <ItemProvider>
       <CaptureControlProvider>
-        <WebNavigationProvider initialRouteName={initialRouteName}>
-          <AuthenticatedWebApp />
-        </WebNavigationProvider>
+        <GlassConnectionProvider>
+          <WebNavigationProvider initialRouteName={initialRouteName}>
+            <AuthenticatedWebApp />
+          </WebNavigationProvider>
+        </GlassConnectionProvider>
       </CaptureControlProvider>
     </ItemProvider>
   );
