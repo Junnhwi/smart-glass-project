@@ -56,6 +56,10 @@ class DeviceRecord:
     approved_at: str | None = None
     revoked_at: str | None = None
     updated_at: str | None = None
+    capture_enabled: bool = False
+    capture_interval_sec: int = 300
+    capture_updated_at: str | None = None
+    capture_last_event_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +153,10 @@ class PostgresUserRegistry:
                                 display_name TEXT,
                                 approved_at TIMESTAMPTZ,
                                 revoked_at TIMESTAMPTZ,
+                                capture_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                                capture_interval_sec INTEGER NOT NULL DEFAULT 300,
+                                capture_updated_at TIMESTAMPTZ,
+                                capture_last_event_at TIMESTAMPTZ,
                                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                             )
@@ -176,6 +184,30 @@ class PostgresUserRegistry:
                             f"""
                             ALTER TABLE {self.devices_table_name}
                             ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            ALTER TABLE {self.devices_table_name}
+                            ADD COLUMN IF NOT EXISTS capture_enabled BOOLEAN NOT NULL DEFAULT FALSE
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            ALTER TABLE {self.devices_table_name}
+                            ADD COLUMN IF NOT EXISTS capture_interval_sec INTEGER NOT NULL DEFAULT 300
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            ALTER TABLE {self.devices_table_name}
+                            ADD COLUMN IF NOT EXISTS capture_updated_at TIMESTAMPTZ
+                            """
+                        )
+                        cur.execute(
+                            f"""
+                            ALTER TABLE {self.devices_table_name}
+                            ADD COLUMN IF NOT EXISTS capture_last_event_at TIMESTAMPTZ
                             """
                         )
                         cur.execute(
@@ -302,6 +334,14 @@ class PostgresUserRegistry:
             approved_at=_normalize_timestamp(row[5]) if row[5] is not None else None,
             revoked_at=_normalize_timestamp(row[6]) if row[6] is not None else None,
             updated_at=_normalize_timestamp(row[7]) if row[7] is not None else None,
+            capture_enabled=bool(row[8]),
+            capture_interval_sec=int(row[9] or 300),
+            capture_updated_at=(
+                _normalize_timestamp(row[10]) if row[10] is not None else None
+            ),
+            capture_last_event_at=(
+                _normalize_timestamp(row[11]) if row[11] is not None else None
+            ),
         )
 
     def _map_pairing_row(self, row: tuple[object, ...]) -> DevicePairingRecord:
@@ -411,8 +451,12 @@ class PostgresUserRegistry:
                 approved_at,
                 revoked_at,
                 created_at,
-                updated_at
-            ) VALUES (%s, %s, %s, %s, NOW(), NULL, NOW(), NOW())
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
+            ) VALUES (%s, %s, %s, %s, NOW(), NULL, NOW(), NOW(), %s, %s, %s, %s)
             ON CONFLICT (device_id) DO UPDATE
             SET updated_at = NOW()
             WHERE {self.devices_table_name}.user_id = EXCLUDED.user_id
@@ -424,7 +468,11 @@ class PostgresUserRegistry:
                 created_at,
                 approved_at,
                 revoked_at,
-                updated_at
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
         """
         try:
             with self._connect() as conn:
@@ -436,6 +484,10 @@ class PostgresUserRegistry:
                             normalized_user_id,
                             self.active_device_status,
                             normalized_device_id,
+                            False,
+                            300,
+                            None,
+                            None,
                         ),
                     )
                     row = cur.fetchone()
@@ -466,7 +518,11 @@ class PostgresUserRegistry:
                 created_at,
                 approved_at,
                 revoked_at,
-                updated_at
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
             FROM {self.devices_table_name}
             WHERE device_id = %s
             LIMIT 1
@@ -502,7 +558,11 @@ class PostgresUserRegistry:
                 created_at,
                 approved_at,
                 revoked_at,
-                updated_at
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
             FROM {self.devices_table_name}
             WHERE user_id = %s
             ORDER BY updated_at DESC, created_at DESC, device_id ASC
@@ -554,7 +614,11 @@ class PostgresUserRegistry:
                 created_at,
                 approved_at,
                 revoked_at,
-                updated_at
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
         """
         try:
             with self._connect() as conn:
@@ -964,7 +1028,11 @@ class PostgresUserRegistry:
                 created_at,
                 approved_at,
                 revoked_at,
-                updated_at
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
         """
         try:
             with self._connect() as conn:
@@ -988,6 +1056,141 @@ class PostgresUserRegistry:
 
         if not row:
             raise UserRegistryUnavailableError("Postgres write failed: device row missing")
+        return self._map_device_row(row)
+
+    def update_device_capture_control(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        enabled: bool,
+        interval_sec: int,
+    ) -> DeviceRecord:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_device_id = _normalize_text(device_id)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if not normalized_device_id:
+            raise ValueError("deviceId must not be blank")
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.devices_table_name}
+            SET
+                capture_enabled = %s,
+                capture_interval_sec = %s,
+                capture_updated_at = NOW()
+            WHERE user_id = %s
+              AND device_id = %s
+            RETURNING
+                device_id,
+                user_id,
+                status,
+                display_name,
+                created_at,
+                approved_at,
+                revoked_at,
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
+        """
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            enabled,
+                            interval_sec,
+                            normalized_user_id,
+                            normalized_device_id,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except UserRegistryUnavailableError:
+            raise
+        except Exception as exc:
+            raise UserRegistryUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            raise LookupError("deviceId is not registered")
+        return self._map_device_row(row)
+
+    def record_device_capture_event(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        event_type: str,
+        interval_sec: int,
+    ) -> DeviceRecord | None:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_device_id = _normalize_text(device_id)
+        normalized_event_type = _normalize_text(event_type)
+        if not normalized_user_id:
+            raise ValueError("userId must not be blank")
+        if not normalized_device_id:
+            raise ValueError("deviceId must not be blank")
+        if normalized_event_type not in {"start_capture", "scheduled_capture"}:
+            raise ValueError("eventType must be one of: start_capture, scheduled_capture")
+        if interval_sec < 60:
+            raise ValueError("intervalSec must be greater than or equal to 60")
+
+        self._ensure_schema()
+        query = f"""
+            UPDATE {self.devices_table_name}
+            SET capture_last_event_at = NOW()
+            WHERE user_id = %s
+              AND device_id = %s
+              AND (
+                %s != 'scheduled_capture'
+                OR capture_last_event_at IS NULL
+                OR capture_last_event_at <= NOW() - (%s * INTERVAL '1 second')
+              )
+            RETURNING
+                device_id,
+                user_id,
+                status,
+                display_name,
+                created_at,
+                approved_at,
+                revoked_at,
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
+        """
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        query,
+                        (
+                            normalized_user_id,
+                            normalized_device_id,
+                            normalized_event_type,
+                            interval_sec,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+        except UserRegistryUnavailableError:
+            raise
+        except Exception as exc:
+            raise UserRegistryUnavailableError(
+                f"Postgres write failed: {exc}"
+            ) from exc
+
+        if not row:
+            if normalized_event_type == "scheduled_capture":
+                return None
+            raise LookupError("deviceId is not registered")
         return self._map_device_row(row)
 
     def revoke_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
@@ -1021,7 +1224,11 @@ class PostgresUserRegistry:
                 created_at,
                 approved_at,
                 revoked_at,
-                updated_at
+                updated_at,
+                capture_enabled,
+                capture_interval_sec,
+                capture_updated_at,
+                capture_last_event_at
         """
         try:
             with self._connect() as conn:

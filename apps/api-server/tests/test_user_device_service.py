@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from src.database.user_registry import DeviceRecord, UserRecord
@@ -84,6 +85,50 @@ class FakeUserDeviceRepository:
         )
         self.devices[device_id] = revoked
         return revoked
+
+    def update_device_capture_control(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        enabled: bool,
+        interval_sec: int,
+    ) -> DeviceRecord:
+        device = self.devices.get(device_id)
+        if device is None:
+            raise LookupError("deviceId is not registered")
+        if device.user_id != user_id:
+            raise ValueError("deviceId is registered to another user")
+        updated = replace(
+            device,
+            capture_enabled=enabled,
+            capture_interval_sec=interval_sec,
+            capture_updated_at="2026-05-05T00:05:00Z",
+        )
+        self.devices[device_id] = updated
+        return updated
+
+    def record_device_capture_event(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        event_type: str,
+        interval_sec: int,
+    ) -> DeviceRecord | None:
+        device = self.devices.get(device_id)
+        if device is None:
+            raise LookupError("deviceId is not registered")
+        if device.user_id != user_id:
+            raise ValueError("deviceId is registered to another user")
+        if (
+            event_type == "scheduled_capture"
+            and device.capture_last_event_at is not None
+        ):
+            return None
+        updated = replace(device, capture_last_event_at="2026-05-05T00:06:00Z")
+        self.devices[device_id] = updated
+        return updated
 
     def find_user_by_device_id(self, device_id: str) -> UserRecord | None:
         device = self.devices.get(device_id)
@@ -194,6 +239,49 @@ class UserDeviceServiceTests(unittest.TestCase):
         self.service.check_health()
 
         self.assertTrue(self.repository.health_checked)
+
+    def test_record_capture_event_accepts_first_scheduled_event(self) -> None:
+        self.service.create_user(user_id="user-1")
+        self.service.register_device(user_id="user-1", device_id="glass-001")
+        self.service.update_capture_control(
+            user_id="user-1",
+            device_id="glass-001",
+            enabled=True,
+            interval_sec=300,
+        )
+
+        result = self.service.record_capture_event(
+            user_id="user-1",
+            device_id="glass-001",
+            event_type="scheduled_capture",
+        )
+
+        self.assertTrue(result.should_capture)
+        self.assertEqual(result.reason, "accepted")
+
+    def test_record_capture_event_skips_atomic_scheduled_collision(self) -> None:
+        self.service.create_user(user_id="user-1")
+        self.service.register_device(user_id="user-1", device_id="glass-001")
+        self.service.update_capture_control(
+            user_id="user-1",
+            device_id="glass-001",
+            enabled=True,
+            interval_sec=300,
+        )
+        self.service.record_capture_event(
+            user_id="user-1",
+            device_id="glass-001",
+            event_type="scheduled_capture",
+        )
+
+        result = self.service.record_capture_event(
+            user_id="user-1",
+            device_id="glass-001",
+            event_type="scheduled_capture",
+        )
+
+        self.assertFalse(result.should_capture)
+        self.assertEqual(result.reason, "interval_not_elapsed")
 
 
 if __name__ == "__main__":

@@ -197,6 +197,31 @@ export type UserDeviceListResponse = {
   items: UserDevice[];
 };
 
+export type CaptureControl = {
+  status: 'ok';
+  userId: string;
+  deviceId: string;
+  enabled: boolean;
+  intervalSec: number;
+  updatedAt?: string | null;
+  lastCaptureEventAt?: string | null;
+  nextCaptureAfterSec?: number | null;
+};
+
+export type CaptureEventType = 'start_capture' | 'scheduled_capture';
+
+export type CaptureEventResponse = {
+  status: 'accepted' | 'skipped';
+  userId: string;
+  deviceId: string;
+  eventType: CaptureEventType;
+  shouldCapture: boolean;
+  reason: string;
+  intervalSec: number;
+  lastCaptureEventAt?: string | null;
+  nextCaptureAfterSec?: number | null;
+};
+
 export type DevicePairing = {
   pairingCode: string;
   userId: string;
@@ -499,6 +524,87 @@ export const renameUserDevice = async ({
   }
 
   return response.json() as Promise<UserDevice>;
+};
+
+export const getCaptureControl = async ({
+  authToken,
+  userId,
+  deviceId,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/capture-control`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<CaptureControl>;
+};
+
+export const updateCaptureControl = async ({
+  authToken,
+  userId,
+  deviceId,
+  enabled,
+  intervalSec,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+  enabled: boolean;
+  intervalSec?: number;
+}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/capture-control`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        enabled,
+        intervalSec,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<CaptureControl>;
+};
+
+export const recordCaptureEvent = async ({
+  authToken,
+  userId,
+  deviceId,
+  eventType,
+}: {
+  authToken: string;
+  userId: string;
+  deviceId: string;
+  eventType: CaptureEventType;
+}) => {
+  return postJson<CaptureEventResponse>(
+    `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/capture-events`,
+    {
+      eventType,
+    },
+    { authToken }
+  );
 };
 
 export const refreshAuthToken = async ({

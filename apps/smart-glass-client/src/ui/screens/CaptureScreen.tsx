@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Button,
+  Switch,
   Text,
   View,
 } from 'react-native';
@@ -16,17 +17,21 @@ import {
   buildCaptureRegistrationPayload,
   registerMediaCapture,
   getCaptureTaskStatus,
+  recordCaptureEvent,
   registerUserDevice,
   uploadAuthorizedCaptureSource,
+  type CaptureEventType,
   type MemoryRecentItem,
 } from '../../networking/api';
 import SideBar from '../components/SideBar';
 import { useAuth } from '../context/AuthContext';
+import { useCaptureControl } from '../context/CaptureControlContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
 
 const AUTO_SYNC_REFRESH_MS = 3000;
+const DEFAULT_CAPTURE_INTERVAL_SEC = 300;
 
 const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const CHARACTERISTIC_UUID_RX = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
@@ -51,6 +56,17 @@ const STATUS_LABELS: Record<string, string> = {
   failed: '오류 발생',
 };
 
+const CAPTURE_BUSY_STATUSES = new Set([
+  'connecting',
+  'capturing',
+  'receiving',
+  'requestingUpload',
+  'uploading',
+  'registering',
+  'polling',
+]);
+
+const isCaptureStatusBusy = (value: string) => CAPTURE_BUSY_STATUSES.has(value);
 
 const QUICK_ACTIONS = [
   {
@@ -155,6 +171,14 @@ export default function CaptureScreen() {
     setCurrentDevice,
     setDeviceAlias,
   } = useAuth();
+  const {
+    captureControl,
+    isLoadingCaptureControl,
+    isUpdatingCaptureControl,
+    captureControlError,
+    refreshCaptureControl,
+    setCaptureControlEnabled,
+  } = useCaptureControl();
 
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [isLoadingRecent, setIsLoadingRecent] = useState(false);
@@ -165,6 +189,9 @@ export default function CaptureScreen() {
   const hasSelectedDevice = Boolean(currentUser?.deviceId);
   const selectedDeviceLabel = getDeviceLabel(currentUser?.deviceId);
   const latestMemory = recentMemories[0] || null;
+  const isAutoCaptureEnabled = Boolean(captureControl?.enabled);
+  const resolvedCaptureIntervalSec =
+    captureControl?.intervalSec || DEFAULT_CAPTURE_INTERVAL_SEC;
 
 
   const [status, setStatus] = useState('idle');
@@ -177,16 +204,22 @@ export default function CaptureScreen() {
   const lastReceivedByteRef = useRef<number | null>(null);
   const isTxNotificationStartedRef = useRef(false);
   const connectedDeviceIdRef = useRef<string | null>(null);
+  const statusRef = useRef(status);
+  const autoCaptureTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
+  const autoCaptureStartKeyRef = useRef<string | null>(null);
 
-  const isBusy = [
-    'connecting',
-    'capturing',
-    'receiving',
-    'requestingUpload',
-    'uploading',
-    'registering',
-    'polling',
-  ].includes(status);
+  const hasGlassConnection = Boolean(rxRef.current);
+  const isBusy = isCaptureStatusBusy(status);
+
+  const clearAutoCaptureTimer = () => {
+    if (!autoCaptureTimerRef.current) {
+      return;
+    }
+    clearInterval(autoCaptureTimerRef.current);
+    autoCaptureTimerRef.current = null;
+  };
 
 
   const syncStatus = useMemo(() => {
@@ -220,6 +253,10 @@ export default function CaptureScreen() {
       description: '최근 저장된 기억이 확인되었습니다. 새 촬영이 들어오면 같은 흐름으로 자동 처리됩니다.',
     };
   }, [currentUser, hasSelectedDevice, latestMemory]);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
 
   const registerAndSelectGlassDevice = async (deviceId: string) => {
@@ -415,6 +452,76 @@ export default function CaptureScreen() {
 
       setPipelineErrorMessage(
         error instanceof Error ? error.message : '촬영 요청 실패'
+      );
+    }
+  };
+
+  const runAutoCapture = async (eventType: CaptureEventType) => {
+    if (!captureControl?.enabled) {
+      return;
+    }
+
+    if (!currentUser?.authToken || !currentUser.userId || !currentUser.deviceId) {
+      return;
+    }
+
+    if (!rxRef.current) {
+      if (eventType === 'start_capture') {
+        setPipelineErrorMessage(
+          '자동 촬영이 켜져 있습니다. 글래스를 연결하면 촬영을 시작합니다.'
+        );
+      }
+      return;
+    }
+
+    if (isCaptureStatusBusy(statusRef.current)) {
+      return;
+    }
+
+    try {
+      setPipelineErrorMessage('');
+      let authToken = currentUser.authToken;
+      let userId = currentUser.userId;
+      let deviceId = currentUser.deviceId;
+
+      let eventResponse: Awaited<ReturnType<typeof recordCaptureEvent>>;
+      try {
+        eventResponse = await recordCaptureEvent({
+          authToken,
+          userId,
+          deviceId,
+          eventType,
+        });
+      } catch (error) {
+        if (!isExpiredTokenError(error)) {
+          throw error;
+        }
+
+        const refreshedUser = await refreshSession();
+        if (!refreshedUser?.authToken || !refreshedUser.deviceId) {
+          throw error;
+        }
+        authToken = refreshedUser.authToken;
+        userId = refreshedUser.userId;
+        deviceId = refreshedUser.deviceId;
+        eventResponse = await recordCaptureEvent({
+          authToken,
+          userId,
+          deviceId,
+          eventType,
+        });
+      }
+
+      if (!eventResponse.shouldCapture) {
+        void refreshCaptureControl({ silent: true });
+        return;
+      }
+
+      void refreshCaptureControl({ silent: true });
+      await requestCapture();
+    } catch (error) {
+      setPipelineErrorMessage(
+        getErrorMessage(error, '자동 촬영 이벤트를 처리하지 못했습니다.')
       );
     }
   };
@@ -626,6 +733,76 @@ export default function CaptureScreen() {
     };
   }, [currentUser?.authToken, currentUser?.userId]);
 
+  useEffect(() => {
+    clearAutoCaptureTimer();
+
+    if (!captureControl?.enabled || !currentUser?.deviceId) {
+      return;
+    }
+
+    const intervalSec = Math.max(
+      60,
+      captureControl.intervalSec || DEFAULT_CAPTURE_INTERVAL_SEC
+    );
+    const scheduleAfterSec =
+      captureControl.lastCaptureEventAt &&
+      typeof captureControl.nextCaptureAfterSec === 'number'
+        ? Math.max(1, captureControl.nextCaptureAfterSec)
+        : intervalSec;
+
+    autoCaptureTimerRef.current = setInterval(() => {
+      void runAutoCapture('scheduled_capture');
+    }, scheduleAfterSec * 1000);
+
+    return () => {
+      clearAutoCaptureTimer();
+    };
+  }, [
+    captureControl?.enabled,
+    captureControl?.intervalSec,
+    captureControl?.lastCaptureEventAt,
+    captureControl?.nextCaptureAfterSec,
+    currentUser?.authToken,
+    currentUser?.deviceId,
+    currentUser?.userId,
+  ]);
+
+  useEffect(() => {
+    if (!captureControl?.enabled || !currentUser?.deviceId) {
+      autoCaptureStartKeyRef.current = null;
+      return;
+    }
+
+    if (!rxRef.current || isCaptureStatusBusy(statusRef.current)) {
+      return;
+    }
+
+    const startKey = [
+      currentUser.userId,
+      currentUser.deviceId,
+      captureControl.updatedAt || 'enabled',
+    ].join(':');
+
+    if (autoCaptureStartKeyRef.current === startKey) {
+      return;
+    }
+
+    autoCaptureStartKeyRef.current = startKey;
+    void runAutoCapture('start_capture');
+  }, [
+    captureControl?.enabled,
+    captureControl?.updatedAt,
+    currentUser?.deviceId,
+    currentUser?.userId,
+    status,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      clearAutoCaptureTimer();
+    };
+  }, []);
+
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
@@ -697,6 +874,52 @@ export default function CaptureScreen() {
           ) : null}
         </View>
 
+        <View style={[commonStyles.card, styles.autoCaptureCard]}>
+          <View style={styles.autoCaptureHeader}>
+            <View style={styles.autoCaptureTextGroup}>
+              <Text style={styles.sectionTitle}>자동 촬영</Text>
+              <Text style={styles.sectionDescription}>
+                토글을 켜면 글래스 연결 후 즉시 1회 촬영하고, 이후{' '}
+                {resolvedCaptureIntervalSec}초마다 촬영합니다.
+              </Text>
+            </View>
+
+            <Switch
+              value={isAutoCaptureEnabled}
+              onValueChange={(nextValue) => {
+                void setCaptureControlEnabled(nextValue);
+              }}
+              disabled={
+                !currentUser?.deviceId ||
+                isLoadingCaptureControl ||
+                isUpdatingCaptureControl
+              }
+            />
+          </View>
+
+          <Text style={styles.autoCaptureStatus}>
+            {!currentUser?.deviceId
+              ? '기기를 먼저 선택해야 자동 촬영을 켤 수 있습니다.'
+              : isLoadingCaptureControl
+                ? '자동 촬영 설정을 불러오는 중입니다.'
+                : isAutoCaptureEnabled && hasGlassConnection
+                  ? '자동 촬영이 켜져 있고 글래스가 연결되어 있습니다.'
+                  : isAutoCaptureEnabled
+                    ? '자동 촬영이 켜져 있습니다. 글래스 연결을 기다리는 중입니다.'
+                    : '자동 촬영이 꺼져 있습니다.'}
+          </Text>
+
+          {captureControl?.lastCaptureEventAt ? (
+            <Text style={styles.autoCaptureMeta}>
+              마지막 자동 촬영 이벤트: {formatTimestamp(captureControl.lastCaptureEventAt)}
+            </Text>
+          ) : null}
+
+          {captureControlError ? (
+            <Text style={styles.errorText}>{captureControlError}</Text>
+          ) : null}
+        </View>
+
         <View style={[commonStyles.card, styles.workflowCard]}>
           <Text style={styles.sectionTitle}>처리 흐름</Text>
           <Text style={styles.sectionDescription}>
@@ -730,7 +953,7 @@ export default function CaptureScreen() {
             <Button
               title="촬영 요청"
               onPress={requestCapture}
-              disabled={status !== 'connected'||isBusy}
+              disabled={!hasGlassConnection || isBusy}
             />
           </View>
 
@@ -932,6 +1155,29 @@ const styles = StyleSheet.create({
   statusDescription: {
     fontSize: 13,
     lineHeight: 19,
+    color: colors.subText,
+  },
+  autoCaptureCard: {
+    gap: 10,
+    backgroundColor: '#F8FAFC',
+  },
+  autoCaptureHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  autoCaptureTextGroup: {
+    flex: 1,
+  },
+  autoCaptureStatus: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  autoCaptureMeta: {
+    fontSize: 12,
     color: colors.subText,
   },
   workflowCard: {

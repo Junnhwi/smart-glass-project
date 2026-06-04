@@ -22,6 +22,7 @@ import {
   type UserDevice,
 } from '../../networking/api';
 import { useAuth } from '../context/AuthContext';
+import { useCaptureControl } from '../context/CaptureControlContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
@@ -55,6 +56,13 @@ export default function ProfileScreen() {
   const navigation = useAppNavigation();
   const { currentUser, getDeviceLabel, setCurrentDevice, setDeviceAlias } =
     useAuth();
+  const {
+    captureControl,
+    isLoadingCaptureControl,
+    isUpdatingCaptureControl,
+    captureControlError,
+    setCaptureControlEnabled,
+  } = useCaptureControl();
 
   const [devices, setDevices] = useState<UserDevice[]>([]);
   const [pairings, setPairings] = useState<DevicePairing[]>([]);
@@ -69,8 +77,6 @@ export default function ProfileScreen() {
   );
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
-
-  const [isAutoCaptureEnabled, setIsAutoCaptureEnabled] = useState(false);
 
   const loadDevices = async ({ silent = false } = {}) => {
     if (!currentUser) {
@@ -129,10 +135,16 @@ export default function ProfileScreen() {
   };
 
   const handleAutoCaptureChange = async (nextValue: boolean) => {
-    setIsAutoCaptureEnabled(nextValue);
+    const updated = await setCaptureControlEnabled(nextValue);
+    if (!updated) {
+      return;
+    }
 
-    // TODO:
-    // 추후 자동 촬영 설정 API 연결 예정
+    setStatusMessage(
+      nextValue
+        ? '자동 촬영을 켰습니다. 글래스 연결 화면에서 촬영이 시작됩니다.'
+        : '자동 촬영을 껐습니다.'
+    );
   };
 
   useEffect(() => {
@@ -398,11 +410,23 @@ export default function ProfileScreen() {
             </View>
 
             <Switch
-              value={isAutoCaptureEnabled}
+              value={Boolean(captureControl?.enabled)}
               onValueChange={handleAutoCaptureChange}
-              disabled={!currentUser?.deviceId}
+              disabled={
+                !currentUser?.deviceId ||
+                isLoadingCaptureControl ||
+                isUpdatingCaptureControl
+              }
             />
           </View>
+          <Text style={styles.captureDescription}>
+            {captureControl?.enabled
+              ? `현재 ${captureControl.intervalSec}초마다 촬영하도록 설정되어 있습니다.`
+              : '자동 촬영을 켜면 Capture 화면에서 글래스 연결 후 주기 촬영합니다.'}
+          </Text>
+          {captureControlError ? (
+            <Text style={styles.errorText}>{captureControlError}</Text>
+          ) : null}
         </View>
 
         <View style={[commonStyles.card, styles.deviceCard]}>

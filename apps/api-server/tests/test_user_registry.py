@@ -69,6 +69,10 @@ class PostgresUserRegistryTests(unittest.TestCase):
                 "2026-05-05T00:01:00Z",
                 None,
                 "2026-05-05T00:01:00Z",
+                False,
+                300,
+                None,
+                None,
             )
         )
         connection = FakeConnection(cursor)
@@ -82,7 +86,7 @@ class PostgresUserRegistryTests(unittest.TestCase):
         self.assertTrue(connection.committed)
         self.assertEqual(
             cursor.executed[0][1],
-            ("glass-001", "user-1", "active", "glass-001"),
+            ("glass-001", "user-1", "active", "glass-001", False, 300, None, None),
         )
         normalized_query = " ".join(cursor.executed[0][0].split())
         self.assertIn("ON CONFLICT (device_id) DO UPDATE", normalized_query)
@@ -117,6 +121,10 @@ class PostgresUserRegistryTests(unittest.TestCase):
                 "2026-05-05T00:01:00Z",
                 "2026-05-05T00:03:00Z",
                 "2026-05-05T00:03:00Z",
+                False,
+                300,
+                None,
+                None,
             )
         )
         connection = FakeConnection(cursor)
@@ -141,6 +149,10 @@ class PostgresUserRegistryTests(unittest.TestCase):
                     "2026-05-05T00:01:00Z",
                     None,
                     "2026-05-05T00:01:00Z",
+                    False,
+                    300,
+                    None,
+                    None,
                 ),
                 (
                     "glass-002",
@@ -151,6 +163,10 @@ class PostgresUserRegistryTests(unittest.TestCase):
                     "2026-05-05T00:02:00Z",
                     "2026-05-05T00:04:00Z",
                     "2026-05-05T00:04:00Z",
+                    False,
+                    300,
+                    None,
+                    None,
                 ),
             ],
         )
@@ -162,6 +178,58 @@ class PostgresUserRegistryTests(unittest.TestCase):
         self.assertEqual(records[0].device_id, "glass-001")
         self.assertEqual(records[0].display_name, "Living Room Glass")
         self.assertEqual(records[1].status, "revoked")
+
+    def test_record_scheduled_capture_event_uses_atomic_interval_predicate(self) -> None:
+        cursor = FakeCursor(
+            (
+                "glass-001",
+                "user-1",
+                "active",
+                None,
+                "2026-05-05T00:01:00Z",
+                "2026-05-05T00:01:00Z",
+                None,
+                "2026-05-05T00:01:00Z",
+                True,
+                300,
+                "2026-05-05T00:02:00Z",
+                "2026-05-05T00:05:00Z",
+            )
+        )
+        connection = FakeConnection(cursor)
+        self.registry._connect = lambda: connection  # type: ignore[method-assign]
+
+        record = self.registry.record_device_capture_event(
+            user_id="user-1",
+            device_id="glass-001",
+            event_type="scheduled_capture",
+            interval_sec=300,
+        )
+
+        self.assertEqual(record.device_id, "glass-001")
+        self.assertTrue(connection.committed)
+        normalized_query = " ".join(cursor.executed[0][0].split())
+        self.assertIn("capture_last_event_at <= NOW() -", normalized_query)
+        self.assertEqual(
+            cursor.executed[0][1],
+            ("user-1", "glass-001", "scheduled_capture", 300),
+        )
+
+    def test_record_scheduled_capture_event_returns_none_when_interval_not_elapsed(
+        self,
+    ) -> None:
+        cursor = FakeCursor(None)
+        connection = FakeConnection(cursor)
+        self.registry._connect = lambda: connection  # type: ignore[method-assign]
+
+        record = self.registry.record_device_capture_event(
+            user_id="user-1",
+            device_id="glass-001",
+            event_type="scheduled_capture",
+            interval_sec=300,
+        )
+
+        self.assertIsNone(record)
 
 
 if __name__ == "__main__":

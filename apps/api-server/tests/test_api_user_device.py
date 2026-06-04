@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from fastapi.testclient import TestClient
@@ -22,6 +23,26 @@ class FakeUserDeviceService:
         self.should_lookup_fail = False
         self.should_conflict = False
         self.authorization_status = "allowed"
+
+    def _find_device(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        for devices in self.devices_by_user.values():
+            for device in devices:
+                if device.device_id != device_id:
+                    continue
+                if device.user_id != user_id:
+                    raise PermissionError("deviceId does not match requested userId")
+                if device.status != "active":
+                    raise PermissionError("deviceId is not active")
+                return device
+        raise LookupError("deviceId is not registered")
+
+    def _replace_device(self, next_device: DeviceRecord) -> DeviceRecord:
+        devices = self.devices_by_user.get(next_device.user_id, [])
+        for index, device in enumerate(devices):
+            if device.device_id == next_device.device_id:
+                devices[index] = next_device
+                return next_device
+        raise LookupError("deviceId is not registered")
 
     def create_user(self, *, user_id: str | None = None) -> UserRecord:
         if self.should_fail:
@@ -126,6 +147,73 @@ class FakeUserDeviceService:
             status="allowed",
             device_id=device_id,
             user_id="user-1",
+        )
+
+    def get_capture_control(self, *, user_id: str, device_id: str) -> DeviceRecord:
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        return self._find_device(user_id=user_id, device_id=device_id)
+
+    def update_capture_control(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        enabled: bool,
+        interval_sec: int | None = None,
+    ) -> DeviceRecord:
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        device = self._find_device(user_id=user_id, device_id=device_id)
+        updated = replace(
+            device,
+            capture_enabled=enabled,
+            capture_interval_sec=interval_sec or device.capture_interval_sec,
+            capture_updated_at="2026-05-05T02:30:00Z",
+        )
+        return self._replace_device(updated)
+
+    def record_capture_event(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        event_type: str,
+    ):
+        if self.should_fail:
+            raise RuntimeError("user registry unavailable")
+        device = self._find_device(user_id=user_id, device_id=device_id)
+        if event_type not in {"start_capture", "scheduled_capture"}:
+            raise ValueError("eventType must be one of: start_capture, scheduled_capture")
+        if not device.capture_enabled:
+            from src.modules.users.service import CaptureEventResult
+
+            return CaptureEventResult(
+                device=device,
+                should_capture=False,
+                reason="disabled",
+            )
+        if event_type == "scheduled_capture" and device.capture_last_event_at:
+            from src.modules.users.service import CaptureEventResult
+
+            return CaptureEventResult(
+                device=device,
+                should_capture=False,
+                reason="interval_not_elapsed",
+            )
+
+        updated = self._replace_device(
+            replace(
+                device,
+                capture_last_event_at="2026-05-05T02:35:00Z",
+            )
+        )
+        from src.modules.users.service import CaptureEventResult
+
+        return CaptureEventResult(
+            device=updated,
+            should_capture=True,
+            reason="accepted",
         )
 
     def check_health(self) -> None:
@@ -267,11 +355,155 @@ class ApiServerUserDeviceTests(unittest.TestCase):
         self.assertEqual(body["totalDevices"], 1)
         self.assertEqual(body["items"][0]["deviceId"], "glass-001")
         self.assertEqual(body["items"][0]["status"], "active")
+        self.assertNotIn("captureEnabled", body["items"][0])
+        self.assertNotIn("captureIntervalSec", body["items"][0])
 
     def test_list_user_devices_rejects_authenticated_user_mismatch(self) -> None:
         response = self.client.get(
             "/users/user-1/devices",
             headers={"Authorization": build_bearer_authorization_header("user-2")},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("does not match", response.json()["detail"])
+
+    def test_capture_control_defaults_to_disabled_for_active_device(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.get(
+            "/users/user-1/devices/glass-001/capture-control",
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["userId"], "user-1")
+        self.assertEqual(body["deviceId"], "glass-001")
+        self.assertFalse(body["enabled"])
+        self.assertEqual(body["intervalSec"], 300)
+        self.assertIsNone(body["nextCaptureAfterSec"])
+
+    def test_capture_control_patch_updates_enabled_state(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.patch(
+            "/users/user-1/devices/glass-001/capture-control",
+            json={"enabled": True, "intervalSec": 300},
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["enabled"])
+        self.assertEqual(body["intervalSec"], 300)
+        self.assertEqual(body["updatedAt"], "2026-05-05T02:30:00Z")
+
+    def test_capture_event_skips_when_control_is_disabled(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.post(
+            "/users/user-1/devices/glass-001/capture-events",
+            json={"eventType": "scheduled_capture"},
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "skipped")
+        self.assertFalse(body["shouldCapture"])
+        self.assertEqual(body["reason"], "disabled")
+
+    def test_capture_event_accepts_start_capture_when_enabled(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+        self.fake_user_device_service.update_capture_control(
+            user_id="user-1",
+            device_id="glass-001",
+            enabled=True,
+            interval_sec=300,
+        )
+
+        response = self.client.post(
+            "/users/user-1/devices/glass-001/capture-events",
+            json={"eventType": "start_capture"},
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "accepted")
+        self.assertTrue(body["shouldCapture"])
+        self.assertEqual(body["reason"], "accepted")
+        self.assertEqual(body["lastCaptureEventAt"], "2026-05-05T02:35:00Z")
+
+    def test_capture_event_skips_scheduled_capture_before_interval(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+        self.fake_user_device_service.update_capture_control(
+            user_id="user-1",
+            device_id="glass-001",
+            enabled=True,
+            interval_sec=300,
+        )
+        self.fake_user_device_service.record_capture_event(
+            user_id="user-1",
+            device_id="glass-001",
+            event_type="start_capture",
+        )
+
+        response = self.client.post(
+            "/users/user-1/devices/glass-001/capture-events",
+            json={"eventType": "scheduled_capture"},
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "skipped")
+        self.assertFalse(body["shouldCapture"])
+        self.assertEqual(body["reason"], "interval_not_elapsed")
+
+    def test_capture_control_rejects_revoked_device(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+        self.fake_user_device_service.revoke_device(
+            user_id="user-1",
+            device_id="glass-001",
+        )
+
+        response = self.client.get(
+            "/users/user-1/devices/glass-001/capture-control",
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("not active", response.json()["detail"])
+
+    def test_capture_control_rejects_device_user_mismatch(self) -> None:
+        self.fake_user_device_service.register_device(
+            user_id="user-2",
+            device_id="glass-002",
+        )
+
+        response = self.client.get(
+            "/users/user-1/devices/glass-002/capture-control",
+            headers={"Authorization": build_bearer_authorization_header("user-1")},
         )
 
         self.assertEqual(response.status_code, 403)
