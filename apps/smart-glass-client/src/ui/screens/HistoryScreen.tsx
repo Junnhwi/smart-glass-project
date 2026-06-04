@@ -76,8 +76,32 @@ export default function HistoryScreen() {
   const navigation = useAppNavigation();
   const { currentUser, refreshSession } = useAuth();
   const [items, setItems] = useState<HistoryCardItem[]>([]);
+  const [imageAspectRatios, setImageAspectRatios] = useState<
+    Record<string, number>
+  >({});
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+
+  const handleImageLoad = (memoryId: string, event: any) => {
+    const width = event?.nativeEvent?.source?.width;
+    const height = event?.nativeEvent?.source?.height;
+
+    if (!width || !height) {
+      return;
+    }
+
+    const nextRatio = width / height;
+    setImageAspectRatios((currentRatios) => {
+      if (currentRatios[memoryId] === nextRatio) {
+        return currentRatios;
+      }
+
+      return {
+        ...currentRatios,
+        [memoryId]: nextRatio,
+      };
+    });
+  };
 
   useEffect(() => {
     let isActive = true;
@@ -234,7 +258,14 @@ export default function HistoryScreen() {
                   {item.accessUrl ? (
                     <Image
                       source={{ uri: item.accessUrl }}
-                      style={styles.thumbnail}
+                      style={[
+                        styles.thumbnail,
+                        imageAspectRatios[item.memoryId]
+                          ? { aspectRatio: imageAspectRatios[item.memoryId] }
+                          : styles.thumbnailFallback,
+                      ]}
+                      resizeMode="contain"
+                      onLoad={(event) => handleImageLoad(item.memoryId, event)}
                     />
                   ) : null}
 
@@ -311,10 +342,12 @@ const styles = StyleSheet.create({
   },
   thumbnail: {
     width: '100%',
-    height: 160,
     borderRadius: 12,
     marginBottom: 12,
     backgroundColor: colors.border,
+  },
+  thumbnailFallback: {
+    height: 220,
   },
   cardTop: {
     flexDirection: 'row',
