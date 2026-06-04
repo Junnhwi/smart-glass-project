@@ -152,6 +152,12 @@ export function GlassConnectionProvider({
   const chunksRef = useRef<Uint8Array[]>([]);
   const lastReceivedByteRef = useRef<number | null>(null);
   const isTxNotificationStartedRef = useRef(false);
+  const txNotificationListenerRef = useRef<((event: Event) => void) | null>(
+    null
+  );
+  const deviceDisconnectListenerRef = useRef<((event: Event) => void) | null>(
+    null
+  );
   const connectedDeviceIdRef = useRef<string | null>(null);
   const statusRef = useRef(status);
   const autoCaptureTimerRef = useRef<ReturnType<typeof setInterval> | null>(
@@ -167,6 +173,63 @@ export function GlassConnectionProvider({
     }
     clearInterval(autoCaptureTimerRef.current);
     autoCaptureTimerRef.current = null;
+  };
+
+  const clearGlassConnection = async ({
+    disconnectGatt = false,
+    message,
+  }: {
+    disconnectGatt?: boolean;
+    message?: string;
+  } = {}) => {
+    clearAutoCaptureTimer();
+
+    if (txRef.current && txNotificationListenerRef.current) {
+      txRef.current.removeEventListener(
+        'characteristicvaluechanged',
+        txNotificationListenerRef.current
+      );
+    }
+
+    if (txRef.current && isTxNotificationStartedRef.current) {
+      try {
+        await txRef.current.stopNotifications();
+      } catch {
+        // 이미 연결이 끊긴 characteristic이면 무시합니다.
+      }
+    }
+
+    if (deviceRef.current && deviceDisconnectListenerRef.current) {
+      deviceRef.current.removeEventListener?.(
+        'gattserverdisconnected',
+        deviceDisconnectListenerRef.current
+      );
+    }
+
+    if (disconnectGatt && deviceRef.current?.gatt?.connected) {
+      try {
+        deviceRef.current.gatt.disconnect();
+      } catch {
+        // 브라우저/기기 상태에 따라 disconnect가 실패할 수 있어 무시합니다.
+      }
+    }
+
+    rxRef.current = null;
+    txRef.current = null;
+    deviceRef.current = null;
+    connectedDeviceIdRef.current = null;
+    txNotificationListenerRef.current = null;
+    deviceDisconnectListenerRef.current = null;
+    isTxNotificationStartedRef.current = false;
+    chunksRef.current = [];
+    lastReceivedByteRef.current = null;
+    autoCaptureStartKeyRef.current = null;
+    setHasGlassConnection(false);
+    setStatus('idle');
+
+    if (message) {
+      setPipelineErrorMessage(message);
+    }
   };
 
   const registerAndSelectGlassDevice = async (deviceId: string) => {
@@ -246,11 +309,17 @@ export function GlassConnectionProvider({
       return;
     }
 
-    const selectedDeviceId =
-      currentUser.deviceId || connectedDeviceIdRef.current;
+    const selectedDeviceId = connectedDeviceIdRef.current;
 
     if (!selectedDeviceId) {
-      setPipelineErrorMessage('선택된 기기가 없습니다.');
+      setPipelineErrorMessage('연결된 글래스 기기가 없습니다.');
+      return;
+    }
+
+    if (currentUser.deviceId && currentUser.deviceId !== selectedDeviceId) {
+      setPipelineErrorMessage(
+        '현재 선택된 기기와 연결된 글래스가 다릅니다. 글래스를 다시 연결해 주세요.'
+      );
       return;
     }
 
@@ -401,20 +470,9 @@ export function GlassConnectionProvider({
         throw new Error('이 브라우저는 Web Bluetooth를 지원하지 않습니다.');
       }
 
-      if (txRef.current && isTxNotificationStartedRef.current) {
-        txRef.current.removeEventListener(
-          'characteristicvaluechanged',
-          handleChunkReceived
-        );
-
-        try {
-          await txRef.current.stopNotifications();
-        } catch {
-          // 이미 연결이 끊긴 characteristic이면 무시합니다.
-        }
-
-        isTxNotificationStartedRef.current = false;
-      }
+      await clearGlassConnection({ disconnectGatt: true });
+      setStatus('connecting');
+      setPipelineErrorMessage('');
 
       const device = await bluetooth.requestDevice({
         filters: [
@@ -428,13 +486,28 @@ export function GlassConnectionProvider({
       connectedDeviceIdRef.current = connectedDeviceId;
       deviceRef.current = device;
 
-      device.addEventListener?.('gattserverdisconnected', () => {
+      const handleDeviceDisconnected = (event: Event) => {
+        if (event.target !== deviceRef.current) {
+          return;
+        }
+
         rxRef.current = null;
         txRef.current = null;
+        deviceRef.current = null;
+        connectedDeviceIdRef.current = null;
+        txNotificationListenerRef.current = null;
+        deviceDisconnectListenerRef.current = null;
         isTxNotificationStartedRef.current = false;
+        chunksRef.current = [];
+        lastReceivedByteRef.current = null;
         setHasGlassConnection(false);
         setStatus('idle');
-      });
+      };
+      deviceDisconnectListenerRef.current = handleDeviceDisconnected;
+      device.addEventListener?.(
+        'gattserverdisconnected',
+        handleDeviceDisconnected
+      );
 
       const server = await device.gatt?.connect();
 
@@ -453,6 +526,7 @@ export function GlassConnectionProvider({
       await tx.startNotifications();
 
       tx.addEventListener('characteristicvaluechanged', handleChunkReceived);
+      txNotificationListenerRef.current = handleChunkReceived;
 
       isTxNotificationStartedRef.current = true;
       await registerAndSelectGlassDevice(connectedDeviceId);
@@ -473,6 +547,18 @@ export function GlassConnectionProvider({
   const requestCapture = async () => {
     if (!rxRef.current) {
       setPipelineErrorMessage('글래스가 연결되지 않았습니다.');
+      return;
+    }
+
+    const connectedDeviceId = connectedDeviceIdRef.current;
+    if (
+      currentUser?.deviceId &&
+      connectedDeviceId &&
+      currentUser.deviceId !== connectedDeviceId
+    ) {
+      setPipelineErrorMessage(
+        '현재 선택된 기기와 연결된 글래스가 다릅니다. 글래스를 다시 연결해 주세요.'
+      );
       return;
     }
 
@@ -506,6 +592,11 @@ export function GlassConnectionProvider({
       return;
     }
 
+    const connectedDeviceId = connectedDeviceIdRef.current;
+    if (!connectedDeviceId || connectedDeviceId !== currentUser.deviceId) {
+      return;
+    }
+
     if (!rxRef.current) {
       if (eventType === 'start_capture') {
         setPipelineErrorMessage(
@@ -523,7 +614,7 @@ export function GlassConnectionProvider({
       setPipelineErrorMessage('');
       let authToken = currentUser.authToken;
       let userId = currentUser.userId;
-      let deviceId = currentUser.deviceId;
+      let deviceId = connectedDeviceId;
 
       let eventResponse: Awaited<ReturnType<typeof recordCaptureEvent>>;
       try {
@@ -539,12 +630,14 @@ export function GlassConnectionProvider({
         }
 
         const refreshedUser = await refreshSession();
-        if (!refreshedUser?.authToken || !refreshedUser.deviceId) {
+        if (
+          !refreshedUser?.authToken ||
+          refreshedUser.deviceId !== connectedDeviceId
+        ) {
           throw error;
         }
         authToken = refreshedUser.authToken;
         userId = refreshedUser.userId;
-        deviceId = refreshedUser.deviceId;
         eventResponse = await recordCaptureEvent({
           authToken,
           userId,
@@ -566,6 +659,19 @@ export function GlassConnectionProvider({
       );
     }
   };
+
+  useEffect(() => {
+    const connectedDeviceId = connectedDeviceIdRef.current;
+    if (!connectedDeviceId || connectedDeviceId === currentUser?.deviceId) {
+      return;
+    }
+
+    void clearGlassConnection({
+      disconnectGatt: true,
+      message:
+        '선택된 기기가 변경되어 기존 글래스 연결을 정리했습니다. 새 기기로 다시 연결해 주세요.',
+    });
+  }, [currentUser?.deviceId]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -637,13 +743,7 @@ export function GlassConnectionProvider({
 
   useEffect(() => {
     return () => {
-      clearAutoCaptureTimer();
-      if (txRef.current && isTxNotificationStartedRef.current) {
-        txRef.current.removeEventListener(
-          'characteristicvaluechanged',
-          handleChunkReceived
-        );
-      }
+      void clearGlassConnection({ disconnectGatt: false });
     };
   }, []);
 
