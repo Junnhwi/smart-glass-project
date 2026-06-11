@@ -262,6 +262,31 @@ class S3MediaUrlSigner:
             expires_in_sec=resolved_expiration,
         )
 
+    def delete_object(
+        self,
+        image_key: str,
+        *,
+        bucket_name: str | None = None,
+    ) -> str:
+        normalized_key = normalize_storage_object_key(image_key)
+        resolved_bucket_name = self._resolve_bucket_name(bucket_name)
+
+        try:
+            self._get_client().delete_object(
+                Bucket=resolved_bucket_name,
+                Key=normalized_key,
+            )
+        except (ClientError, BotoCoreError, MediaUrlSignerError) as exc:
+            raise MediaUrlSignerUnavailableError(
+                f"Failed to delete media object: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise MediaUrlSignerUnavailableError(
+                f"Unexpected error while deleting media object: {exc}"
+            ) from exc
+
+        return normalized_key
+
     def check_health(self) -> None:
         self._resolve_bucket_name()
         self._get_client()
@@ -360,6 +385,10 @@ class MediaAccessService:
             )
             for image_key in ordered_keys
         ]
+
+    def delete_media_object(self, *, image_key: str) -> str:
+        normalized_image_key = normalize_storage_object_key(image_key)
+        return self.signer.delete_object(normalized_image_key)
 
     def list_gallery_items(
         self,

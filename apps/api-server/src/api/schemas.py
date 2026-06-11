@@ -829,6 +829,14 @@ class MemoryRecentResponse(ApiSchema):
     items: list[MemoryRecentItemPayload]
 
 
+class MemoryDeleteResponse(ApiSchema):
+    status: Literal["deleted"] = "deleted"
+    memoryId: str
+    userId: str
+    imageKey: str | None = None
+    objectDeleted: bool = False
+
+
 class MemoryChatResponse(ApiSchema):
     answer: str
     answerMode: str

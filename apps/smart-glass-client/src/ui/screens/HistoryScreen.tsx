@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Pressable,
   ScrollView,
@@ -11,6 +12,7 @@ import {
 } from 'react-native';
 
 import {
+  deleteRecentMemory,
   issueMediaAccessUrls,
   listRecentMemories,
   type MemoryRecentItem,
@@ -84,7 +86,11 @@ export default function HistoryScreen() {
     Record<string, number>
   >({});
   const [isLoading, setIsLoading] = useState(true);
+  const [deletingMemoryIds, setDeletingMemoryIds] = useState<
+    Record<string, boolean>
+  >({});
   const [errorMessage, setErrorMessage] = useState('');
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState('');
 
   const handleImageLoad = (memoryId: string, event: any) => {
     const width = event?.nativeEvent?.source?.width;
@@ -209,6 +215,91 @@ export default function HistoryScreen() {
     };
   }, [currentUser]);
 
+  const deleteMemoryItem = async (item: HistoryCardItem) => {
+    if (!currentUser || deletingMemoryIds[item.memoryId]) {
+      return;
+    }
+
+    setDeletingMemoryIds((current) => ({
+      ...current,
+      [item.memoryId]: true,
+    }));
+    setDeleteErrorMessage('');
+
+    try {
+      let authToken = currentUser.authToken;
+      let userId = currentUser.userId;
+
+      try {
+        await deleteRecentMemory({
+          authToken,
+          userId,
+          memoryId: item.memoryId,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (!message.toLowerCase().includes('access token has expired')) {
+          throw error;
+        }
+
+        const refreshedUser = await refreshSession();
+        if (!refreshedUser) {
+          throw error;
+        }
+        authToken = refreshedUser.authToken;
+        userId = refreshedUser.userId;
+        await deleteRecentMemory({
+          authToken,
+          userId,
+          memoryId: item.memoryId,
+        });
+      }
+
+      setItems((currentItems) =>
+        currentItems.filter(
+          (currentItem) => currentItem.memoryId !== item.memoryId
+        )
+      );
+      setImageAspectRatios((currentRatios) => {
+        const nextRatios = { ...currentRatios };
+        delete nextRatios[item.memoryId];
+        return nextRatios;
+      });
+    } catch (error) {
+      setDeleteErrorMessage(
+        error instanceof Error
+          ? error.message
+          : '기록을 삭제하는 중 문제가 생겼어요.'
+      );
+    } finally {
+      setDeletingMemoryIds((current) => {
+        const next = { ...current };
+        delete next[item.memoryId];
+        return next;
+      });
+    }
+  };
+
+  const confirmDeleteMemory = (item: HistoryCardItem) => {
+    Alert.alert(
+      '기록 삭제',
+      '이 사진과 추론 정보를 삭제할까요?',
+      [
+        {
+          text: '취소',
+          style: 'cancel',
+        },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: () => {
+            void deleteMemoryItem(item);
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
@@ -252,9 +343,16 @@ export default function HistoryScreen() {
           </View>
         ) : null}
 
+        {!isLoading && deleteErrorMessage ? (
+          <View style={styles.deleteErrorBox}>
+            <Text style={styles.deleteErrorText}>{deleteErrorMessage}</Text>
+          </View>
+        ) : null}
+
         {!isLoading && !errorMessage
           ? items.map((item) => {
               const itemName = item.detectedObjects[0] || item.tags[0] || '기록';
+              const isDeleting = Boolean(deletingMemoryIds[item.memoryId]);
 
               return (
                 <Pressable
@@ -281,9 +379,27 @@ export default function HistoryScreen() {
 
                   <View style={styles.cardTop}>
                     <Text style={styles.cardTitle}>{itemName}</Text>
-                    <Text style={styles.time}>
-                      {formatRelativeTime(item.capturedAt)}
-                    </Text>
+                    <View style={styles.cardActions}>
+                      <Text style={styles.time}>
+                        {formatRelativeTime(item.capturedAt)}
+                      </Text>
+                      <Pressable
+                        disabled={isDeleting}
+                        style={({ pressed }) => [
+                          styles.deleteButton,
+                          pressed && !isDeleting ? styles.deleteButtonPressed : null,
+                          isDeleting ? styles.deleteButtonDisabled : null,
+                        ]}
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          confirmDeleteMemory(item);
+                        }}
+                      >
+                        <Text style={styles.deleteButtonText}>
+                          {isDeleting ? '삭제 중' : '삭제'}
+                        </Text>
+                      </Pressable>
+                    </View>
                   </View>
 
                   <Text style={styles.preview}>{describeMemory(item)}</Text>
@@ -339,6 +455,19 @@ const styles = StyleSheet.create({
     color: colors.subText,
     lineHeight: 20,
   },
+  deleteErrorBox: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  deleteErrorText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#b91c1c',
+  },
   emptyTitle: {
     fontSize: 16,
     fontWeight: '700',
@@ -362,7 +491,7 @@ const styles = StyleSheet.create({
   cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
     marginBottom: 6,
   },
@@ -376,6 +505,32 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: colors.subText,
+  },
+  cardActions: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  deleteButton: {
+    minWidth: 52,
+    minHeight: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fff5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  deleteButtonPressed: {
+    opacity: 0.72,
+  },
+  deleteButtonDisabled: {
+    opacity: 0.5,
+  },
+  deleteButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#b91c1c',
   },
   preview: {
     fontSize: 14,

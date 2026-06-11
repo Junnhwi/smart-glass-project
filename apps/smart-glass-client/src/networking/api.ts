@@ -60,6 +60,14 @@ export type MemoryRecentResponse = {
   items: MemoryRecentItem[];
 };
 
+export type MemoryDeleteResponse = {
+  status: 'deleted';
+  memoryId: string;
+  userId: string;
+  imageKey?: string | null;
+  objectDeleted: boolean;
+};
+
 export type MediaAccessUrl = {
   imageKey: string;
   accessUrl: string;
@@ -711,6 +719,35 @@ export const listRecentMemories = async ({
   }
 
   return response.json() as Promise<MemoryRecentResponse>;
+};
+
+export const deleteRecentMemory = async ({
+  authToken,
+  userId,
+  memoryId,
+}: {
+  authToken: string;
+  userId: string;
+  memoryId: string;
+}) => {
+  const query = new URLSearchParams({
+    userId,
+  });
+  const response = await fetch(
+    `${API_BASE_URL}/memories/${encodeURIComponent(memoryId)}?${query.toString()}`,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, await buildErrorMessage(response));
+  }
+
+  return response.json() as Promise<MemoryDeleteResponse>;
 };
 
 export const requestMediaUploadAuthorization = async ({

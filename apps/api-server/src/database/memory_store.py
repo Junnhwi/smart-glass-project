@@ -679,6 +679,68 @@ class PostgresMemoryStoreClient:
             return None
         return MemoryRecord.from_dict(json.loads(row[0]))
 
+    def get_by_memory_id(self, user_id: str, memory_id: str) -> MemoryRecord | None:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_memory_id = _normalize_text(memory_id)
+        if not normalized_user_id or not normalized_memory_id:
+            return None
+
+        self._ensure_schema()
+        query = f"""
+            SELECT document::text
+            FROM {self.table_name}
+            WHERE user_id = %s
+              AND memory_id = %s
+            LIMIT 1
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (normalized_user_id, normalized_memory_id))
+                    row = cur.fetchone()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres read failed: {exc}"
+            ) from exc
+
+        if not row:
+            return None
+        return MemoryRecord.from_dict(json.loads(row[0]))
+
+    def delete_by_memory_id(self, user_id: str, memory_id: str) -> MemoryRecord | None:
+        normalized_user_id = _normalize_text(user_id)
+        normalized_memory_id = _normalize_text(memory_id)
+        if not normalized_user_id or not normalized_memory_id:
+            return None
+
+        self._ensure_schema()
+        query = f"""
+            DELETE FROM {self.table_name}
+            WHERE user_id = %s
+              AND memory_id = %s
+            RETURNING document::text
+        """
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (normalized_user_id, normalized_memory_id))
+                    row = cur.fetchone()
+                conn.commit()
+        except MemoryStoreUnavailableError:
+            raise
+        except Exception as exc:
+            raise MemoryStoreUnavailableError(
+                f"Postgres delete failed: {exc}"
+            ) from exc
+
+        if not row:
+            return None
+        return MemoryRecord.from_dict(json.loads(row[0]))
+
     def list_by_image_keys(
         self,
         user_id: str,

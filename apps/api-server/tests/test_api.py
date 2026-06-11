@@ -204,6 +204,7 @@ class FakeMediaAccessService:
         self.last_issue_access_url_args: tuple[str, str, int] | None = None
         self.last_issue_access_urls_args: tuple[str, tuple[str, ...], int] | None = None
         self.last_gallery_args: tuple[str, int] | None = None
+        self.last_deleted_image_key: str | None = None
         self.should_fail = False
         self.should_configure_fail = False
         self.should_forbid = False
@@ -273,6 +274,14 @@ class FakeMediaAccessService:
         self.last_gallery_args = (user_id, limit)
         return [self.gallery_item]
 
+    def delete_media_object(self, *, image_key: str) -> str:
+        if self.should_configure_fail:
+            raise MediaUrlSignerConfigError("Missing required bucket configuration")
+        if self.should_fail:
+            raise RuntimeError("storage delete unavailable")
+        self.last_deleted_image_key = image_key
+        return image_key
+
     def check_health(self) -> None:
         self.health_checked = True
 
@@ -282,7 +291,24 @@ class FakeMemoryStoreClient:
 
     def __init__(self) -> None:
         self.last_worker_result: dict[str, object] | None = None
+        self.last_get_args: tuple[str, str] | None = None
+        self.last_delete_args: tuple[str, str] | None = None
         self.should_fail = False
+        self.record = MemoryRecord(
+            memory_id="mem-wallet-01",
+            user_id="user-1",
+            image_key="captures/user-1/mem-wallet-01.jpg",
+            image_url="https://example.com/captures/mem-wallet-01.jpg",
+            captured_at="2026-04-07T08:00:00Z",
+            caption="wallet on the desk next to the keyboard",
+            scene_summary="desk scene",
+            detected_objects=["wallet", "desk", "keyboard"],
+            tags=["office"],
+            ocr_text="notes",
+            note=None,
+            position_hint="keyboard 옆",
+            location=MemoryLocation(name="workspace"),
+        )
 
     def persist_vlm_result(self, worker_result: dict[str, object]) -> MemoryStoreOutcome:
         if self.should_fail:
@@ -292,6 +318,22 @@ class FakeMemoryStoreClient:
             stored_count=1,
             total_user_memories={str(worker_result["userId"]): 3},
         )
+
+    def get_by_memory_id(self, user_id: str, memory_id: str) -> MemoryRecord | None:
+        if self.should_fail:
+            raise RuntimeError("memory database unavailable")
+        self.last_get_args = (user_id, memory_id)
+        if self.record.user_id == user_id and self.record.memory_id == memory_id:
+            return self.record
+        return None
+
+    def delete_by_memory_id(self, user_id: str, memory_id: str) -> MemoryRecord | None:
+        if self.should_fail:
+            raise RuntimeError("memory database unavailable")
+        self.last_delete_args = (user_id, memory_id)
+        if self.record.user_id == user_id and self.record.memory_id == memory_id:
+            return self.record
+        return None
 
     def check_health(self) -> None:
         pass
@@ -657,6 +699,52 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 422)
+
+    def test_delete_memory_deletes_object_and_memory_record(self) -> None:
+        response = self.client.delete(
+            "/memories/mem-wallet-01",
+            params={"userId": "user-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "deleted")
+        self.assertEqual(body["memoryId"], "mem-wallet-01")
+        self.assertEqual(body["imageKey"], "captures/user-1/mem-wallet-01.jpg")
+        self.assertTrue(body["objectDeleted"])
+        self.assertEqual(
+            self.fake_memory_store_client.last_get_args,
+            ("user-1", "mem-wallet-01"),
+        )
+        self.assertEqual(
+            self.fake_media_access_service.last_deleted_image_key,
+            "captures/user-1/mem-wallet-01.jpg",
+        )
+        self.assertEqual(
+            self.fake_memory_store_client.last_delete_args,
+            ("user-1", "mem-wallet-01"),
+        )
+
+    def test_delete_memory_returns_404_for_missing_memory(self) -> None:
+        response = self.client.delete(
+            "/memories/missing-memory",
+            params={"userId": "user-1"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("not found", response.json()["detail"])
+
+    def test_delete_memory_keeps_db_record_when_storage_delete_fails(self) -> None:
+        self.fake_media_access_service.should_fail = True
+
+        response = self.client.delete(
+            "/memories/mem-wallet-01",
+            params={"userId": "user-1"},
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("storage delete unavailable", response.json()["detail"])
+        self.assertIsNone(self.fake_memory_store_client.last_delete_args)
 
     def test_chat_endpoint_returns_answer_and_hits(self) -> None:
         response = self.client.post(

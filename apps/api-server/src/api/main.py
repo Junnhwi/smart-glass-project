@@ -57,6 +57,7 @@ from src.api.schemas import (
     MediaGalleryResponse,
     MemoryChatRequest,
     MemoryChatResponse,
+    MemoryDeleteResponse,
     MemoryInferenceResultIngestResponse,
     MemoryLocationPayload,
     MemoryRecentItemPayload,
@@ -621,6 +622,7 @@ def create_app() -> FastAPI:
                 "POST /media/access-url",
                 "POST /media/access-urls",
                 "POST /memories/inference-results",
+                "DELETE /memories/{memoryId}",
                 "POST /search",
                 "POST /chat",
             ],
@@ -2096,6 +2098,77 @@ def create_app() -> FastAPI:
             userId=user_id,
             totalItems=len(records),
             items=[_map_memory_record(record) for record in records],
+        )
+
+    @app.delete("/memories/{memoryId}", response_model=MemoryDeleteResponse)
+    def delete_memory(
+        request: Request,
+        memoryId: str,
+        userId: str,
+    ) -> MemoryDeleteResponse:
+        user_id = resolve_authenticated_user(request, userId)
+        normalized_memory_id = " ".join(str(memoryId).strip().split())
+        if not normalized_memory_id:
+            raise HTTPException(status_code=400, detail="memoryId must not be blank")
+
+        try:
+            memory_store_client = _get_memory_store_client(request)
+            record = memory_store_client.get_by_memory_id(
+                user_id,
+                normalized_memory_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Memory store backend unavailable: {exc}",
+            ) from exc
+
+        if record is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+
+        object_deleted = False
+        if record.image_key:
+            try:
+                media_access_service = _get_media_access_service(request)
+                media_access_service.delete_media_object(image_key=record.image_key)
+                object_deleted = True
+            except MediaUrlSignerConfigError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Media storage backend unavailable: {exc}",
+                ) from exc
+
+        try:
+            deleted_record = memory_store_client.delete_by_memory_id(
+                user_id,
+                normalized_memory_id,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Memory store backend unavailable: {exc}",
+            ) from exc
+
+        if deleted_record is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+
+        return MemoryDeleteResponse(
+            memoryId=deleted_record.memory_id,
+            userId=user_id,
+            imageKey=deleted_record.image_key,
+            objectDeleted=object_deleted,
         )
 
     return app
