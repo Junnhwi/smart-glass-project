@@ -48,7 +48,10 @@ function AppNavigator() {
             key={currentUser.userId}
             id="RootStack"
             initialRouteName={initialRouteName}
-            screenOptions={{ headerShown: false }}
+            screenOptions={{
+              headerShown: false,
+              animation: 'slide_from_right',
+            }}
           >
             <Stack.Screen name="Capture" component={CaptureScreen} />
             <Stack.Screen name="Chat" component={ChatScreen} />

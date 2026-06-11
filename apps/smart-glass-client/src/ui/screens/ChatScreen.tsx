@@ -18,6 +18,10 @@ import { useItemContext } from '../context/ItemContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import {
+  pressableCardFeedback,
+  pressableFeedback,
+} from '../styles/pressableFeedback';
+import {
   ApiRequestError,
   chatWithMemories,
   issueMediaAccessUrls,
@@ -48,6 +52,7 @@ const suggestedQueries = [
   '이어폰 마지막으로 본 곳 알려줘',
   '노트북이 있던 장면 찾아줘',
 ];
+const BOT_TYPING_INTERVAL_MS = 28;
 
 const formatCapturedAtKst = (capturedAt?: string | null) => {
   if (!capturedAt) {
@@ -136,6 +141,7 @@ export default function ChatScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
   const messagePositions = useRef<Record<number, number>>({});
+  const botTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
   const matchedMessageIds = useMemo(() => {
@@ -183,6 +189,70 @@ export default function ChatScreen() {
 
     setCurrentMatchIndex(0);
   }, [matchedMessageIds.length, searchText, messages]);
+
+  useEffect(() => {
+    return () => {
+      if (botTypingTimerRef.current) {
+        clearTimeout(botTypingTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showBotMessageWithTyping = (
+    fullText: string,
+    relatedImages?: RelatedImage[]
+  ) =>
+    new Promise<void>((resolve) => {
+      const messageId = Date.now() + Math.floor(Math.random() * 1000);
+      const characters = Array.from(fullText || '답변 내용이 비어 있어요.');
+      let nextIndex = 0;
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: messageId,
+          sender: 'bot',
+          text: '',
+        },
+      ]);
+      scrollToBottom();
+
+      const tick = () => {
+        nextIndex += 1;
+        const nextText = characters.slice(0, nextIndex).join('');
+
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === messageId
+              ? { ...message, text: nextText }
+              : message
+          )
+        );
+
+        if (nextIndex % 8 === 0 || nextIndex === characters.length) {
+          scrollToBottom();
+        }
+
+        if (nextIndex >= characters.length) {
+          if (relatedImages?.length) {
+            setMessages((prev) =>
+              prev.map((message) =>
+                message.id === messageId
+                  ? { ...message, relatedImages }
+                  : message
+              )
+            );
+          }
+          botTypingTimerRef.current = null;
+          resolve();
+          return;
+        }
+
+        botTypingTimerRef.current = setTimeout(tick, BOT_TYPING_INTERVAL_MS);
+      };
+
+      botTypingTimerRef.current = setTimeout(tick, BOT_TYPING_INTERVAL_MS);
+    });
 
   const renderHighlightedText = (text: string, sender: 'bot' | 'user') => {
     const keyword = searchText.trim();
@@ -326,26 +396,20 @@ export default function ChatScreen() {
         trimmed
       );
 
-      const botMessage: Message = {
-        id: Date.now() + 1,
-        sender: 'bot',
-        text: chatResponse.answer || '관련 기록을 찾지 못했어요.',
-        relatedImages,
-      };
-
-      setMessages((prev) => [...prev, botMessage]);
+      setIsBotTyping(false);
+      await showBotMessageWithTyping(
+        chatResponse.answer || '관련 기록을 찾지 못했어요.',
+        relatedImages
+      );
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 401) {
         void signOut();
       }
 
-      const botMessage: Message = {
-        id: Date.now() + 1,
-        sender: 'bot',
-        text: '답변을 불러오지 못했어요. 잠시 후 다시 시도해주세요.',
-      };
-
-      setMessages((prev) => [...prev, botMessage]);
+      setIsBotTyping(false);
+      await showBotMessageWithTyping(
+        '답변을 불러오지 못했어요. 잠시 후 다시 시도해주세요.'
+      );
     } finally {
       setIsBotTyping(false);
       scrollToBottom();
@@ -365,14 +429,9 @@ export default function ChatScreen() {
   };
 
   const handleMicPress = () => {
-    const botMessage: Message = {
-      id: Date.now(),
-      sender: 'bot',
-      text: '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.',
-    };
-
-    setMessages((prev) => [...prev, botMessage]);
-    scrollToBottom();
+    void showBotMessageWithTyping(
+      '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.'
+    );
   };
 
   return (
@@ -389,6 +448,7 @@ export default function ChatScreen() {
               autoFocus
             />
             <Pressable
+              style={({ pressed }) => pressableFeedback(pressed)}
               onPress={() => {
                 setIsSearchMode(false);
                 setSearchText('');
@@ -400,7 +460,10 @@ export default function ChatScreen() {
         ) : (
           <>
             <Pressable
-              style={styles.menuButton}
+              style={({ pressed }) => [
+                styles.menuButton,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => setSidebarVisible(true)}
             >
               <Text style={styles.menuText}>≡</Text>
@@ -411,7 +474,10 @@ export default function ChatScreen() {
             </View>
 
             <Pressable
-              style={styles.searchButton}
+              style={({ pressed }) => [
+                styles.searchButton,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => setIsSearchMode(true)}
             >
               <Text style={styles.searchIcon}>⌕</Text>
@@ -430,14 +496,20 @@ export default function ChatScreen() {
 
           <View style={styles.searchActions}>
             <Pressable
-              style={styles.searchMoveButton}
+              style={({ pressed }) => [
+                styles.searchMoveButton,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => goToMatch(currentMatchIndex - 1)}
             >
               <Text style={styles.searchMoveText}>이전</Text>
             </Pressable>
 
             <Pressable
-              style={styles.searchMoveButton}
+              style={({ pressed }) => [
+                styles.searchMoveButton,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => goToMatch(currentMatchIndex + 1)}
             >
               <Text style={styles.searchMoveText}>다음</Text>
@@ -465,7 +537,10 @@ export default function ChatScreen() {
                 {suggestedQueries.map((query) => (
                   <Pressable
                     key={query}
-                    style={styles.suggestionChip}
+                    style={({ pressed }) => [
+                      styles.suggestionChip,
+                      pressableFeedback(pressed),
+                    ]}
                     onPress={() => {
                       void sendQuery(query);
                     }}
@@ -511,7 +586,10 @@ export default function ChatScreen() {
                     {message.relatedImages.map((image) => (
                       <Pressable
                         key={image.imageKey}
-                        style={styles.relatedImageCard}
+                        style={({ pressed }) => [
+                          styles.relatedImageCard,
+                          pressableCardFeedback(pressed),
+                        ]}
                         onPress={() =>
                           navigation.navigate('ItemLocation', {
                             itemName: image.itemName,
@@ -581,11 +659,23 @@ export default function ChatScreen() {
           />
 
           {inputText.trim() ? (
-            <Pressable style={styles.sendButton} onPress={handleSend}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.sendButton,
+                pressableFeedback(pressed),
+              ]}
+              onPress={handleSend}
+            >
               <Text style={styles.actionButtonText}>전송</Text>
             </Pressable>
           ) : (
-            <Pressable style={styles.micButton} onPress={handleMicPress}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.micButton,
+                pressableFeedback(pressed),
+              ]}
+              onPress={handleMicPress}
+            >
               <Image source={micIcon} style={styles.micIcon} />
             </Pressable>
           )}

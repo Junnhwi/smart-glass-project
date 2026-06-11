@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
-  Button,
   Switch,
   Text,
   View,
@@ -13,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   listRecentMemories,
+  type CaptureTaskStatusResponse,
   type MemoryRecentItem,
 } from '../../networking/api';
 import SideBar from '../components/SideBar';
@@ -25,6 +27,10 @@ import {
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
+import {
+  pressableCardFeedback,
+  pressableFeedback,
+} from '../styles/pressableFeedback';
 
 const AUTO_SYNC_REFRESH_MS = 3000;
 const DEFAULT_CAPTURE_INTERVAL_SEC = 300;
@@ -69,6 +75,45 @@ const formatTimestamp = (value?: string | null) => {
   return parsed.toLocaleString();
 };
 
+const toTextList = (value: unknown) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+};
+
+const buildInferenceSummary = (
+  inferenceResult: CaptureTaskStatusResponse | null
+) => {
+  const workerResult = inferenceResult?.worker?.result;
+  const metadata = workerResult?.metadata;
+  const detectedObjects = toTextList(metadata?.detectedObjects);
+  const tags = toTextList(metadata?.tags);
+  const mainObjects = detectedObjects.length ? detectedObjects : tags;
+  const sceneSummary =
+    metadata?.sceneSummary ||
+    workerResult?.pipelineOutput?.scene_summary ||
+    metadata?.caption ||
+    null;
+  const positionHint =
+    metadata?.positionHint ||
+    workerResult?.pipelineOutput?.location_context ||
+    null;
+
+  return {
+    detectedObjects,
+    mainObjects: mainObjects.slice(0, 6),
+    sceneSummary,
+    positionHint,
+    capturedAt: workerResult?.capturedAt ?? null,
+    memoryId: workerResult?.memoryId ?? null,
+    imageKey: workerResult?.sourceImage?.imageKey ?? null,
+  };
+};
+
 export default function CaptureScreen() {
   const navigation = useAppNavigation();
   const {
@@ -99,6 +144,8 @@ export default function CaptureScreen() {
   const [isLoadingRecent, setIsLoadingRecent] = useState(false);
   const [recentMemories, setRecentMemories] = useState<MemoryRecentItem[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const inferenceMotion = useRef(new Animated.Value(0)).current;
+  const loadingMotion = useRef(new Animated.Value(0)).current;
 
   const hasSelectedDevice = Boolean(currentUser?.deviceId);
   const selectedDeviceLabel = getDeviceLabel(currentUser?.deviceId);
@@ -106,6 +153,11 @@ export default function CaptureScreen() {
   const isAutoCaptureEnabled = Boolean(captureControl?.enabled);
   const resolvedCaptureIntervalSec =
     captureControl?.intervalSec || DEFAULT_CAPTURE_INTERVAL_SEC;
+  const inferenceSummary = buildInferenceSummary(inferenceResult);
+  const inferenceTranslateY = inferenceMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [14, 0],
+  });
 
   const syncStatus = useMemo(() => {
     if (!currentUser) {
@@ -203,6 +255,30 @@ export default function CaptureScreen() {
       void loadRecentMemories({ silent: true });
     }
   }, [completedCaptureCount]);
+
+  useEffect(() => {
+    if (!inferenceResult) {
+      inferenceMotion.setValue(0);
+      return;
+    }
+
+    inferenceMotion.setValue(0);
+    Animated.timing(inferenceMotion, {
+      toValue: 1,
+      duration: 340,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [inferenceMotion, inferenceResult]);
+
+  useEffect(() => {
+    Animated.timing(loadingMotion, {
+      toValue: isLoadingRecent ? 1 : 0,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [isLoadingRecent, loadingMotion]);
   
   useEffect(() => {
     if (!currentUser?.authToken || !currentUser.userId) {
@@ -222,7 +298,10 @@ export default function CaptureScreen() {
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
         <Pressable
-          style={styles.headerAction}
+          style={({ pressed }) => [
+            styles.headerAction,
+            pressableFeedback(pressed),
+          ]}
           onPress={() => setSidebarVisible(true)}
         >
           <Text style={styles.headerActionText}>≡</Text>
@@ -231,7 +310,11 @@ export default function CaptureScreen() {
         <Text style={commonStyles.headerTitle}>자동 동기화 홈</Text>
 
         <Pressable
-          style={[styles.headerAction, styles.headerActionSecondary]}
+          style={({ pressed }) => [
+            styles.headerAction,
+            styles.headerActionSecondary,
+            pressableFeedback(pressed),
+          ]}
           onPress={() => navigation.navigate('Chat')}
         >
           <Text style={styles.headerActionSecondaryText}>채팅</Text>
@@ -281,7 +364,10 @@ export default function CaptureScreen() {
           <Text style={styles.statusDescription}>{syncStatus.description}</Text>
           {!hasSelectedDevice ? (
             <Pressable
-              style={styles.inlinePrimaryButton}
+              style={({ pressed }) => [
+                styles.inlinePrimaryButton,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => navigation.navigate('Profile')}
             >
               <Text style={styles.inlinePrimaryButtonText}>기기 선택하러 가기</Text>
@@ -359,17 +445,29 @@ export default function CaptureScreen() {
           </Text>
           
           <View style={styles.pipelineButtonGroup}>
-            <Button 
-              title="글래스 연결"
+            <Pressable
+              style={({ pressed }) => [
+                styles.pipelineButton,
+                isBusy && styles.pipelineButtonDisabled,
+                pressableFeedback(pressed, isBusy),
+              ]}
               onPress={connectGlass}
               disabled={isBusy}
-            />
+            >
+              <Text style={styles.pipelineButtonText}>글래스 연결</Text>
+            </Pressable>
 
-            <Button
-              title="촬영 요청"
+            <Pressable
+              style={({ pressed }) => [
+                styles.pipelineButton,
+                (!hasGlassConnection || isBusy) && styles.pipelineButtonDisabled,
+                pressableFeedback(pressed, !hasGlassConnection || isBusy),
+              ]}
               onPress={requestCapture}
               disabled={!hasGlassConnection || isBusy}
-            />
+            >
+              <Text style={styles.pipelineButtonText}>촬영 요청</Text>
+            </Pressable>
           </View>
 
           {capturedFile && (
@@ -382,18 +480,88 @@ export default function CaptureScreen() {
             <Text style={styles.pipelineError}>{pipelineErrorMessage}</Text>
           ) : null}
 
-          {inferenceResult && (
-            <Text style={styles.pipelineText}>
-              {JSON.stringify(inferenceResult, null, 2)}
-            </Text>
-          )}
+          {inferenceResult ? (
+            <Animated.View
+              style={[
+                styles.inferenceSuccessCard,
+                {
+                  opacity: inferenceMotion,
+                  transform: [{ translateY: inferenceTranslateY }],
+                },
+              ]}
+            >
+              <View style={styles.inferenceHeaderRow}>
+                <View style={styles.successIcon}>
+                  <Text style={styles.successIconText}>✓</Text>
+                </View>
+                <View style={styles.inferenceHeaderText}>
+                  <Text style={styles.inferenceSuccessTitle}>
+                    추론이 완료됐습니다
+                  </Text>
+                  <Text style={styles.inferenceSuccessSubtitle}>
+                    장면 정보가 저장되어 채팅에서 바로 찾을 수 있습니다.
+                  </Text>
+                </View>
+              </View>
+
+              {inferenceSummary.mainObjects.length ? (
+                <View style={styles.detectedObjectSection}>
+                  <Text style={styles.inferenceSectionLabel}>주요 감지 객체</Text>
+                  <View style={styles.detectedObjectList}>
+                    {inferenceSummary.mainObjects.map((objectName) => (
+                      <View key={objectName} style={styles.detectedObjectChip}>
+                        <Text style={styles.detectedObjectText}>{objectName}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.inferenceMutedText}>
+                  감지 객체 목록은 아직 비어 있지만, 추론 결과는 정상 처리되었습니다.
+                </Text>
+              )}
+
+              {inferenceSummary.sceneSummary ? (
+                <View style={styles.inferenceDetailBlock}>
+                  <Text style={styles.inferenceSectionLabel}>장면 요약</Text>
+                  <Text style={styles.inferenceDetailText}>
+                    {inferenceSummary.sceneSummary}
+                  </Text>
+                </View>
+              ) : null}
+
+              {inferenceSummary.positionHint ? (
+                <View style={styles.inferenceDetailBlock}>
+                  <Text style={styles.inferenceSectionLabel}>위치 힌트</Text>
+                  <Text style={styles.inferenceDetailText}>
+                    {inferenceSummary.positionHint}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.inferenceMetaRow}>
+                <Text style={styles.inferenceMetaText}>
+                  저장 시각 {formatTimestamp(inferenceSummary.capturedAt)}
+                </Text>
+                {inferenceSummary.memoryId ? (
+                  <Text style={styles.inferenceMetaText}>
+                    Memory {inferenceSummary.memoryId}
+                  </Text>
+                ) : null}
+              </View>
+            </Animated.View>
+          ) : null}
         </View>
 
         <View style={styles.quickActionGrid}>
           {QUICK_ACTIONS.map((action) => (
             <Pressable
               key={action.route}
-              style={[commonStyles.card, styles.quickActionCard]}
+              style={({ pressed }) => [
+                commonStyles.card,
+                styles.quickActionCard,
+                pressableCardFeedback(pressed),
+              ]}
               onPress={() => navigation.navigate(action.route)}
             >
               <Text style={styles.quickActionTitle}>{action.label}</Text>
@@ -413,7 +581,10 @@ export default function CaptureScreen() {
               </Text>
             </View>
             <Pressable
-              style={styles.refreshButton}
+              style={({ pressed }) => [
+                styles.refreshButton,
+                pressableFeedback(pressed, isLoadingRecent),
+              ]}
               onPress={() => {
                 void loadRecentMemories();
               }}
@@ -424,10 +595,25 @@ export default function CaptureScreen() {
           </View>
 
           {isLoadingRecent ? (
-            <View style={styles.loadingRow}>
+            <Animated.View
+              style={[
+                styles.loadingRow,
+                {
+                  opacity: loadingMotion,
+                  transform: [
+                    {
+                      translateY: loadingMotion.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [8, 0],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
               <ActivityIndicator size="small" color={colors.primary} />
               <Text style={styles.loadingText}>최근 기억을 확인하는 중입니다.</Text>
-            </View>
+            </Animated.View>
           ) : null}
 
           {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
@@ -737,12 +923,120 @@ const styles = StyleSheet.create({
   pipelineButtonGroup: {
     gap: 8,
   },
+  pipelineButton: {
+    minHeight: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+  },
+  pipelineButtonDisabled: {
+    backgroundColor: '#93C5FD',
+  },
+  pipelineButtonText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
   pipelineText: {
     fontSize: 13,
   },
   pipelineError: {
     fontSize: 13,
     color: 'red',
+  },
+  inferenceSuccessCard: {
+    marginTop: 4,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    backgroundColor: '#F0FDF4',
+    gap: 12,
+  },
+  inferenceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  successIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#16A34A',
+  },
+  successIconText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  inferenceHeaderText: {
+    flex: 1,
+    gap: 2,
+  },
+  inferenceSuccessTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#14532D',
+  },
+  inferenceSuccessSubtitle: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#166534',
+  },
+  detectedObjectSection: {
+    gap: 8,
+  },
+  inferenceSectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  detectedObjectList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  detectedObjectChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  detectedObjectText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#14532D',
+  },
+  inferenceDetailBlock: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#DCFCE7',
+    gap: 5,
+  },
+  inferenceDetailText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.text,
+  },
+  inferenceMutedText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#166534',
+  },
+  inferenceMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  inferenceMetaText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#15803D',
   },
 
 });
