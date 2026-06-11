@@ -114,7 +114,7 @@ class OllamaAnswerGeneratorTests(unittest.TestCase):
         self.assertIn("2026-05-07 오후 1시", messages[-1]["content"])
         self.assertIn("KST", messages[-1]["content"])
 
-    def test_generate_preserves_not_found_answer_without_timestamp(self) -> None:
+    def test_generate_falls_back_when_ollama_claims_not_found_despite_hits(self) -> None:
         http_client = FakeHttpClient(
             {"message": {"content": "해당 물건은 최근 기록에서 찾을 수 없습니다."}}
         )
@@ -128,9 +128,10 @@ class OllamaAnswerGeneratorTests(unittest.TestCase):
 
         answer = generator.generate("내 물병 어디 있었지?", [make_hit()])
 
-        self.assertEqual(answer.mode, "ollama")
-        self.assertEqual(answer.text, "해당 물건은 최근 기록에서 찾을 수 없습니다.")
-        self.assertNotIn("마지막 확인 시각", answer.text)
+        self.assertEqual(answer.mode, "template")
+        self.assertEqual(answer.cited_memory_ids, ["mem-001"])
+        self.assertIn("마지막 확인 시각은 2026-05-07 오후 1시입니다.", answer.text)
+        self.assertIn("claimed no matching record", answer.reason or "")
 
     def test_generate_falls_back_to_template_when_ollama_fails(self) -> None:
         generator = OllamaAnswerGenerator(

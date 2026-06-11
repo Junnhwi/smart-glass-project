@@ -182,6 +182,11 @@ def _append_observation_time_if_missing(
     return f"{cleaned} 마지막 확인 시각은 {formatted_time}입니다."
 
 
+def _answer_claims_not_found(answer_text: str) -> bool:
+    cleaned = " ".join(str(answer_text or "").split())
+    return any(cue in cleaned for cue in NOT_FOUND_ANSWER_CUES)
+
+
 class OllamaChatClient:
     def __init__(
         self,
@@ -630,6 +635,19 @@ class Gemma3AnswerGenerator:
         cited_ids = [h.memory.memory_id for h in hits[: self.max_context_hits]]
         try:
             text = _run_answer_generation(self.client, query, hits, self.max_context_hits)
+            if _answer_claims_not_found(text):
+                fallback = self.fallback.generate(query, hits)
+                return GeneratedAnswer(
+                    text=fallback.text,
+                    mode=fallback.mode,
+                    cited_memory_ids=fallback.cited_memory_ids,
+                    confidence=fallback.confidence,
+                    reason=(
+                        "Gemma3 answer claimed no matching record despite "
+                        f"{len(hits)} retrieved hit(s). "
+                        f"{fallback.reason or 'Template answer was used.'}"
+                    ),
+                )
             text = _append_observation_time_if_missing(text, hits)
             return GeneratedAnswer(
                 text=text,
@@ -715,6 +733,19 @@ class OllamaAnswerGenerator:
         ]
         try:
             answer_text = self.client.chat(messages=self._build_messages(query, hits))
+            if _answer_claims_not_found(answer_text):
+                fallback = self.fallback_generator.generate(query, hits)
+                return GeneratedAnswer(
+                    text=fallback.text,
+                    mode=fallback.mode,
+                    cited_memory_ids=fallback.cited_memory_ids,
+                    confidence=fallback.confidence,
+                    reason=(
+                        "Ollama answer claimed no matching record despite "
+                        f"{len(hits)} retrieved hit(s). "
+                        f"{fallback.reason or 'Template answer was used.'}"
+                    ),
+                )
             answer_text = _append_observation_time_if_missing(answer_text, hits)
             confidence = max(0.55, min(hits[0].score + 0.2, 0.95))
             return GeneratedAnswer(
