@@ -734,7 +734,7 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertIn("not found", response.json()["detail"])
 
-    def test_delete_memory_keeps_db_record_when_storage_delete_fails(self) -> None:
+    def test_delete_memory_removes_db_record_when_storage_delete_fails(self) -> None:
         self.fake_media_access_service.should_fail = True
 
         response = self.client.delete(
@@ -742,9 +742,15 @@ class ApiServerCaptureIntakeTests(unittest.TestCase):
             params={"userId": "user-1"},
         )
 
-        self.assertEqual(response.status_code, 502)
-        self.assertIn("storage delete unavailable", response.json()["detail"])
-        self.assertIsNone(self.fake_memory_store_client.last_delete_args)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "deleted")
+        self.assertEqual(body["memoryId"], "mem-wallet-01")
+        self.assertFalse(body["objectDeleted"])
+        self.assertEqual(
+            self.fake_memory_store_client.last_delete_args,
+            ("user-1", "mem-wallet-01"),
+        )
 
     def test_chat_endpoint_returns_answer_and_hits(self) -> None:
         response = self.client.post(

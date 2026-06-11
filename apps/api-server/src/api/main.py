@@ -2130,24 +2130,6 @@ def create_app() -> FastAPI:
         if record is None:
             raise HTTPException(status_code=404, detail="memory not found")
 
-        object_deleted = False
-        if record.image_key:
-            try:
-                media_access_service = _get_media_access_service(request)
-                media_access_service.delete_media_object(image_key=record.image_key)
-                object_deleted = True
-            except MediaUrlSignerConfigError as exc:
-                raise HTTPException(status_code=503, detail=str(exc)) from exc
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except RuntimeError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Media storage backend unavailable: {exc}",
-                ) from exc
-
         try:
             deleted_record = memory_store_client.delete_by_memory_id(
                 user_id,
@@ -2163,6 +2145,17 @@ def create_app() -> FastAPI:
 
         if deleted_record is None:
             raise HTTPException(status_code=404, detail="memory not found")
+
+        object_deleted = False
+        if deleted_record.image_key:
+            try:
+                media_access_service = _get_media_access_service(request)
+                media_access_service.delete_media_object(
+                    image_key=deleted_record.image_key
+                )
+                object_deleted = True
+            except Exception:
+                object_deleted = False
 
         return MemoryDeleteResponse(
             memoryId=deleted_record.memory_id,
