@@ -298,10 +298,12 @@ Response:
 Deletes one captured memory for the authenticated user.
 
 The caller must pass `userId` as a query parameter and authenticate as the same
-user. The API first verifies that the memory belongs to the user, then deletes
-the Object Storage image when an `imageKey` exists, and finally removes the
-PostgreSQL memory document. If Object Storage deletion fails, the DB record is
-kept so the client can retry.
+user. The API first verifies that the memory belongs to the user, removes the
+PostgreSQL memory document, and then deletes the Object Storage image when an
+`imageKey` exists. If Object Storage deletion fails after the DB row is removed,
+the response still reports the memory as deleted with `objectDeleted: false`;
+the orphaned object is no longer reachable through the app's memory ownership
+checks.
 
 Request:
 

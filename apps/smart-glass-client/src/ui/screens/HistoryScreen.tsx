@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Pressable,
   ScrollView,
@@ -89,6 +88,9 @@ export default function HistoryScreen() {
   const [deletingMemoryIds, setDeletingMemoryIds] = useState<
     Record<string, boolean>
   >({});
+  const [pendingDeleteMemoryId, setPendingDeleteMemoryId] = useState<
+    string | null
+  >(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [deleteErrorMessage, setDeleteErrorMessage] = useState('');
 
@@ -260,6 +262,9 @@ export default function HistoryScreen() {
           (currentItem) => currentItem.memoryId !== item.memoryId
         )
       );
+      setPendingDeleteMemoryId((currentMemoryId) =>
+        currentMemoryId === item.memoryId ? null : currentMemoryId
+      );
       setImageAspectRatios((currentRatios) => {
         const nextRatios = { ...currentRatios };
         delete nextRatios[item.memoryId];
@@ -281,23 +286,13 @@ export default function HistoryScreen() {
   };
 
   const confirmDeleteMemory = (item: HistoryCardItem) => {
-    Alert.alert(
-      '기록 삭제',
-      '이 사진과 추론 정보를 삭제할까요?',
-      [
-        {
-          text: '취소',
-          style: 'cancel',
-        },
-        {
-          text: '삭제',
-          style: 'destructive',
-          onPress: () => {
-            void deleteMemoryItem(item);
-          },
-        },
-      ]
-    );
+    if (pendingDeleteMemoryId !== item.memoryId) {
+      setPendingDeleteMemoryId(item.memoryId);
+      setDeleteErrorMessage('');
+      return;
+    }
+
+    void deleteMemoryItem(item);
   };
 
   return (
@@ -353,64 +348,93 @@ export default function HistoryScreen() {
           ? items.map((item) => {
               const itemName = item.detectedObjects[0] || item.tags[0] || '기록';
               const isDeleting = Boolean(deletingMemoryIds[item.memoryId]);
+              const isConfirmingDelete =
+                pendingDeleteMemoryId === item.memoryId;
 
               return (
-                <Pressable
+                <View
                   key={item.memoryId}
-                  style={({ pressed }) => [
-                    commonStyles.card,
-                    pressableCardFeedback(pressed),
-                  ]}
-                  onPress={() => navigation.navigate('ItemLocation', { itemName })}
+                  style={commonStyles.card}
                 >
-                  {item.accessUrl ? (
-                    <Image
-                      source={{ uri: item.accessUrl }}
-                      style={[
-                        styles.thumbnail,
-                        imageAspectRatios[item.memoryId]
-                          ? { aspectRatio: imageAspectRatios[item.memoryId] }
-                          : styles.thumbnailFallback,
-                      ]}
-                      resizeMode="contain"
-                      onLoad={(event) => handleImageLoad(item.memoryId, event)}
-                    />
-                  ) : null}
-
                   <View style={styles.cardTop}>
                     <Text style={styles.cardTitle}>{itemName}</Text>
                     <View style={styles.cardActions}>
                       <Text style={styles.time}>
                         {formatRelativeTime(item.capturedAt)}
                       </Text>
-                      <Pressable
-                        disabled={isDeleting}
-                        style={({ pressed }) => [
-                          styles.deleteButton,
-                          pressed && !isDeleting ? styles.deleteButtonPressed : null,
-                          isDeleting ? styles.deleteButtonDisabled : null,
-                        ]}
-                        onPress={(event) => {
-                          event.stopPropagation();
-                          confirmDeleteMemory(item);
-                        }}
-                      >
-                        <Text style={styles.deleteButtonText}>
-                          {isDeleting ? '삭제 중' : '삭제'}
-                        </Text>
-                      </Pressable>
+                      <View style={styles.deleteActions}>
+                        {isConfirmingDelete && !isDeleting ? (
+                          <Pressable
+                            style={({ pressed }) => [
+                              styles.cancelDeleteButton,
+                              pressed ? styles.deleteButtonPressed : null,
+                            ]}
+                            onPress={() => setPendingDeleteMemoryId(null)}
+                          >
+                            <Text style={styles.cancelDeleteButtonText}>취소</Text>
+                          </Pressable>
+                        ) : null}
+                        <Pressable
+                          disabled={isDeleting}
+                          style={({ pressed }) => [
+                            styles.deleteButton,
+                            isConfirmingDelete ? styles.confirmDeleteButton : null,
+                            pressed && !isDeleting
+                              ? styles.deleteButtonPressed
+                              : null,
+                            isDeleting ? styles.deleteButtonDisabled : null,
+                          ]}
+                          onPress={() => confirmDeleteMemory(item)}
+                        >
+                          <Text style={styles.deleteButtonText}>
+                            {isDeleting
+                              ? '삭제 중'
+                              : isConfirmingDelete
+                                ? '삭제 확인'
+                                : '삭제'}
+                          </Text>
+                        </Pressable>
+                      </View>
                     </View>
                   </View>
 
-                  <Text style={styles.preview}>{describeMemory(item)}</Text>
+                  {isConfirmingDelete ? (
+                    <Text style={styles.deleteConfirmText}>
+                      이 사진과 추론 정보를 삭제할까요?
+                    </Text>
+                  ) : null}
 
-                  <Text style={styles.detail}>
-                    {item.positionHint ||
-                      item.sceneSummary ||
-                      item.caption ||
-                      '상세 설명이 아직 없어요.'}
-                  </Text>
-                </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.cardBody,
+                      pressableCardFeedback(pressed),
+                    ]}
+                    onPress={() => navigation.navigate('ItemLocation', { itemName })}
+                  >
+                    {item.accessUrl ? (
+                      <Image
+                        source={{ uri: item.accessUrl }}
+                        style={[
+                          styles.thumbnail,
+                          imageAspectRatios[item.memoryId]
+                            ? { aspectRatio: imageAspectRatios[item.memoryId] }
+                            : styles.thumbnailFallback,
+                        ]}
+                        resizeMode="contain"
+                        onLoad={(event) => handleImageLoad(item.memoryId, event)}
+                      />
+                    ) : null}
+
+                    <Text style={styles.preview}>{describeMemory(item)}</Text>
+
+                    <Text style={styles.detail}>
+                      {item.positionHint ||
+                        item.sceneSummary ||
+                        item.caption ||
+                        '상세 설명이 아직 없어요.'}
+                    </Text>
+                  </Pressable>
+                </View>
               );
             })
           : null}
@@ -488,6 +512,9 @@ const styles = StyleSheet.create({
   thumbnailFallback: {
     height: 220,
   },
+  cardBody: {
+    borderRadius: 12,
+  },
   cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -510,6 +537,10 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: 6,
   },
+  deleteActions: {
+    flexDirection: 'row',
+    gap: 6,
+  },
   deleteButton: {
     minWidth: 52,
     minHeight: 30,
@@ -524,6 +555,21 @@ const styles = StyleSheet.create({
   deleteButtonPressed: {
     opacity: 0.72,
   },
+  confirmDeleteButton: {
+    minWidth: 72,
+    backgroundColor: '#fee2e2',
+  },
+  cancelDeleteButton: {
+    minWidth: 48,
+    minHeight: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
   deleteButtonDisabled: {
     opacity: 0.5,
   },
@@ -531,6 +577,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#b91c1c',
+  },
+  cancelDeleteButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.subText,
+  },
+  deleteConfirmText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#b91c1c',
+    marginBottom: 10,
   },
   preview: {
     fontSize: 14,
