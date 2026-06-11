@@ -52,7 +52,6 @@ const suggestedQueries = [
   '이어폰 마지막으로 본 곳 알려줘',
   '노트북이 있던 장면 찾아줘',
 ];
-const BOT_TYPING_INTERVAL_MS = 28;
 
 const formatCapturedAtKst = (capturedAt?: string | null) => {
   if (!capturedAt) {
@@ -141,7 +140,6 @@ export default function ChatScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
   const messagePositions = useRef<Record<number, number>>({});
-  const botTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
   const matchedMessageIds = useMemo(() => {
@@ -189,70 +187,6 @@ export default function ChatScreen() {
 
     setCurrentMatchIndex(0);
   }, [matchedMessageIds.length, searchText, messages]);
-
-  useEffect(() => {
-    return () => {
-      if (botTypingTimerRef.current) {
-        clearTimeout(botTypingTimerRef.current);
-      }
-    };
-  }, []);
-
-  const showBotMessageWithTyping = (
-    fullText: string,
-    relatedImages?: RelatedImage[]
-  ) =>
-    new Promise<void>((resolve) => {
-      const messageId = Date.now() + Math.floor(Math.random() * 1000);
-      const characters = Array.from(fullText || '답변 내용이 비어 있어요.');
-      let nextIndex = 0;
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: messageId,
-          sender: 'bot',
-          text: '',
-        },
-      ]);
-      scrollToBottom();
-
-      const tick = () => {
-        nextIndex += 1;
-        const nextText = characters.slice(0, nextIndex).join('');
-
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === messageId
-              ? { ...message, text: nextText }
-              : message
-          )
-        );
-
-        if (nextIndex % 8 === 0 || nextIndex === characters.length) {
-          scrollToBottom();
-        }
-
-        if (nextIndex >= characters.length) {
-          if (relatedImages?.length) {
-            setMessages((prev) =>
-              prev.map((message) =>
-                message.id === messageId
-                  ? { ...message, relatedImages }
-                  : message
-              )
-            );
-          }
-          botTypingTimerRef.current = null;
-          resolve();
-          return;
-        }
-
-        botTypingTimerRef.current = setTimeout(tick, BOT_TYPING_INTERVAL_MS);
-      };
-
-      botTypingTimerRef.current = setTimeout(tick, BOT_TYPING_INTERVAL_MS);
-    });
 
   const renderHighlightedText = (text: string, sender: 'bot' | 'user') => {
     const keyword = searchText.trim();
@@ -396,20 +330,26 @@ export default function ChatScreen() {
         trimmed
       );
 
-      setIsBotTyping(false);
-      await showBotMessageWithTyping(
-        chatResponse.answer || '관련 기록을 찾지 못했어요.',
-        relatedImages
-      );
+      const botMessage: Message = {
+        id: Date.now() + 1,
+        sender: 'bot',
+        text: chatResponse.answer || '관련 기록을 찾지 못했어요.',
+        relatedImages,
+      };
+
+      setMessages((prev) => [...prev, botMessage]);
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 401) {
         void signOut();
       }
 
-      setIsBotTyping(false);
-      await showBotMessageWithTyping(
-        '답변을 불러오지 못했어요. 잠시 후 다시 시도해주세요.'
-      );
+      const botMessage: Message = {
+        id: Date.now() + 1,
+        sender: 'bot',
+        text: '답변을 불러오지 못했어요. 잠시 후 다시 시도해주세요.',
+      };
+
+      setMessages((prev) => [...prev, botMessage]);
     } finally {
       setIsBotTyping(false);
       scrollToBottom();
@@ -429,9 +369,14 @@ export default function ChatScreen() {
   };
 
   const handleMicPress = () => {
-    void showBotMessageWithTyping(
-      '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.'
-    );
+    const botMessage: Message = {
+      id: Date.now(),
+      sender: 'bot',
+      text: '음성 입력 기능은 곧 추가할 수 있도록 버튼만 먼저 열어두었어요.',
+    };
+
+    setMessages((prev) => [...prev, botMessage]);
+    scrollToBottom();
   };
 
   return (
