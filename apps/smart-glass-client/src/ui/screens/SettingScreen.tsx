@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
+import { pressableFeedback } from '../styles/pressableFeedback';
 
 const sessionStorageLabel =
   Platform.OS === 'web' ? '브라우저 로컬 세션' : '기기 보안 저장소';
@@ -43,7 +44,10 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable onPress={handleHeaderPrimaryAction}>
+        <Pressable
+          style={({ pressed }) => pressableFeedback(pressed)}
+          onPress={handleHeaderPrimaryAction}
+        >
           {navigation.canGoBack ? (
             <Text style={styles.headerIcon}>{'<'}</Text>
           ) : (
@@ -53,7 +57,10 @@ export default function SettingsScreen() {
 
         <Text style={commonStyles.headerTitle}>설정</Text>
 
-        <Pressable onPress={() => navigation.navigate('Profile')}>
+        <Pressable
+          style={({ pressed }) => pressableFeedback(pressed)}
+          onPress={() => navigation.navigate('Profile')}
+        >
           <Text style={styles.headerLink}>프로필</Text>
         </Pressable>
       </View>
@@ -116,28 +123,40 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>바로가기</Text>
 
           <Pressable
-            style={styles.secondaryButton}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              pressableFeedback(pressed),
+            ]}
             onPress={() => navigation.navigate('Capture')}
           >
             <Text style={styles.secondaryButtonText}>업로드 홈으로 이동</Text>
           </Pressable>
 
           <Pressable
-            style={styles.secondaryButton}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              pressableFeedback(pressed),
+            ]}
             onPress={() => navigation.navigate('Profile')}
           >
             <Text style={styles.secondaryButtonText}>기기 관리 열기</Text>
           </Pressable>
 
           <Pressable
-            style={styles.secondaryButton}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              pressableFeedback(pressed),
+            ]}
             onPress={() => navigation.navigate('History')}
           >
             <Text style={styles.secondaryButtonText}>최근 기록 보기</Text>
           </Pressable>
 
           <Pressable
-            style={styles.secondaryButton}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              pressableFeedback(pressed),
+            ]}
             onPress={() => {
               void signOut();
             }}
@@ -147,7 +166,10 @@ export default function SettingsScreen() {
         </View>
 
         <Pressable
-          style={styles.logoutButton}
+          style={({ pressed }) => [
+            styles.logoutButton,
+            pressableFeedback(pressed),
+          ]}
           onPress={() => {
             void signOut();
           }}

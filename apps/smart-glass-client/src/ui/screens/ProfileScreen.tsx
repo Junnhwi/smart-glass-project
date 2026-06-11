@@ -26,6 +26,7 @@ import { useCaptureControl } from '../context/CaptureControlContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
+import { pressableFeedback } from '../styles/pressableFeedback';
 
 const AUTO_REFRESH_INTERVAL_MS = 3000;
 
@@ -340,7 +341,10 @@ export default function ProfileScreen() {
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable onPress={handleHeaderPrimaryAction}>
+        <Pressable
+          style={({ pressed }) => pressableFeedback(pressed)}
+          onPress={handleHeaderPrimaryAction}
+        >
           {navigation.canGoBack ? (
             <Text style={styles.headerIcon}>{'<'}</Text>
           ) : (
@@ -350,7 +354,10 @@ export default function ProfileScreen() {
 
         <Text style={commonStyles.headerTitle}>프로필</Text>
 
-        <Pressable onPress={() => navigation.navigate('Settings')}>
+        <Pressable
+          style={({ pressed }) => pressableFeedback(pressed)}
+          onPress={() => navigation.navigate('Settings')}
+        >
           <Text style={styles.headerLink}>설정</Text>
         </Pressable>
       </View>
@@ -458,9 +465,10 @@ export default function ProfileScreen() {
               style={styles.registerInput}
             />
             <Pressable
-              style={[
+              style={({ pressed }) => [
                 styles.registerButton,
                 isRegisteringDevice && styles.registerButtonDisabled,
+                pressableFeedback(pressed, isRegisteringDevice),
               ]}
               onPress={() => {
                 void handleRegisterDevice();
@@ -505,7 +513,13 @@ export default function ProfileScreen() {
           <View style={styles.deviceHeader}>
             <Text style={styles.deviceListTitle}>등록된 기기</Text>
             <Pressable
-              style={styles.refreshButton}
+              style={({ pressed }) => [
+                styles.refreshButton,
+                pressableFeedback(
+                  pressed,
+                  isLoadingDevices || isLoadingPairings
+                ),
+              ]}
               onPress={() => {
                 void loadDevices();
                 void loadPairings();
@@ -607,9 +621,10 @@ export default function ProfileScreen() {
                     />
                     <View style={styles.renameActions}>
                       <Pressable
-                        style={[
+                        style={({ pressed }) => [
                           styles.renameButton,
                           styles.renameButtonPrimary,
+                          pressableFeedback(pressed),
                         ]}
                         onPress={() => {
                           handleSaveDeviceAlias(device.deviceId);
@@ -625,9 +640,10 @@ export default function ProfileScreen() {
                         </Text>
                       </Pressable>
                       <Pressable
-                        style={[
+                        style={({ pressed }) => [
                           styles.renameButton,
                           styles.renameButtonSecondary,
+                          pressableFeedback(pressed),
                         ]}
                         onPress={resetEditingDeviceAlias}
                       >
@@ -645,7 +661,10 @@ export default function ProfileScreen() {
                 ) : (
                   <View style={styles.renameInlineRow}>
                     <Pressable
-                      style={styles.renameShortcut}
+                      style={({ pressed }) => [
+                        styles.renameShortcut,
+                        pressableFeedback(pressed),
+                      ]}
                       onPress={() => {
                         startEditingDeviceAlias(device.deviceId);
                       }}
@@ -670,9 +689,10 @@ export default function ProfileScreen() {
                 <View style={styles.deviceActions}>
                   {device.status === 'active' ? (
                     <Pressable
-                      style={[
+                      style={({ pressed }) => [
                         styles.sessionButton,
                         isCurrentDevice && styles.sessionButtonSelected,
+                        pressableFeedback(pressed),
                       ]}
                       onPress={() => {
                         setStatusMessage('현재 기기를 선택했습니다.');
@@ -692,12 +712,13 @@ export default function ProfileScreen() {
                   ) : null}
 
                   <Pressable
-                    style={[
+                    style={({ pressed }) => [
                       styles.deviceActionButton,
                       device.status === 'active'
                         ? styles.deviceActionButtonDanger
                         : styles.deviceActionButtonPrimary,
                       isBusy && styles.deviceActionButtonDisabled,
+                      pressableFeedback(pressed, isBusy),
                     ]}
                     onPress={() => {
                       void handleDeviceStatusChange(device, nextAction);

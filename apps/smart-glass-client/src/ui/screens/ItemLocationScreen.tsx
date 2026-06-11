@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import { useAppNavigation, useAppRoute } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
+import { pressableFeedback } from '../styles/pressableFeedback';
 
 type LocationMemoryCard = MemorySearchHit & {
   accessUrl?: string;
@@ -169,7 +170,10 @@ export default function ItemLocationScreen() {
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable onPress={() => navigation.goBack()}>
+        <Pressable
+          style={({ pressed }) => pressableFeedback(pressed)}
+          onPress={() => navigation.goBack()}
+        >
           <Text style={styles.backButton}>{'<'}</Text>
         </Pressable>
 

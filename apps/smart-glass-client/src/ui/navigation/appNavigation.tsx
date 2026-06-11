@@ -3,6 +3,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { Platform } from 'react-native';
@@ -27,10 +28,12 @@ type AppNavigationValue = {
   ) => void;
   goBack: () => void;
   canGoBack: boolean;
+  transitionDirection: 1 | -1;
 };
 
 const WebNavigationContext = createContext<AppNavigationValue | null>(null);
 const WEB_HISTORY_STATE_KEY = 'smartGlassRoute';
+const WEB_HISTORY_INDEX_KEY = 'smartGlassRouteIndex';
 
 const ROUTE_NAMES: RouteName[] = [
   'Login',
@@ -115,6 +118,8 @@ export function WebNavigationProvider({
   const [canGoBack, setCanGoBack] = useState(() =>
     typeof window !== 'undefined' ? window.history.length > 1 : false
   );
+  const [transitionDirection, setTransitionDirection] = useState<1 | -1>(1);
+  const routeIndexRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -122,11 +127,17 @@ export function WebNavigationProvider({
     }
 
     const resolvedRoute = getWindowRouteState(initialRouteName);
+    const initialIndex =
+      typeof window.history.state?.[WEB_HISTORY_INDEX_KEY] === 'number'
+        ? window.history.state[WEB_HISTORY_INDEX_KEY]
+        : 0;
+    routeIndexRef.current = initialIndex;
     setCurrentRoute(resolvedRoute);
     window.history.replaceState(
       {
         ...(window.history.state || {}),
         [WEB_HISTORY_STATE_KEY]: resolvedRoute,
+        [WEB_HISTORY_INDEX_KEY]: initialIndex,
       },
       document.title,
       buildWebUrl(resolvedRoute)
@@ -134,6 +145,12 @@ export function WebNavigationProvider({
     setCanGoBack(window.history.length > 1);
 
     const handlePopState = () => {
+      const nextIndex =
+        typeof window.history.state?.[WEB_HISTORY_INDEX_KEY] === 'number'
+          ? window.history.state[WEB_HISTORY_INDEX_KEY]
+          : Math.max(0, routeIndexRef.current - 1);
+      setTransitionDirection(nextIndex < routeIndexRef.current ? -1 : 1);
+      routeIndexRef.current = nextIndex;
       setCurrentRoute(getWindowRouteState(initialRouteName));
       setCanGoBack(window.history.length > 1);
     };
@@ -147,17 +164,23 @@ export function WebNavigationProvider({
   const value = useMemo<AppNavigationValue>(() => {
     return {
       currentRoute,
+      transitionDirection,
       navigate: (screen, params) => {
         if (typeof window === 'undefined') {
+          setTransitionDirection(1);
           setCurrentRoute(buildRouteState(screen, params));
           return;
         }
 
         const nextRoute = buildRouteState(screen, params);
+        const nextIndex = routeIndexRef.current + 1;
+        routeIndexRef.current = nextIndex;
+        setTransitionDirection(1);
         window.history.pushState(
           {
             ...(window.history.state || {}),
             [WEB_HISTORY_STATE_KEY]: nextRoute,
+            [WEB_HISTORY_INDEX_KEY]: nextIndex,
           },
           document.title,
           buildWebUrl(nextRoute)
@@ -170,12 +193,13 @@ export function WebNavigationProvider({
           return;
         }
         if (window.history.length > 1) {
+          setTransitionDirection(-1);
           window.history.back();
         }
       },
       canGoBack,
     };
-  }, [canGoBack, currentRoute]);
+  }, [canGoBack, currentRoute, transitionDirection]);
 
   return (
     <WebNavigationContext.Provider value={value}>
@@ -202,6 +226,7 @@ export function useAppNavigation() {
     navigate: navigation.navigate,
     goBack: navigation.goBack,
     canGoBack: navigation.canGoBack(),
+    transitionDirection: 1 as const,
   };
 }
 

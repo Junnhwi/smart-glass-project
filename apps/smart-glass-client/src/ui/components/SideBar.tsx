@@ -1,5 +1,14 @@
-import React from 'react';
-import { Modal, View, Text, StyleSheet, Pressable, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  Easing,
+  Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { useAppNavigation } from '../navigation/appNavigation';
 import { useAuth } from '../context/AuthContext';
@@ -8,6 +17,7 @@ import logo from '../icon/logo.png';
 import settingsIcon from '../icon/setting.png';
 import userIcon from '../icon/user.png';
 import { colors } from '../styles/colors';
+import { pressableFeedback } from '../styles/pressableFeedback';
 
 type SidebarProps = {
   visible: boolean;
@@ -17,28 +27,82 @@ type SidebarProps = {
 export default function Sidebar({ visible, onClose }: SidebarProps) {
   const navigation = useAppNavigation();
   const { currentUser, getDeviceLabel, signOut } = useAuth();
+  const [isRendered, setIsRendered] = useState(visible);
+  const motion = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    setIsRendered(true);
+    motion.setValue(0);
+    Animated.timing(motion, {
+      toValue: 1,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [motion, visible]);
+
+  const requestClose = () => {
+    Animated.timing(motion, {
+      toValue: 0,
+      duration: 190,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) {
+        return;
+      }
+      setIsRendered(false);
+      onClose();
+    });
+  };
 
   const handleMove = (
     screen: 'Capture' | 'History' | 'Profile' | 'Settings'
   ) => {
-    onClose();
-    navigation.navigate(screen);
+    Animated.timing(motion, {
+      toValue: 0,
+      duration: 170,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      setIsRendered(false);
+      onClose();
+      navigation.navigate(screen);
+    });
   };
 
   const handleLogout = () => {
-    onClose();
+    requestClose();
     void signOut();
   };
 
+  const sidebarTranslateX = motion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-290, 0],
+  });
+
+  if (!isRendered) {
+    return null;
+  }
+
   return (
     <Modal
-      visible={visible}
+      visible={isRendered}
       transparent
-      animationType="fade"
-      onRequestClose={onClose}
+      animationType="none"
+      onRequestClose={requestClose}
     >
-      <View style={styles.overlay}>
-        <View style={styles.sidebarWrapper}>
+      <Animated.View style={[styles.overlay, { opacity: motion }]}>
+        <Animated.View
+          style={[
+            styles.sidebarWrapper,
+            { transform: [{ translateX: sidebarTranslateX }] },
+          ]}
+        >
           <View style={styles.sidebar}>
             <Text style={styles.title}>메뉴</Text>
 
@@ -55,7 +119,10 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
             </View>
 
             <Pressable
-              style={styles.menuItem}
+              style={({ pressed }) => [
+                styles.menuItem,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => handleMove('Capture')}
             >
               <Text style={styles.menuText}>업로드 홈</Text>
@@ -63,7 +130,10 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
             </Pressable>
 
             <Pressable
-              style={styles.menuItem}
+              style={({ pressed }) => [
+                styles.menuItem,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => handleMove('History')}
             >
               <Text style={styles.menuText}>히스토리</Text>
@@ -71,7 +141,10 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
             </Pressable>
 
             <Pressable
-              style={styles.menuItem}
+              style={({ pressed }) => [
+                styles.menuItem,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => handleMove('Profile')}
             >
               <Text style={styles.menuText}>사용자 정보</Text>
@@ -79,7 +152,10 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
             </Pressable>
 
             <Pressable
-              style={styles.menuItem}
+              style={({ pressed }) => [
+                styles.menuItem,
+                pressableFeedback(pressed),
+              ]}
               onPress={() => handleMove('Settings')}
             >
               <Text style={styles.menuText}>설정</Text>
@@ -87,14 +163,20 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
             </Pressable>
 
             <View style={styles.logoutArea}>
-              <Pressable style={styles.logoutButton} onPress={handleLogout}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.logoutButton,
+                  pressableFeedback(pressed),
+                ]}
+                onPress={handleLogout}
+              >
                 <Text style={styles.logoutText}>로그아웃</Text>
               </Pressable>
             </View>
           </View>
-        </View>
-        <Pressable style={styles.backdrop} onPress={onClose} />
-      </View>
+        </Animated.View>
+        <Pressable style={styles.backdrop} onPress={requestClose} />
+      </Animated.View>
     </Modal>
   );
 }

@@ -1,5 +1,11 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import {
+  Animated,
+  Easing,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import CaptureScreen from './src/ui/screens/CaptureScreen';
@@ -57,22 +63,56 @@ class WebErrorBoundary extends React.Component<
 function AuthenticatedWebApp() {
   const navigation = useAppNavigation();
   const currentRouteName = navigation.currentRoute?.name || 'Capture';
+  const routeMotion = React.useRef(new Animated.Value(1)).current;
+  const routeKey = `${currentRouteName}:${
+    navigation.currentRoute?.name === 'ItemLocation'
+      ? navigation.currentRoute.params?.itemName || ''
+      : ''
+  }`;
 
-  switch (currentRouteName) {
-    case 'Capture':
-      return <CaptureScreen />;
-    case 'History':
-      return <HistoryScreen />;
-    case 'Profile':
-      return <ProfileScreen />;
-    case 'Settings':
-      return <SettingsScreen />;
-    case 'ItemLocation':
-      return <ItemLocationScreen />;
-    case 'Chat':
-    default:
-      return <ChatScreen />;
+  React.useEffect(() => {
+    routeMotion.setValue(0);
+    Animated.timing(routeMotion, {
+      toValue: 1,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [routeKey, routeMotion]);
+
+  const screenTranslateX = routeMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [navigation.transitionDirection === -1 ? -34 : 34, 0],
+  });
+
+  let screen = <ChatScreen />;
+
+  if (currentRouteName === 'Capture') {
+    screen = <CaptureScreen />;
+  } else if (currentRouteName === 'History') {
+    screen = <HistoryScreen />;
+  } else if (currentRouteName === 'Profile') {
+    screen = <ProfileScreen />;
+  } else if (currentRouteName === 'Settings') {
+    screen = <SettingsScreen />;
+  } else if (currentRouteName === 'ItemLocation') {
+    screen = <ItemLocationScreen />;
   }
+
+  return (
+    <Animated.View
+      key={routeKey}
+      style={[
+        styles.routeShell,
+        {
+          opacity: routeMotion,
+          transform: [{ translateX: screenTranslateX }],
+        },
+      ]}
+    >
+      {screen}
+    </Animated.View>
+  );
 }
 
 function WebAppRoot() {
@@ -157,5 +197,8 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: '#6B7280',
     textAlign: 'center',
+  },
+  routeShell: {
+    flex: 1,
   },
 });

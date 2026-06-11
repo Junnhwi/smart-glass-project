@@ -19,6 +19,10 @@ import { useAuth } from '../context/AuthContext';
 import { useAppNavigation } from '../navigation/appNavigation';
 import { commonStyles } from '../styles/commonStyles';
 import { colors } from '../styles/colors';
+import {
+  pressableCardFeedback,
+  pressableFeedback,
+} from '../styles/pressableFeedback';
 
 type HistoryCardItem = MemoryRecentItem & {
   accessUrl?: string;
@@ -208,7 +212,10 @@ export default function HistoryScreen() {
   return (
     <SafeAreaView style={commonStyles.screen}>
       <View style={commonStyles.header}>
-        <Pressable onPress={() => navigation.goBack()}>
+        <Pressable
+          style={({ pressed }) => pressableFeedback(pressed)}
+          onPress={() => navigation.goBack()}
+        >
           <Text style={styles.backButton}>{'<'}</Text>
         </Pressable>
 
@@ -252,7 +259,10 @@ export default function HistoryScreen() {
               return (
                 <Pressable
                   key={item.memoryId}
-                  style={commonStyles.card}
+                  style={({ pressed }) => [
+                    commonStyles.card,
+                    pressableCardFeedback(pressed),
+                  ]}
                   onPress={() => navigation.navigate('ItemLocation', { itemName })}
                 >
                   {item.accessUrl ? (
