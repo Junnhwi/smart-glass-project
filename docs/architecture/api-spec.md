@@ -293,6 +293,35 @@ Response:
 }
 ```
 
+### `DELETE /memories/{memoryId}`
+
+Deletes one captured memory for the authenticated user.
+
+The caller must pass `userId` as a query parameter and authenticate as the same
+user. The API first verifies that the memory belongs to the user, then deletes
+the Object Storage image when an `imageKey` exists, and finally removes the
+PostgreSQL memory document. If Object Storage deletion fails, the DB record is
+kept so the client can retry.
+
+Request:
+
+```http
+DELETE /memories/mem-earbuds-001?userId=user-1
+Authorization: Bearer <access-token>
+```
+
+Response:
+
+```json
+{
+  "status": "deleted",
+  "memoryId": "mem-earbuds-001",
+  "userId": "user-1",
+  "imageKey": "captures/user-1/2026/04/30/cap-earbuds.jpg",
+  "objectDeleted": true
+}
+```
+
 ### `POST /search`
 
 Searches stored memories for one user.

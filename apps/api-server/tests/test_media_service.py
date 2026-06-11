@@ -14,6 +14,7 @@ from src.modules.media.service import (
 class FakeS3Client:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.deleted_objects: list[dict[str, object]] = []
 
     def generate_presigned_url(
         self,
@@ -30,6 +31,9 @@ class FakeS3Client:
             }
         )
         return f"https://signed.example.com/{Params['Key']}?expires={ExpiresIn}"
+
+    def delete_object(self, *, Bucket: str, Key: str) -> None:
+        self.deleted_objects.append({"Bucket": Bucket, "Key": Key})
 
 
 class FakeMediaRepository:
@@ -197,6 +201,27 @@ class MediaUrlSignerTests(unittest.TestCase):
                         "ContentType": "image/jpeg",
                     },
                     "ExpiresIn": 180,
+                }
+            ],
+        )
+
+    def test_delete_object_deletes_normalized_object_key(self) -> None:
+        client = FakeS3Client()
+        signer = S3MediaUrlSigner(
+            client=client,
+            default_bucket_name="smart-glass-test",
+            default_expiration_sec=300,
+        )
+
+        deleted_key = signer.delete_object(" captures//user-1//photo.jpg ")
+
+        self.assertEqual(deleted_key, "captures/user-1/photo.jpg")
+        self.assertEqual(
+            client.deleted_objects,
+            [
+                {
+                    "Bucket": "smart-glass-test",
+                    "Key": "captures/user-1/photo.jpg",
                 }
             ],
         )
@@ -380,6 +405,32 @@ class MediaUrlSignerTests(unittest.TestCase):
         )
         self.assertEqual(len(signer_client.calls), 2)
         self.assertEqual(signer_client.calls[0]["ExpiresIn"], 240)
+
+    def test_media_access_service_deletes_media_object(self) -> None:
+        signer_client = FakeS3Client()
+        service = MediaAccessService(
+            FakeMediaRepository([]),
+            S3MediaUrlSigner(
+                client=signer_client,
+                default_bucket_name="smart-glass-test",
+                default_expiration_sec=300,
+            ),
+        )
+
+        deleted_key = service.delete_media_object(
+            image_key=" captures//user-1//photo-1.jpg "
+        )
+
+        self.assertEqual(deleted_key, "captures/user-1/photo-1.jpg")
+        self.assertEqual(
+            signer_client.deleted_objects,
+            [
+                {
+                    "Bucket": "smart-glass-test",
+                    "Key": "captures/user-1/photo-1.jpg",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":
