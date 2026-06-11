@@ -46,7 +46,32 @@ type Message = {
   relatedImages?: RelatedImage[];
 };
 
-const knownItems = ['지갑', '이어폰', '노트북', '가방', '열쇠', '안경', '카드'];
+
+const knownItems = [
+  '지갑',
+  '이어폰',
+  '노트북',
+  '가방',
+  '열쇠',
+  '안경',
+  '카드',
+  '핸드폰',
+  '휴대폰',
+  '폰',
+  '마우스',
+  '키보드',
+  '충전기',
+  '태블릿',
+  '아이패드',
+  '갤럭시탭',
+  '에어팟',
+  '버즈',
+  '시계',
+  '책',
+  '우산',
+  '물병',
+  '컵',
+];
 const suggestedQueries = [
   '내 지갑 어디 있었지?',
   '이어폰 마지막으로 본 곳 알려줘',
@@ -114,7 +139,10 @@ const buildRelatedImages = (
         imageKey: hit.imageKey,
         accessUrl,
         itemName:
-          hit.detectedObjects[0] || hit.tags[0] || fallbackQuery || '기록',
+          hit.detectedObjects?.[0] ||
+          hit.tags?.[0] ||
+          fallbackQuery ||
+          '기록',
         locationText: hit.location?.name || hit.location?.address || null,
         capturedAt: capturedAtText,
         caption: hit.caption,
@@ -266,12 +294,15 @@ export default function ChatScreen() {
     scrollToBottom();
 
     try {
-      const runChatRequest = async (authToken: string, userId: string) =>
+      const runChatRequest = async (
+        authToken: string,
+        userId: string
+      ) =>
         chatWithMemories({
           authToken,
           userId,
           query: trimmed,
-          topK: 3,
+          topK: 10,
         });
 
       let activeSession = currentUser;
@@ -328,12 +359,64 @@ export default function ChatScreen() {
         chatResponse.hits,
         accessUrlByImageKey,
         trimmed
-      );
+      )
+        .sort((a, b) => {
+          const aTime = new Date(a.capturedAt ?? '').getTime();
+          const bTime = new Date(b.capturedAt ?? '').getTime();
+
+          return bTime - aTime;
+        })
+        .slice(0, 3);
+
+      const itemName =
+        knownItems.find((item) => trimmed.includes(item)) ||
+        relatedImages?.[0]?.itemName ||
+        '물건';
+
+      let answerText = chatResponse.answer?.trim();
+
+      if (!answerText) {
+        if (relatedImages.length > 0) {
+          const latest = relatedImages[0];
+
+          const time = latest.capturedAt?.trim();
+          const location = latest.locationText?.trim();
+
+          const description =
+            latest.positionHint ||
+            latest.sceneSummary ||
+            latest.caption;
+
+          answerText = `${itemName} 관련 기록을 찾았습니다.\n\n`;
+
+          if (time) {
+            answerText += `최근 확인 시각: ${time}\n`;
+          }
+
+          if (location) {
+            answerText += `위치: ${location}\n`;
+          }
+
+          if (description) {
+            answerText += `상황: ${description}\n`;
+          }
+
+          answerText += `\n최근 기록 3건을 아래에 표시합니다.`;
+        } else {
+          answerText = `${itemName}에 대한 기록을 찾지 못했습니다.`;
+        }
+      }
+
+      console.log('===== CHAT RESPONSE =====');
+      console.log(JSON.stringify(chatResponse, null, 2));
+
+      console.log('===== RELATED IMAGES =====');
+      console.log(JSON.stringify(relatedImages, null, 2));
 
       const botMessage: Message = {
         id: Date.now() + 1,
         sender: 'bot',
-        text: chatResponse.answer || '관련 기록을 찾지 못했어요.',
+        text: answerText,
         relatedImages,
       };
 
@@ -514,8 +597,8 @@ export default function ChatScreen() {
                   : styles.userMessage,
                 isMatched && styles.matchedMessage,
                 isMatched &&
-                  matchedMessageIds[currentMatchIndex] === message.id &&
-                  styles.activeMatchedMessage,
+                matchedMessageIds[currentMatchIndex] === message.id &&
+                styles.activeMatchedMessage,
               ]}
             >
               {renderHighlightedText(message.text, message.sender)}
